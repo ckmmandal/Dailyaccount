@@ -1,4 +1,10 @@
 {
+  "functions": {
+    "api/*.ts": {
+      "maxDuration": 30,
+      "includeFiles": "public/system_logo.png"
+    }
+  },
   "rewrites": [
     {
       "source": "/api/(.*)",

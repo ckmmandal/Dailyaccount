@@ -106,7 +106,7 @@ export async function isEmailCategoryAllowed(category: 'transaction' | 'payslip'
 
 export async function generateElementPdfBase64(element: HTMLElement): Promise<string> {
   const canvas = await html2canvas(element, {
-    scale: 4,
+    scale: 2,
     useCORS: true,
     allowTaint: true,
     logging: false,
@@ -124,7 +124,7 @@ export async function generateElementPdfBase64(element: HTMLElement): Promise<st
     }
   });
 
-  const imgData = canvas.toDataURL("image/png");
+  const imgData = canvas.toDataURL("image/jpeg", 0.88);
   const pdf = new jsPDF({
     orientation: "portrait",
     unit: "mm",
@@ -135,7 +135,7 @@ export async function generateElementPdfBase64(element: HTMLElement): Promise<st
   const pdfWidth = pdf.internal.pageSize.getWidth();
   const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
 
-  pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight, undefined, "FAST");
+  pdf.addImage(imgData, "JPEG", 0, 0, pdfWidth, pdfHeight, undefined, "FAST");
   return pdf.output("datauristring");
 }
 
@@ -185,6 +185,9 @@ export async function sendPaySlipApi({
     const contentType = response.headers.get("content-type");
     if (contentType && contentType.includes("application/json")) {
       const data = await response.json();
+      if (!response.ok && data.success !== false) {
+        return { ...data, success: false };
+      }
       return data;
     } else {
       const text = await response.text();

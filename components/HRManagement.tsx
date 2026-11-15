@@ -7697,11 +7697,17 @@ ${customContent}
         })
       });
 
-      const resData = await response.json();
-      if (resData.success) {
-        alert(`आधिकारिक कागजात (PDF सहित) सफल रूपमा ${emp.fullName} (${emp.email}) लाई ईमेल गरियो!`);
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        const resData = await response.json();
+        if (response.ok && resData.success) {
+          alert(`आधिकारिक कागजात (PDF सहित) सफल रूपमा ${emp.fullName} (${emp.email}) लाई ईमेल गरियो!`);
+        } else {
+          alert(`ईमेल पठाउन सकिएन: ${resData.message || 'Error occurred'}`);
+        }
       } else {
-        alert(`ईमेल पठाउन सकिएन: ${resData.message || 'Error occurred'}`);
+        const errText = await response.text();
+        alert(`ईमेल सर्भर त्रुटि (${response.status}): ${errText.substring(0, 140)}`);
       }
     } catch (err: any) {
       console.error("Error sending official doc email:", err);
@@ -8758,7 +8764,7 @@ const EmployeeEmailCenter = ({
   const attachmentInputRef = useRef<HTMLInputElement>(null);
 
   const [isSending, setIsSending] = useState(false);
-  const [sendStatusLog, setSendStatusLog] = useState<{ name: string; email: string; status: 'pending' | 'success' | 'failed' }[]>([]);
+  const [sendStatusLog, setSendStatusLog] = useState<{ name: string; email: string; status: 'pending' | 'success' | 'failed'; error?: string }[]>([]);
   const [showLogModal, setShowLogModal] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<{ id: string; name: string; size: string; type: string; dataUrl?: string }[]>([]);
@@ -8950,23 +8956,38 @@ const EmployeeEmailCenter = ({
     setIsSending(true);
     setShowLogModal(true);
 
-    const targetEmployees = employeesWithEmail.filter(e => targetMails.includes(e.email!.trim()));
-    const initialLog = targetEmployees.map(emp => ({
-      name: emp.fullName,
-      email: emp.email!,
+    const normalizedTargets = Array.from(
+      new Set(targetMails.map(m => m.trim()).filter(Boolean))
+    );
+    const targetRecipients = normalizedTargets.map(mail => {
+      const matchedEmp = employeesWithEmail.find(
+        e => (e.email || '').trim().toLowerCase() === mail.toLowerCase()
+      );
+      return {
+        email: mail,
+        emp: matchedEmp || ({ fullName: mail.split('@')[0], email: mail, basicSalary: 0 } as any)
+      };
+    });
+
+    const initialLog = targetRecipients.map(r => ({
+      name: r.emp.fullName,
+      email: r.email,
       status: 'pending' as const
     }));
     setSendStatusLog(initialLog);
 
-    for (let i = 0; i < targetEmployees.length; i++) {
-      const emp = targetEmployees[i];
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < targetRecipients.length; i++) {
+      const { emp, email: recipientEmail } = targetRecipients[i];
       const payrollData = calculateDetailedPayroll(emp, taxConfig, selectedMonth);
 
       const extraEmpIncome = (emp.dashainBonus || 0) + (emp.bonusAmount || 0) + (emp.sanchitLeaveAmount || 0) + (emp.medicalAllowance || 0) + (emp.dressAllowance || 0);
       const grossEmpSalary = (payrollData.monthly.monthlyGross || 0) + extraEmpIncome;
       const netEmpSalary = grossEmpSalary - (payrollData.monthly.totalDeduction || 0);
 
-      let personalizedHtml = htmlContent
+      const personalizedHtml = htmlContent
         .replace(/{STAFF_NAME}/g, emp.fullName)
         .replace(/{YEAR}/g, selectedYear)
         .replace(/{MONTH}/g, selectedMonth)
@@ -8979,7 +9000,7 @@ const EmployeeEmailCenter = ({
         .replace(/{NET_SALARY}/g, netEmpSalary.toLocaleString())
         .replace(/{SYSTEM_NAME}/g, settings?.systemName || 'रतौली साकोस');
 
-      let personalizedText = (editorRef.current?.innerText || '')
+      const personalizedText = (editorRef.current?.innerText || '')
         .replace(/{STAFF_NAME}/g, emp.fullName)
         .replace(/{YEAR}/g, selectedYear)
         .replace(/{MONTH}/g, selectedMonth)
@@ -8993,12 +9014,14 @@ const EmployeeEmailCenter = ({
         .replace(/{SYSTEM_NAME}/g, settings?.systemName || 'रतौली साकोस');
 
       let isSuccess = false;
+      let failReason = '';
       try {
         const emailAllowed = await isEmailCategoryAllowed('payslip');
         if (!emailAllowed.allowed) {
-          console.log("Salary slip email skipped for", emp.email, emailAllowed.reason);
+          failReason = emailAllowed.reason || 'ईमेल सूचना बन्द गरिएको छ';
+          failCount++;
           setSendStatusLog(prev =>
-            prev.map((item, idx) => (idx === i ? { ...item, status: 'error', error: emailAllowed.reason || 'ईमेल सूचना बन्द गरिएको छ' } : item))
+            prev.map((item, idx) => (idx === i ? { ...item, status: 'failed', error: failReason } : item))
           );
           continue;
         }
@@ -9007,10 +9030,12 @@ const EmployeeEmailCenter = ({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            to: emp.email!.trim(),
+            to: recipientEmail,
             subject: subject.trim(),
             body: personalizedText,
             html: personalizedHtml,
+            logoUrl: settings?.logoUrl,
+            smtpConfig: getStoredSmtpConfig(),
             attachments: attachedFiles.map(f => ({
               filename: f.name,
               dataUrl: f.dataUrl,
@@ -9019,29 +9044,40 @@ const EmployeeEmailCenter = ({
           })
         });
 
-        const resData = await response.json();
-        if (response.ok && resData.success) {
-          isSuccess = true;
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const resData = await response.json();
+          if (response.ok && resData.success) {
+            isSuccess = true;
+          } else {
+            failReason = resData.message || `Server error (${response.status})`;
+          }
         } else {
-          console.warn("Backend SMTP send notice for", emp.email, resData.message);
+          const errText = await response.text();
+          failReason = `Server response error (${response.status}): ${errText.substring(0, 120)}`;
         }
-      } catch (err) {
-        console.error("API send error for", emp.email, err);
+      } catch (err: any) {
+        failReason = err?.message || 'Network/server error';
       }
 
-      setSendStatusLog(prev =>
-        prev.map((item, idx) => (idx === i ? { ...item, status: 'success' } : item))
-      );
-
-      // Trigger client mail application as parallel/fallback so user can also send from their mail client if desired
-      if (targetEmployees.length === 1 && !isSuccess) {
-        window.open(`mailto:${emp.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(personalizedText)}`);
+      if (isSuccess) {
+        successCount++;
+        setSendStatusLog(prev =>
+          prev.map((item, idx) => (idx === i ? { ...item, status: 'success', error: undefined } : item))
+        );
+      } else {
+        failCount++;
+        setSendStatusLog(prev =>
+          prev.map((item, idx) => (idx === i ? { ...item, status: 'failed', error: failReason } : item))
+        );
       }
     }
 
     setIsSending(false);
-    setShowLogModal(false);
-    setShowSuccessModal(true);
+    if (successCount > 0 && failCount === 0) {
+      setShowLogModal(false);
+      setShowSuccessModal(true);
+    }
   };
 
   return (
@@ -9525,22 +9561,29 @@ const EmployeeEmailCenter = ({
 
             <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1">
               {sendStatusLog.map((log, idx) => (
-                <div key={idx} className="p-2 bg-slate-50 rounded border border-slate-200 flex justify-between items-center text-xs">
-                  <div>
-                    <span className="font-bold text-slate-800">{log.name}</span>
-                    <span className="text-slate-500 ml-2">({log.email})</span>
+                <div key={idx} className="p-2 bg-slate-50 rounded border border-slate-200 text-xs space-y-1">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <span className="font-bold text-slate-800">{log.name}</span>
+                      <span className="text-slate-500 ml-2">({log.email})</span>
+                    </div>
+                    <span
+                      className={`font-bold px-2 py-0.5 rounded text-[10px] ${
+                        log.status === 'success'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : log.status === 'failed'
+                          ? 'bg-rose-100 text-rose-800'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}
+                    >
+                      {log.status.toUpperCase()}
+                    </span>
                   </div>
-                  <span
-                    className={`font-bold px-2 py-0.5 rounded text-[10px] ${
-                      log.status === 'success'
-                        ? 'bg-emerald-100 text-emerald-800'
-                        : log.status === 'failed'
-                        ? 'bg-rose-100 text-rose-800'
-                        : 'bg-amber-100 text-amber-800'
-                    }`}
-                  >
-                    {log.status.toUpperCase()}
-                  </span>
+                  {log.status === 'failed' && log.error && (
+                    <div className="text-[11px] text-rose-700 font-medium break-words">
+                      {log.error}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

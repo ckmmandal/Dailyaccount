@@ -275,7 +275,7 @@ app.post("/api/send-password-reset-email", async (req, res) => {
 
     const effectiveCompanyName = companyName || "Ratauli Saving and Credit Cooperative Ltd";
     const effectiveAddress = companyAddress || "Pipra Rural Municipality -6 (Mahottari)";
-    const effectiveLoginUrl = loginUrl || "https://rataulisaccos.org/login";
+    const effectiveLoginUrl = loginUrl || process.env.VITE_APP_URL || "https://www.rataulicoop.com.np";
     const effectiveUserName = userName || username || "User";
     const effectiveUsername = username || "user";
 
