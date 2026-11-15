@@ -1,0 +1,130 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RATAULI SACCOS DAILY ACCOUNT</title>
+  <meta name="description" content="Daily office accounting system for Ratauli Bachat tatha Rin Sahakari Sanstha Ltd., Mahottari. Includes cash denomination, receivable, payable, remittance tracking, HR management, loan insurance records & OCR processing, and branch office expense management.">
+  <meta property="og:title" content="RATAULI SACCOS DAILY ACCOUNT">
+  <meta property="og:description" content="Daily office accounting system for Ratauli Bachat tatha Rin Sahakari Sanstha Ltd., Mahottari. Includes cash denomination, receivable, payable, remittance tracking, HR management, loan insurance records & OCR processing, and branch office expense management.">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Libre+Franklin:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=Mukta:wght@400;500;600;700;800&family=Poppins:wght@600;700;800;900&family=Playfair+Display:wght@500;600;700&family=Cormorant+Garamond:wght@500;600&family=EB+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=Noto+Serif+Devanagari:wght@500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; overflow: hidden; }
+    input::-webkit-outer-spin-button,
+    input::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+    input[type=number] {
+      -moz-appearance: textfield;
+    }
+    .scrollbar-hide::-webkit-scrollbar {
+      display: none;
+    }
+    .scrollbar-hide {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-5px); }
+      75% { transform: translateX(5px); }
+    }
+    .animate-shake {
+      animation: shake 0.2s ease-in-out 0s 2;
+    }
+    @keyframes shimmer {
+      0% { transform: translateX(-100%); }
+      50% { transform: translateX(50%); }
+      100% { transform: translateX(200%); }
+    }
+    .animate-shimmer {
+      animation: shimmer 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    }
+    @media print {
+      @page {
+        margin: 4mm 5mm;
+      }
+      .no-print, [no-print] { display: none !important; }
+      body, #root, main, .flex, .flex-1 {
+        overflow: visible !important;
+        height: auto !important;
+        min-height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        background: #ffffff !important;
+        box-shadow: none !important;
+        border: none !important;
+        border-radius: 0 !important;
+      }
+      header, aside, .print-hide { display: none !important; }
+      main { 
+        padding: 0 !important; 
+        margin: 0 !important; 
+        width: 100% !important; 
+        max-width: 100% !important;
+        float: none !important;
+      }
+      /* Ensure divs lose borders, shadows, and roundness to prevent layout constraint and ink wastage */
+      div, section, article {
+        box-shadow: none !important;
+        text-shadow: none !important;
+        border-radius: 0 !important;
+      }
+      /* Crisp table layouts on print */
+      table {
+        border-collapse: collapse !important;
+        width: 100% !important;
+      }
+      table, th, td {
+        border: 1px solid #000000 !important;
+        color: #000000 !important;
+        background: transparent !important;
+      }
+      .sticky {
+        position: static !important;
+      }
+      thead {
+        display: table-header-group !important;
+      }
+      tfoot {
+        display: table-footer-group !important;
+      }
+      body.printing-mf-sheet > *:not(#mf-direct-print-target) {
+        display: none !important;
+      }
+      body.printing-mf-sheet #mf-direct-print-target {
+        display: block !important;
+        position: static !important;
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 4mm 6mm !important;
+        background: #ffffff !important;
+        color: #000000 !important;
+      }
+      body.printing-mf-sheet #mf-direct-print-target * {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+      body.printing-mf-sheet #mf-direct-print-target input {
+        border: 1px solid #000000 !important;
+        background: transparent !important;
+        color: #000000 !important;
+      }
+    }
+    @media screen {
+      #mf-direct-print-target {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+  <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>

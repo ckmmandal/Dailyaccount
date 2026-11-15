@@ -1,0 +1,10 @@
+{
+  "name": "RATAULI SACCOS DAILY ACCOUNT",
+  "description": "Daily office accounting system for Ratauli Bachat tatha Rin Sahakari Sanstha Ltd., Mahottari. Includes cash denomination, receivable, payable, remittance tracking, HR management, loan insurance records & OCR processing, and branch office expense management.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Ratauli Saving & Credit Cooperative Ltd. - Loan Insurance Records",
+  "description": "A specialized system for managing loan insurance records for Ratauli Saving and Credit Cooperative Limited, featuring OCR extraction, maturity alerts, and standardized Excel reporting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
