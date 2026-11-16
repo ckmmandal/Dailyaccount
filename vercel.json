@@ -1,8 +1,7 @@
 {
   "functions": {
     "api/*.ts": {
-      "maxDuration": 30,
-      "includeFiles": "public/system_logo.png"
+      "maxDuration": 30
     }
   },
   "rewrites": [
