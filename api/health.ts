@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { applyCors, DEFAULT_APP_URL } from "./_emailHelper";
+import { applyCors, DEFAULT_APP_URL } from "./_emailHelper.js";
 
 export default function handler(req: VercelRequest, res: VercelResponse) {
   if (applyCors(req, res)) return;

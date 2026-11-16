@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { applyCors, createSmtpTransporter, getLogoAttachment } from "./_emailHelper";
+import { applyCors, createSmtpTransporter, getLogoAttachment, parseJsonBody, type SmtpPayload } from "./_emailHelper.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (applyCors(req, res)) return;
@@ -9,6 +9,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
+    const parsedBody = await parseJsonBody<{
+      to?: string;
+      subject?: string;
+      body?: string;
+      html?: string;
+      attachments?: Array<{ dataUrl?: string; content?: string; filename?: string; name?: string; type?: string; contentType?: string }>;
+      pdfBase64?: string;
+      filename?: string;
+      logoUrl?: string;
+      smtpConfig?: SmtpPayload | null;
+    }>(req);
+
     const {
       to,
       subject,
@@ -19,7 +31,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       filename,
       logoUrl,
       smtpConfig,
-    } = req.body || {};
+    } = parsedBody;
 
     if (!to || typeof to !== "string" || !to.trim()) {
       return res.status(400).json({ success: false, message: "कर्मचारीको ईमेल ठेगाना आवश्यक छ।" });

@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { applyCors, createSmtpTransporter, getLogoAttachment } from "./_emailHelper";
+import { applyCors, createSmtpTransporter, getLogoAttachment, parseJsonBody, type SmtpPayload } from "./_emailHelper.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (applyCors(req, res)) return;
@@ -9,7 +9,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { to, username, otpCode, companyName, companyAddress, logoUrl, smtpConfig } = req.body || {};
+    const parsedBody = await parseJsonBody<{
+      to?: string;
+      username?: string;
+      otpCode?: string;
+      companyName?: string;
+      companyAddress?: string;
+      logoUrl?: string;
+      smtpConfig?: SmtpPayload | null;
+    }>(req);
+    const { to, username, otpCode, companyName, companyAddress, logoUrl, smtpConfig } = parsedBody;
 
     if (!to || typeof to !== "string" || !to.trim()) {
       return res.status(400).json({ success: false, message: "Recipient email address is required." });

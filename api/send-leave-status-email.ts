@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import type nodemailer from "nodemailer";
-import { applyCors, createSmtpTransporter, getLogoAttachment } from "./_emailHelper";
+import type { SendMailOptions } from "nodemailer";
+import { applyCors, createSmtpTransporter, getLogoAttachment, parseJsonBody, type SmtpPayload } from "./_emailHelper.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (applyCors(req, res)) return;
@@ -10,6 +10,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
+    const parsedBody = await parseJsonBody<{
+      to?: string;
+      cc?: string;
+      employeeName?: string;
+      employeeCode?: string;
+      designation?: string;
+      department?: string;
+      leaveType?: string;
+      startDate?: string;
+      endDate?: string;
+      days?: number | string;
+      reason?: string;
+      status?: string;
+      approverName?: string;
+      approvalRemarks?: string;
+      totalEntitledDays?: number;
+      takenDays?: number;
+      remainingDays?: number;
+      companyName?: string;
+      companyAddress?: string;
+      logoUrl?: string;
+      smtpConfig?: SmtpPayload | null;
+    }>(req);
+
     const {
       to,
       cc,
@@ -32,7 +56,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       companyAddress,
       logoUrl,
       smtpConfig,
-    } = req.body || {};
+    } = parsedBody;
 
     if (!to || typeof to !== "string" || !to.trim()) {
       return res.status(400).json({ success: false, message: "Employee email address is required." });
@@ -200,7 +224,7 @@ ${effectiveAddress}`;
       </div>
     `;
 
-    const mailOptions: nodemailer.SendMailOptions = {
+    const mailOptions: SendMailOptions = {
       from,
       to: to.trim(),
       subject: emailSubject,

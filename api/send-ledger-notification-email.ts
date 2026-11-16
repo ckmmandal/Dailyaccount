@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { applyCors, createSmtpTransporter, getLogoAttachment } from "./_emailHelper";
+import { applyCors, createSmtpTransporter, getLogoAttachment, parseJsonBody, type SmtpPayload } from "./_emailHelper.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (applyCors(req, res)) return;
@@ -9,6 +9,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
+    const parsedBody = await parseJsonBody<{
+      to?: string;
+      recipientName?: string;
+      employeeCode?: string;
+      transactionType?: string;
+      amount?: number | string;
+      particular?: string;
+      dateBs?: string;
+      dateAd?: string;
+      branchName?: string;
+      tellerName?: string;
+      voucherId?: string;
+      previousBalance?: number | string;
+      updatedBalance?: number | string;
+      balanceType?: string;
+      actionType?: string;
+      oldAmount?: number | string;
+      oldParticular?: string;
+      companyName?: string;
+      companyAddress?: string;
+      logoUrl?: string;
+      smtpConfig?: SmtpPayload | null;
+    }>(req);
+
     const {
       to,
       recipientName,
@@ -31,7 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       companyAddress,
       logoUrl,
       smtpConfig,
-    } = req.body || {};
+    } = parsedBody;
 
     if (!to || typeof to !== "string" || !to.trim()) {
       return res.status(400).json({ success: false, message: "Employee/account email address is required." });

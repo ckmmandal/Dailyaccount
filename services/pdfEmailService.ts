@@ -191,9 +191,15 @@ export async function sendPaySlipApi({
       return data;
     } else {
       const text = await response.text();
+      if (response.status === 413) {
+        return {
+          success: false,
+          message: `PDF वा संलग्न फाइलको साइज धेरै ठूलो भयो (413 Payload Too Large)। कृपया सानो साइजमा पठाउनुहोस्।`
+        };
+      }
       return {
         success: false,
-        message: `ईमेल सर्भरबाट गलत प्रतिक्रिया आयो (${response.status}): ${text.substring(0, 100)}`
+        message: `ईमेल सर्भरबाट गलत प्रतिक्रिया आयो (${response.status}): ${text.substring(0, 120)}`
       };
     }
   } catch (err: unknown) {
