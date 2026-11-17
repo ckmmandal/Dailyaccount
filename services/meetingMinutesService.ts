@@ -465,9 +465,9 @@ export const meetingMinutesService = {
   getMeetings: (): GroupMeetingRecord[] => {
     try {
       const data = localStorage.getItem(STORAGE_KEY_MEETINGS);
-      if (data) {
+      if (data !== null) {
         const parsed = JSON.parse(data);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           return parsed;
         }
       }
@@ -715,20 +715,23 @@ export const meetingMinutesService = {
         if (remoteList.length > 0) {
           meetings = remoteList;
           localStorage.setItem(STORAGE_KEY_MEETINGS, JSON.stringify(meetings));
-        } else if (localMeetings.length > 0) {
-          void supabase.from('group_meetings').upsert(
-            localMeetings.map(m => ({
-              id: m.id,
-              meeting_no: m.meetingNo,
-              group_id: m.groupId,
-              group_name: m.groupName,
-              meeting_date_bs: m.meetingDateBs,
-              status: m.status,
-              payload: m,
-              updated_at: new Date().toISOString()
-            })),
-            { onConflict: 'id' }
-          );
+        } else {
+          const nonSampleMeetings = localMeetings.filter(m => !['mtg-101', 'mtg-102'].includes(m.id));
+          if (nonSampleMeetings.length > 0) {
+            void supabase.from('group_meetings').upsert(
+              nonSampleMeetings.map(m => ({
+                id: m.id,
+                meeting_no: m.meetingNo,
+                group_id: m.groupId,
+                group_name: m.groupName,
+                meeting_date_bs: m.meetingDateBs,
+                status: m.status,
+                payload: m,
+                updated_at: new Date().toISOString()
+              })),
+              { onConflict: 'id' }
+            );
+          }
         }
       }
 

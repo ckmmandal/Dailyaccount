@@ -373,6 +373,21 @@ export const MicroFinanceManagement: React.FC = () => {
   const [selectedSignatureSheetToDelete, setSelectedSignatureSheetToDelete] = useState<MFSignatureSheet | null>(null);
   const [isDeleteSignatureModalOpen, setIsDeleteSignatureModalOpen] = useState(false);
 
+  const [selectedSavingToDelete, setSelectedSavingToDelete] = useState<MFSavingsRecord | null>(null);
+  const [isDeleteSavingModalOpen, setIsDeleteSavingModalOpen] = useState(false);
+
+  const [selectedSheetToDelete, setSelectedSheetToDelete] = useState<MFCollectionSheet | null>(null);
+  const [isDeleteSheetModalOpen, setIsDeleteSheetModalOpen] = useState(false);
+
+  const [selectedCenterToDelete, setSelectedCenterToDelete] = useState<MFCenter | null>(null);
+  const [isDeleteCenterModalOpen, setIsDeleteCenterModalOpen] = useState(false);
+
+  const [selectedGroupToDelete, setSelectedGroupToDelete] = useState<MFSamuhGroup | null>(null);
+  const [isDeleteGroupModalOpen, setIsDeleteGroupModalOpen] = useState(false);
+
+  const [selectedMemberToDelete, setSelectedMemberToDelete] = useState<MFMember | null>(null);
+  const [isDeleteMemberModalOpen, setIsDeleteMemberModalOpen] = useState(false);
+
   // Manual Dues per member in Collection Sheet
   const [manualDues, setManualDues] = useState<Record<string, number>>({});
 
@@ -1240,11 +1255,23 @@ export const MicroFinanceManagement: React.FC = () => {
       alert(getDayEndedBlockMessage());
       return;
     }
-    if (window.confirm('Are you sure you want to delete this center?')) {
-      const updated = microFinanceService.deleteCenter(id);
-      setCenters(updated);
-      showToast('Center deleted');
+    const target = centers.find(c => c.id === id);
+    if (!target) return;
+    setSelectedCenterToDelete(target);
+    setIsDeleteCenterModalOpen(true);
+  };
+
+  const handleConfirmDeleteCenter = () => {
+    if (!selectedCenterToDelete) return;
+    if (isDayEndedForBranch(branch?.id)) {
+      alert(getDayEndedBlockMessage());
+      return;
     }
+    const updated = microFinanceService.deleteCenter(selectedCenterToDelete.id);
+    setCenters(updated);
+    setIsDeleteCenterModalOpen(false);
+    setSelectedCenterToDelete(null);
+    showToast('Center deleted');
   };
 
   // Handlers for Group
@@ -1313,11 +1340,23 @@ export const MicroFinanceManagement: React.FC = () => {
       alert(getDayEndedBlockMessage());
       return;
     }
-    if (window.confirm('Are you sure you want to delete this group?')) {
-      const updated = microFinanceService.deleteGroup(id);
-      setGroups(updated);
-      showToast('Group deleted');
+    const target = groups.find(g => g.id === id);
+    if (!target) return;
+    setSelectedGroupToDelete(target);
+    setIsDeleteGroupModalOpen(true);
+  };
+
+  const handleConfirmDeleteGroup = () => {
+    if (!selectedGroupToDelete) return;
+    if (isDayEndedForBranch(branch?.id)) {
+      alert(getDayEndedBlockMessage());
+      return;
     }
+    const updated = microFinanceService.deleteGroup(selectedGroupToDelete.id);
+    setGroups(updated);
+    setIsDeleteGroupModalOpen(false);
+    setSelectedGroupToDelete(null);
+    showToast('Group deleted');
   };
 
   // Photo Upload Handler for Member
@@ -1437,12 +1476,68 @@ export const MicroFinanceManagement: React.FC = () => {
       alert(getDayEndedBlockMessage());
       return;
     }
-    if (window.confirm('Are you sure you want to delete this member?')) {
-      const updated = microFinanceService.deleteMember(id);
-      setMembers(updated);
-      setGroups(microFinanceService.getGroups());
-      showToast('Member deleted');
+    const target = members.find(m => m.id === id);
+    if (!target) return;
+    setSelectedMemberToDelete(target);
+    setIsDeleteMemberModalOpen(true);
+  };
+
+  const handleConfirmDeleteMember = () => {
+    if (!selectedMemberToDelete) return;
+    if (isDayEndedForBranch(branch?.id)) {
+      alert(getDayEndedBlockMessage());
+      return;
     }
+    const updated = microFinanceService.deleteMember(selectedMemberToDelete.id);
+    setMembers(updated);
+    setGroups(microFinanceService.getGroups());
+    setIsDeleteMemberModalOpen(false);
+    setSelectedMemberToDelete(null);
+    showToast('Member deleted');
+  };
+
+  const handleOpenDeleteSaving = (item: MFSavingsRecord) => {
+    if (isDayEndedForBranch(branch?.id)) {
+      alert(getDayEndedBlockMessage());
+      return;
+    }
+    setSelectedSavingToDelete(item);
+    setIsDeleteSavingModalOpen(true);
+  };
+
+  const handleConfirmDeleteSaving = () => {
+    if (!selectedSavingToDelete) return;
+    if (isDayEndedForBranch(branch?.id)) {
+      alert(getDayEndedBlockMessage());
+      return;
+    }
+    const updated = microFinanceService.deleteSaving(selectedSavingToDelete.id);
+    setSavings(updated);
+    setIsDeleteSavingModalOpen(false);
+    setSelectedSavingToDelete(null);
+    showToast('Saving record deleted successfully');
+  };
+
+  const handleOpenDeleteSheet = (sheet: MFCollectionSheet) => {
+    if (isDayEndedForBranch(branch?.id)) {
+      alert(getDayEndedBlockMessage());
+      return;
+    }
+    setSelectedSheetToDelete(sheet);
+    setIsDeleteSheetModalOpen(true);
+  };
+
+  const handleConfirmDeleteSheet = () => {
+    if (!selectedSheetToDelete) return;
+    if (isDayEndedForBranch(branch?.id)) {
+      alert(getDayEndedBlockMessage());
+      return;
+    }
+    const updated = microFinanceService.deleteSheet(selectedSheetToDelete.id);
+    setSheets(updated);
+    setIsDeleteSheetModalOpen(false);
+    setSelectedSheetToDelete(null);
+    showToast('Collection sheet deleted successfully');
   };
 
   // Handlers for Savings (Supports search directly in input and multiple accounts)
@@ -3296,15 +3391,7 @@ export const MicroFinanceManagement: React.FC = () => {
                         <button
                           type="button"
                           disabled={isDayEnded}
-                          onClick={() => {
-                            if (isDayEndedForBranch(branch?.id)) {
-                              alert(getDayEndedBlockMessage());
-                              return;
-                            }
-                            microFinanceService.deleteSaving(item.id);
-                            setSavings(microFinanceService.getSavings());
-                            showToast('Record removed');
-                          }}
+                          onClick={() => handleOpenDeleteSaving(item)}
                           className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete'}
                         >
@@ -3846,15 +3933,7 @@ export const MicroFinanceManagement: React.FC = () => {
                                 <button
                                   type="button"
                                   disabled={isDayEnded}
-                                  onClick={() => {
-                                    if (isDayEndedForBranch(branch?.id)) {
-                                      alert(getDayEndedBlockMessage());
-                                      return;
-                                    }
-                                    microFinanceService.deleteSheet(sheet.id);
-                                    setSheets(microFinanceService.getSheets());
-                                    showToast('Sheet deleted');
-                                  }}
+                                  onClick={() => handleOpenDeleteSheet(sheet)}
                                   className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                                   title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Sheet'}
                                 >
@@ -6129,6 +6208,204 @@ export const MicroFinanceManagement: React.FC = () => {
                 disabled={isDayEnded}
                 onClick={handleConfirmDeleteSignatureSheet}
                 title={isDayEnded ? 'Day Ended - Action Locked' : 'Confirm Delete Signature Sheet'}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Yes, Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL: DELETE SAVING CONFIRMATION */}
+      {/* ============================================================== */}
+      {isDeleteSavingModalOpen && selectedSavingToDelete && (
+        <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-xs flex justify-center items-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden p-6 text-center space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="w-14 h-14 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto">
+              <Trash2 className="w-7 h-7" />
+            </div>
+
+            <div>
+              <h3 className="text-base font-extrabold text-slate-900">Delete Saving Record?</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Are you sure you want to delete saving record <strong className="font-mono text-slate-800">{selectedSavingToDelete.accountNo}</strong> for <strong>{selectedSavingToDelete.name}</strong>?
+              </p>
+              <div className="mt-2.5 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-[11px] text-rose-700 font-semibold">
+                Member ID: {selectedSavingToDelete.memberId} • Date: {selectedSavingToDelete.dateBs || selectedSavingToDelete.date} • Amount: NPR {selectedSavingToDelete.amount.toLocaleString()}
+              </div>
+            </div>
+
+            <div className="flex justify-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => { setIsDeleteSavingModalOpen(false); setSelectedSavingToDelete(null); }}
+                className="px-4 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDayEnded}
+                onClick={handleConfirmDeleteSaving}
+                title={isDayEnded ? 'Day Ended - Action Locked' : 'Confirm Delete Saving'}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Yes, Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL: DELETE COLLECTION SHEET CONFIRMATION */}
+      {/* ============================================================== */}
+      {isDeleteSheetModalOpen && selectedSheetToDelete && (
+        <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-xs flex justify-center items-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden p-6 text-center space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="w-14 h-14 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto">
+              <Trash2 className="w-7 h-7" />
+            </div>
+
+            <div>
+              <h3 className="text-base font-extrabold text-slate-900">Delete Collection Sheet?</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Are you sure you want to delete collection sheet for <strong>{selectedSheetToDelete.groupName}</strong> ({selectedSheetToDelete.dateDisplay})?
+              </p>
+              <div className="mt-2.5 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-[11px] text-rose-700 font-semibold">
+                Center: {selectedSheetToDelete.centerName} • Members: {selectedSheetToDelete.memberCount}
+              </div>
+            </div>
+
+            <div className="flex justify-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => { setIsDeleteSheetModalOpen(false); setSelectedSheetToDelete(null); }}
+                className="px-4 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDayEnded}
+                onClick={handleConfirmDeleteSheet}
+                title={isDayEnded ? 'Day Ended - Action Locked' : 'Confirm Delete Sheet'}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Yes, Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL: DELETE CENTER CONFIRMATION */}
+      {/* ============================================================== */}
+      {isDeleteCenterModalOpen && selectedCenterToDelete && (
+        <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-xs flex justify-center items-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden p-6 text-center space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="w-14 h-14 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto">
+              <Trash2 className="w-7 h-7" />
+            </div>
+
+            <div>
+              <h3 className="text-base font-extrabold text-slate-900">Delete Center?</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Are you sure you want to delete center <strong className="font-mono text-slate-800">{selectedCenterToDelete.code}</strong> ({selectedCenterToDelete.name})?
+              </p>
+            </div>
+
+            <div className="flex justify-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => { setIsDeleteCenterModalOpen(false); setSelectedCenterToDelete(null); }}
+                className="px-4 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDayEnded}
+                onClick={handleConfirmDeleteCenter}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Yes, Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL: DELETE GROUP CONFIRMATION */}
+      {/* ============================================================== */}
+      {isDeleteGroupModalOpen && selectedGroupToDelete && (
+        <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-xs flex justify-center items-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden p-6 text-center space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="w-14 h-14 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto">
+              <Trash2 className="w-7 h-7" />
+            </div>
+
+            <div>
+              <h3 className="text-base font-extrabold text-slate-900">Delete Group?</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Are you sure you want to delete group <strong className="font-mono text-slate-800">{selectedGroupToDelete.code}</strong> ({selectedGroupToDelete.name})?
+              </p>
+            </div>
+
+            <div className="flex justify-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => { setIsDeleteGroupModalOpen(false); setSelectedGroupToDelete(null); }}
+                className="px-4 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDayEnded}
+                onClick={handleConfirmDeleteGroup}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Yes, Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL: DELETE MEMBER CONFIRMATION */}
+      {/* ============================================================== */}
+      {isDeleteMemberModalOpen && selectedMemberToDelete && (
+        <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-xs flex justify-center items-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden p-6 text-center space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="w-14 h-14 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto">
+              <Trash2 className="w-7 h-7" />
+            </div>
+
+            <div>
+              <h3 className="text-base font-extrabold text-slate-900">Delete Member?</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Are you sure you want to delete member <strong className="font-mono text-slate-800">{selectedMemberToDelete.memberId}</strong> (<strong>{selectedMemberToDelete.name}</strong>)?
+              </p>
+            </div>
+
+            <div className="flex justify-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => { setIsDeleteMemberModalOpen(false); setSelectedMemberToDelete(null); }}
+                className="px-4 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDayEnded}
+                onClick={handleConfirmDeleteMember}
                 className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Yes, Delete

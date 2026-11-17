@@ -1272,9 +1272,9 @@ export const microFinanceService = {
   getSavings: (): MFSavingsRecord[] => {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.SAVINGS);
-      if (data) {
+      if (data !== null) {
         const parsed = JSON.parse(data);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           return parsed.map((s: MFSavingsRecord, idx: number) => ({
             ...s,
             dateBs: s.dateBs || (s.date && s.date.startsWith('208') ? s.date : (DEFAULT_SAVINGS[idx]?.dateBs || '2083-06-29'))
@@ -1818,16 +1818,9 @@ export const microFinanceService = {
   getSheets: (): MFCollectionSheet[] => {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.SHEETS);
-      if (data) {
+      if (data !== null) {
         const parsed = JSON.parse(data);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const existingIds = new Set(parsed.map((s: MFCollectionSheet) => s.id));
-          const missingDefaults = DEFAULT_SHEETS.filter(s => !existingIds.has(s.id));
-          if (missingDefaults.length > 0) {
-            const combined = [...parsed, ...missingDefaults];
-            localStorage.setItem(STORAGE_KEYS.SHEETS, JSON.stringify(combined));
-            return combined;
-          }
+        if (Array.isArray(parsed)) {
           return parsed;
         }
       }
@@ -1869,16 +1862,9 @@ export const microFinanceService = {
   getSignatureSheets: (): MFSignatureSheet[] => {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.SIGNATURE_SHEETS);
-      if (data) {
+      if (data !== null) {
         const parsed = JSON.parse(data);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const existingIds = new Set(parsed.map((s: MFSignatureSheet) => s.id || s.sheetNo));
-          const missingDefaults = DEFAULT_SIGNATURE_SHEETS.filter(s => !existingIds.has(s.id) && !existingIds.has(s.sheetNo));
-          if (missingDefaults.length > 0) {
-            const combined = [...parsed, ...missingDefaults];
-            localStorage.setItem(STORAGE_KEYS.SIGNATURE_SHEETS, JSON.stringify(combined));
-            return combined;
-          }
+        if (Array.isArray(parsed)) {
           return parsed;
         }
       }
@@ -2037,8 +2023,11 @@ export const microFinanceService = {
         if (sRes.data.length > 0) {
           savings = (sRes.data as Record<string, unknown>[]).map(mapRowToSaving);
           localStorage.setItem(STORAGE_KEYS.SAVINGS, JSON.stringify(savings));
-        } else if (localSavings.length > 0) {
-          void bgUpsert('mf_savings', localSavings.map(mapSavingToRow));
+        } else {
+          const nonDefaultSavings = localSavings.filter(s => !['sav-1', 'sav-2', 'sav-3'].includes(s.id));
+          if (nonDefaultSavings.length > 0) {
+            void bgUpsert('mf_savings', nonDefaultSavings.map(mapSavingToRow));
+          }
         }
       }
 
@@ -2047,8 +2036,11 @@ export const microFinanceService = {
         if (shRes.data.length > 0) {
           sheets = (shRes.data as Record<string, unknown>[]).map(mapRowToSheet);
           localStorage.setItem(STORAGE_KEYS.SHEETS, JSON.stringify(sheets));
-        } else if (localSheets.length > 0) {
-          void bgUpsert('mf_collection_sheets', localSheets.map(mapSheetToRow));
+        } else {
+          const nonDefaultSheets = localSheets.filter(s => !['cs-1', 'cs-2', 'cs-3'].includes(s.id));
+          if (nonDefaultSheets.length > 0) {
+            void bgUpsert('mf_collection_sheets', nonDefaultSheets.map(mapSheetToRow));
+          }
         }
       }
 
@@ -2057,8 +2049,11 @@ export const microFinanceService = {
         if (sigRes.data.length > 0) {
           signatureSheets = (sigRes.data as Record<string, unknown>[]).map(mapRowToSigSheet);
           localStorage.setItem(STORAGE_KEYS.SIGNATURE_SHEETS, JSON.stringify(signatureSheets));
-        } else if (localSigSheets.length > 0) {
-          void bgUpsert('mf_signature_sheets', localSigSheets.map(mapSigSheetToRow));
+        } else {
+          const nonDefaultSigSheets = localSigSheets.filter(s => !['sig-1', 'sig-2'].includes(s.id));
+          if (nonDefaultSigSheets.length > 0) {
+            void bgUpsert('mf_signature_sheets', nonDefaultSigSheets.map(mapSigSheetToRow));
+          }
         }
       }
 
