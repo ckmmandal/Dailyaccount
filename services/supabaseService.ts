@@ -32,9 +32,9 @@ export const SUMIT_KUMAR_THAKUR_RECORD: Employee = {
   panNo: '126123243',
   basicSalary: 30000,
   joinedDate: '2078-04-01',
-  daType: 'None',
-  daValue: 1806000,
-  dearnessAllowance: 541800000,
+  daType: 'Percentage',
+  daValue: 20,
+  dearnessAllowance: 6000,
   gradeRate: 6,
   gradeRateAmount: 0,
   hasDashain: true,
@@ -82,8 +82,9 @@ export const OFFICIAL_MASTER_STAFF: Employee[] = [
     joinedDate: '2075-01-01',
     gradeRate: 10,
     gradeRateAmount: 0,
-    dearnessAllowance: 4851120,
-    daValue: 4851120,
+    daType: 'Percentage',
+    daValue: 20,
+    dearnessAllowance: 9840,
     hasDashain: true,
     dashainBonus: 49200,
     festivalBonus: 49200,
@@ -109,8 +110,9 @@ export const OFFICIAL_MASTER_STAFF: Employee[] = [
     joinedDate: '2075-04-01',
     gradeRate: 10,
     gradeRateAmount: 0,
-    dearnessAllowance: 2161535040,
-    daValue: 4541040,
+    daType: 'Percentage',
+    daValue: 20,
+    dearnessAllowance: 9520,
     hasDashain: true,
     dashainBonus: 47600,
     festivalBonus: 47600,
@@ -136,8 +138,9 @@ export const OFFICIAL_MASTER_STAFF: Employee[] = [
     joinedDate: '2076-01-01',
     gradeRate: 10,
     gradeRateAmount: 0,
-    dearnessAllowance: 3128400,
-    daValue: 3128400,
+    daType: 'Percentage',
+    daValue: 20,
+    dearnessAllowance: 7900,
     hasDashain: true,
     dashainBonus: 39500,
     festivalBonus: 39500,
@@ -163,8 +166,9 @@ export const OFFICIAL_MASTER_STAFF: Employee[] = [
     joinedDate: '2076-08-01',
     gradeRate: 9,
     gradeRateAmount: 0,
-    dearnessAllowance: 897298000,
-    daValue: 2527600,
+    daType: 'Percentage',
+    daValue: 20,
+    dearnessAllowance: 7100,
     hasDashain: true,
     dashainBonus: 35500,
     festivalBonus: 35500,
@@ -190,8 +194,9 @@ export const OFFICIAL_MASTER_STAFF: Employee[] = [
     joinedDate: '2077-01-01',
     gradeRate: 9,
     gradeRateAmount: 0,
-    dearnessAllowance: 2527600,
-    daValue: 2527600,
+    daType: 'Percentage',
+    daValue: 20,
+    dearnessAllowance: 7100,
     hasDashain: true,
     dashainBonus: 35500,
     festivalBonus: 35500,
@@ -218,8 +223,9 @@ export const OFFICIAL_MASTER_STAFF: Employee[] = [
     joinedDate: '2078-04-01',
     gradeRate: 8,
     gradeRateAmount: 0,
-    dearnessAllowance: 541800000,
-    daValue: 1806000,
+    daType: 'Percentage',
+    daValue: 20,
+    dearnessAllowance: 6000,
     hasDashain: true,
     dashainBonus: 30000,
     festivalBonus: 30000,
@@ -245,8 +251,9 @@ export const OFFICIAL_MASTER_STAFF: Employee[] = [
     joinedDate: '2078-06-01',
     gradeRate: 6,
     gradeRateAmount: 0,
-    dearnessAllowance: 541800000,
-    daValue: 1806000,
+    daType: 'Percentage',
+    daValue: 20,
+    dearnessAllowance: 6000,
     hasDashain: true,
     dashainBonus: 30000,
     festivalBonus: 30000,
@@ -272,8 +279,9 @@ export const OFFICIAL_MASTER_STAFF: Employee[] = [
     joinedDate: '2079-01-01',
     gradeRate: 6,
     gradeRateAmount: 0,
-    dearnessAllowance: 1409800,
-    daValue: 5320,
+    daType: 'Percentage',
+    daValue: 20,
+    dearnessAllowance: 5300,
     hasDashain: true,
     dashainBonus: 26500,
     festivalBonus: 26500,
@@ -299,8 +307,9 @@ export const OFFICIAL_MASTER_STAFF: Employee[] = [
     joinedDate: '2079-04-01',
     gradeRate: 6,
     gradeRateAmount: 0,
-    dearnessAllowance: 1062600,
-    daValue: 1062600,
+    daType: 'Percentage',
+    daValue: 20,
+    dearnessAllowance: 4600,
     hasDashain: true,
     dashainBonus: 23000,
     festivalBonus: 23000,
@@ -326,8 +335,9 @@ export const OFFICIAL_MASTER_STAFF: Employee[] = [
     joinedDate: '2079-05-01',
     gradeRate: 6,
     gradeRateAmount: 0,
-    dearnessAllowance: 1062600,
-    daValue: 4620,
+    daType: 'Percentage',
+    daValue: 20,
+    dearnessAllowance: 4600,
     hasDashain: true,
     dashainBonus: 23000,
     festivalBonus: 23000,
@@ -353,8 +363,9 @@ export const OFFICIAL_MASTER_STAFF: Employee[] = [
     joinedDate: '2079-08-01',
     gradeRate: 6,
     gradeRateAmount: 0,
-    dearnessAllowance: 199692000,
-    daValue: 928800,
+    daType: 'Percentage',
+    daValue: 20,
+    dearnessAllowance: 4300,
     hasDashain: true,
     dashainBonus: 21500,
     festivalBonus: 21500,
@@ -380,8 +391,9 @@ export const OFFICIAL_MASTER_STAFF: Employee[] = [
     joinedDate: '2080-01-01',
     gradeRate: 6,
     gradeRateAmount: 0,
-    dearnessAllowance: 928800,
-    daValue: 928800,
+    daType: 'Percentage',
+    daValue: 20,
+    dearnessAllowance: 4300,
     hasDashain: true,
     dashainBonus: 21500,
     festivalBonus: 21500,
@@ -407,6 +419,7 @@ export const OFFICIAL_MASTER_STAFF: Employee[] = [
     joinedDate: '2077-01-01',
     gradeRate: 0,
     gradeRateAmount: 0,
+    daType: 'None',
     dearnessAllowance: 0,
     daValue: 0,
     hasDashain: true,
@@ -415,6 +428,98 @@ export const OFFICIAL_MASTER_STAFF: Employee[] = [
     monthsActive: 12
   }
 ];
+
+export const isValidMediaUrl = (url?: string | null): boolean => {
+  if (typeof url !== 'string') return false;
+  const s = url.trim();
+  if (!s || s === '[TRUNCATED_BASE64_FOR_CACHE]') return false;
+  return (
+    s.startsWith('data:image/') ||
+    s.startsWith('http://') ||
+    s.startsWith('https://') ||
+    s.startsWith('/') ||
+    s.startsWith('blob:')
+  );
+};
+
+export const sanitizeMediaUrl = (url?: string | null): string =>
+  isValidMediaUrl(url) ? (url as string).trim() : '';
+
+export const pickValidMediaUrl = (...candidates: Array<string | null | undefined>): string => {
+  for (const c of candidates) {
+    if (isValidMediaUrl(c)) return (c as string).trim();
+  }
+  return '';
+};
+
+export const normalizeEmployeePayrollFields = (emp: Employee): Employee => {
+  const basic = Number(emp.basicSalary) || 0;
+  let daType: 'Percentage' | 'Amount' | 'None' =
+    emp.daType === 'Percentage' || emp.daType === 'Amount' || emp.daType === 'None'
+      ? emp.daType
+      : (Number(emp.dearnessAllowance) > 0 ? 'Amount' : 'None');
+  let daValue = Number(emp.daValue) || 0;
+  let dearnessAllowance = Number(emp.dearnessAllowance) || 0;
+
+  // Recover from historical Bulk-Update runaway DA bug (where rupee amount got saved into daValue while daType remained 'Percentage')
+  if (daType === 'Percentage' && daValue > 100) {
+    if (basic > 0 && daValue <= basic * 1.5) {
+      const pct = Number(((daValue / basic) * 100).toFixed(2));
+      if (Math.abs(pct - Math.round(pct)) < 0.05) {
+        daValue = Math.round(pct);
+        dearnessAllowance = Math.round((basic * daValue) / 100);
+      } else {
+        daType = 'Amount';
+        dearnessAllowance = daValue;
+      }
+    } else {
+      // Astronomically corrupted value (e.g. 2527600 / 897298000 / 541800000) -> restore clean 20% or 0
+      daValue = basic > 0 ? 20 : 0;
+      dearnessAllowance = Math.round((basic * daValue) / 100);
+      if (daValue === 0) daType = 'None';
+    }
+  } else if (daType === 'Percentage') {
+    dearnessAllowance = Math.round(((basic * daValue) / 100) * 100) / 100;
+  } else if (daType === 'Amount') {
+    if (daValue > Math.max(basic * 3, 100000)) {
+      daType = basic > 0 ? 'Percentage' : 'None';
+      daValue = basic > 0 ? 20 : 0;
+      dearnessAllowance = Math.round((basic * daValue) / 100);
+    } else {
+      dearnessAllowance = daValue || dearnessAllowance;
+      daValue = dearnessAllowance;
+    }
+  } else {
+    // daType === 'None'
+    if (dearnessAllowance > Math.max(basic * 3, 100000) || daValue > Math.max(basic * 3, 100000)) {
+      daType = 'None';
+      daValue = 0;
+      dearnessAllowance = 0;
+    } else if (dearnessAllowance > 0) {
+      daType = 'Amount';
+      daValue = dearnessAllowance;
+    } else {
+      daValue = 0;
+      dearnessAllowance = 0;
+    }
+  }
+
+  const dressAmt = Number(emp.dressAllowance) || 0;
+  const hasDress =
+    emp.hasDressAllowance !== undefined
+      ? Boolean(emp.hasDressAllowance)
+      : dressAmt > 0;
+
+  return {
+    ...emp,
+    photoUrl: sanitizeMediaUrl(emp.photoUrl),
+    daType,
+    daValue,
+    dearnessAllowance,
+    dressAllowance: dressAmt,
+    hasDressAllowance: hasDress,
+  };
+};
 
 // Helper functions for LocalStorage fallback DB
 const getLocalDB = <T>(key: string, defaultVal: T): T => {
@@ -996,11 +1101,20 @@ const getLocalDB = <T>(key: string, defaultVal: T): T => {
 const cleanDataForStorage = (val: unknown, keyName?: string): unknown => {
   if (val === null || val === undefined) return val;
   if (typeof val === 'string') {
-    if (keyName === 'imageUrl' || keyName === 'logoUrl' || keyName === 'attachment_url' || keyName === 'file_url') {
+    if (
+      keyName === 'imageUrl' ||
+      keyName === 'logoUrl' ||
+      keyName === 'attachment_url' ||
+      keyName === 'file_url' ||
+      ((keyName === 'photoUrl' || keyName === 'photo_url') && val.length <= 400000)
+    ) {
       return val;
     }
-    if (val.length > 25000 && (val.startsWith('data:') || val.includes('base64'))) {
-      return '[TRUNCATED_BASE64_FOR_CACHE]';
+    if (val === '[TRUNCATED_BASE64_FOR_CACHE]') {
+      return '';
+    }
+    if (val.length > 60000 && (val.startsWith('data:') || val.includes('base64'))) {
+      return '';
     }
     return val;
   }
@@ -1048,6 +1162,10 @@ const saveLocalDB = <T>(key: string, data: T): void => {
     }
   }
 };
+
+export const getLocalSnapshot = <T>(key: string, defaultVal: T): T => getLocalDB<T>(key, defaultVal);
+
+const knownMissingEmployeeColumns = new Set<string>();
 
 // ==========================================
 // High-Performance In-Memory Query Cache with SWR & Request Deduplication
@@ -2040,62 +2158,95 @@ export const supabaseService = {
     const targetNorm = normalizeBranchId(branchId);
     return fetchWithCache(`employees_${targetNorm}`, async () => {
       try {
-        // Always query all employees from Supabase so full directory is cached
-        const { data, error } = await supabase.from('employees').select('*');
+        // Fetch employees fast and individual KYC records in parallel; guard slow KYC payload so employees never timeout
+        const safeIndKycPromise = Promise.race([
+          supabase
+            .from('settings')
+            .select('id, data')
+            .like('id', 'employee_kyc_%')
+            .neq('id', 'employee_kyc_store'),
+          new Promise<{ data: null; error: null }>(resolve =>
+            setTimeout(() => resolve({ data: null, error: null }), 18000)
+          )
+        ]).catch(() => ({ data: null, error: null }));
+
+        const [empRes, indKycRes] = await Promise.all([
+          supabase.from('employees').select('*'),
+          safeIndKycPromise
+        ]);
+
+        const { data, error } = empRes;
         if (error) {
           console.warn("Supabase employees table query warning:", error.message);
         }
 
+        const localPre = getLocalDB<Employee[]>('employees', []);
+        const localPhotoById = new Map<string, string>();
+        (localPre || []).forEach(le => {
+          if (le?.id && isValidMediaUrl(le.photoUrl)) {
+            localPhotoById.set(le.id, le.photoUrl!.trim());
+          }
+        });
+
         // Fetch rich KYC details & document attachments stored in Supabase settings
         let kycMap: Record<string, any> = {};
-        
-        // 1. Fetch individual employee KYC records (guaranteed not to hit row size limits)
-        try {
-          const { data: indKycRecords } = await supabase
-            .from('settings')
-            .select('id, data')
-            .like('id', 'employee_kyc_%');
-          if (indKycRecords && Array.isArray(indKycRecords)) {
-            indKycRecords.forEach(rec => {
-              if (rec.id && rec.data && rec.id !== 'employee_kyc_store') {
-                const eId = rec.id.replace('employee_kyc_', '');
-                kycMap[eId] = rec.data;
-                if (rec.data.employeeCode) {
-                  kycMap[rec.data.employeeCode] = rec.data;
-                }
+        const kycByCodeMap: Record<string, any> = {};
+
+        // 1. Process individual employee KYC records
+        if (indKycRes?.data && Array.isArray(indKycRes.data)) {
+          indKycRes.data.forEach(rec => {
+            if (rec.id && rec.data && rec.id !== 'employee_kyc_store') {
+              const eId = rec.id.replace('employee_kyc_', '');
+              kycMap[eId] = rec.data;
+              if (rec.data.employeeCode) {
+                kycByCodeMap[String(rec.data.employeeCode)] = rec.data;
               }
-            });
-          }
-        } catch (e) {
-          console.warn("Could not fetch individual employee_kyc_% from Supabase:", e);
+            }
+          });
         }
 
-        // 2. Also check aggregated employee_kyc_store
-        try {
-          const { data: kycRecord } = await supabase.from('settings').select('data').eq('id', 'employee_kyc_store').maybeSingle();
-          if (kycRecord?.data && typeof kycRecord.data === 'object') {
-            kycMap = { ...kycRecord.data, ...kycMap };
+        // 2. Fallback to aggregated employee_kyc_store only if individual records are missing
+        if (Object.keys(kycMap).length === 0) {
+          try {
+            const { data: kycRecord } = await supabase.from('settings').select('data').eq('id', 'employee_kyc_store').maybeSingle();
+            if (kycRecord?.data && typeof kycRecord.data === 'object') {
+              kycMap = { ...kycRecord.data };
+            }
+          } catch (e) {
+            console.warn("Could not fetch employee_kyc_store from Supabase:", e);
           }
-        } catch (e) {
-          console.warn("Could not fetch employee_kyc_store from Supabase:", e);
         }
 
         const employees = (data || []).map(e => {
-          const extraKyc = kycMap[e.id] || (e.employee_code ? kycMap[e.employee_code] : {}) || {};
-          return {
+          const rawKyc = kycMap[e.id] || (e.employee_code ? kycByCodeMap[String(e.employee_code)] : {}) || {};
+          // Always preserve saved KYC & switch state (hasSSF, hasPF, hasGratuity, hasMedical, daType, etc.)
+          // Do not discard rawKyc on updated_at skew since employees row may carry legacy false/None defaults
+          const extraKyc = rawKyc;
+          const fallbackKyc = rawKyc;
+
+          const dressAmt = Number(extraKyc.dressAllowance ?? e.dress_allowance) || 0;
+          const hasDress =
+            extraKyc.hasDressAllowance !== undefined
+              ? Boolean(extraKyc.hasDressAllowance)
+              : (e.has_dress_allowance !== undefined && e.has_dress_allowance !== null
+                  ? Boolean(e.has_dress_allowance)
+                  : dressAmt > 0);
+
+          const mappedEmp: Employee = {
             ...e,
+            ...fallbackKyc,
             ...extraKyc,
             id: e.id,
-            fullName: extraKyc.fullName || e.full_name,
-            employeeCode: extraKyc.employeeCode || e.employee_code,
-            mobile: extraKyc.mobile || e.mobile,
-            email: extraKyc.email || e.email,
-            department: extraKyc.department || e.department,
-            branchId: extraKyc.branchId || e.branch_id,
-            designation: extraKyc.designation || e.designation,
-            joinedDate: extraKyc.joinedDate || e.joined_date,
+            fullName: extraKyc.fullName || e.full_name || fallbackKyc.fullName,
+            employeeCode: extraKyc.employeeCode || e.employee_code || fallbackKyc.employeeCode,
+            mobile: extraKyc.mobile || e.mobile || fallbackKyc.mobile,
+            email: extraKyc.email || e.email || fallbackKyc.email,
+            department: extraKyc.department || e.department || fallbackKyc.department,
+            branchId: extraKyc.branchId || e.branch_id || fallbackKyc.branchId,
+            designation: extraKyc.designation || e.designation || fallbackKyc.designation,
+            joinedDate: extraKyc.joinedDate || e.joined_date || fallbackKyc.joinedDate,
             basicSalary: Number(extraKyc.basicSalary ?? e.basic_salary) || 0,
-            daType: extraKyc.daType || e.da_type,
+            daType: extraKyc.daType ?? e.da_type,
             daValue: Number(extraKyc.daValue ?? e.da_value) || 0,
             dearnessAllowance: Number(extraKyc.dearnessAllowance ?? e.dearness_allowance) || 0,
             gradeRate: Number(extraKyc.gradeRate ?? e.grade_rate) || 0,
@@ -2111,16 +2262,16 @@ export const supabaseService = {
             hasMedical: Boolean(extraKyc.hasMedical ?? e.has_medical),
             medicalAllowance: Number(extraKyc.medicalAllowance ?? e.medical_allowance) || 0,
             hasBonus: Boolean(extraKyc.hasBonus ?? e.has_bonus),
-            panNo: extraKyc.panNo || e.pan_no,
-            photoUrl: extraKyc.photoUrl || e.photo_url,
-            gender: extraKyc.gender || e.gender || 'Male',
-            maritalStatus: extraKyc.maritalStatus || e.marital_status || 'Single',
+            panNo: extraKyc.panNo || e.pan_no || fallbackKyc.panNo,
+            photoUrl: pickValidMediaUrl(extraKyc.photoUrl, e.photo_url, fallbackKyc.photoUrl, localPhotoById.get(e.id)),
+            gender: extraKyc.gender || e.gender || fallbackKyc.gender || 'Male',
+            maritalStatus: extraKyc.maritalStatus || e.marital_status || fallbackKyc.maritalStatus || 'Single',
             monthsActive: Number(extraKyc.monthsActive ?? e.months_active) || 12,
-            festivalBonus: extraKyc.festivalBonus || e.festival_bonus,
+            festivalBonus: extraKyc.festivalBonus ?? e.festival_bonus,
             sanchitLeaveAmount: Number(extraKyc.sanchitLeaveAmount ?? e.festival_bonus) || 0,
             sanchitLeaveDays: extraKyc.sanchitLeaveDays || (e.basic_salary > 0 ? Math.round(((e.festival_bonus || 0) / e.basic_salary) * 30) : 0),
             bonusYearly: Number(extraKyc.bonusYearly ?? e.bonus_yearly) || 0,
-            employmentType: extraKyc.employmentType || e.employment_type || 'Permanent',
+            employmentType: extraKyc.employmentType || e.employment_type || fallbackKyc.employmentType || 'Permanent',
             lifeInsurance: Number(extraKyc.lifeInsurance ?? e.life_insurance) || 0,
             hasLifeInsurance: Boolean(extraKyc.hasLifeInsurance ?? e.has_life_insurance),
             healthInsurance: Number(extraKyc.healthInsurance ?? e.health_insurance) || 0,
@@ -2133,58 +2284,60 @@ export const supabaseService = {
             remoteAllowance: Number(extraKyc.remoteAllowance ?? e.remote_allowance) || 0,
             hasRemoteAllowance: Boolean(extraKyc.hasRemoteAllowance ?? e.has_remote_allowance),
             isIncapacitated: Boolean(extraKyc.isIncapacitated ?? e.is_incapacitated),
-            dressAllowance: Number(extraKyc.dressAllowance ?? e.dress_allowance) || 0,
+            hasDressAllowance: hasDress,
+            dressAllowance: dressAmt,
             // KYC fields
-            citizenshipNo: extraKyc.citizenshipNo || e.citizenship_no,
-            citizenshipDistrict: extraKyc.citizenshipDistrict || e.citizenship_district,
-            citizenshipIssueDate: extraKyc.citizenshipIssueDate || e.citizenship_issue_date,
-            citizenshipFrontUrl: extraKyc.citizenshipFrontUrl || e.citizenship_front_url,
-            citizenshipBackUrl: extraKyc.citizenshipBackUrl || e.citizenship_back_url,
-            fatherName: extraKyc.fatherName || e.father_name,
-            fatherNameNepali: extraKyc.fatherNameNepali || e.father_name_nepali,
-            motherName: extraKyc.motherName || e.mother_name,
-            motherNameNepali: extraKyc.motherNameNepali || e.mother_name_nepali,
-            grandfatherName: extraKyc.grandfatherName || e.grandfather_name,
-            grandfatherNameNepali: extraKyc.grandfatherNameNepali || e.grandfather_name_nepali,
-            spouseName: extraKyc.spouseName || e.spouse_name,
-            spouseNameNepali: extraKyc.spouseNameNepali || e.spouse_name_nepali,
-            previousName: extraKyc.previousName || e.previous_name,
-            previousNameNepali: extraKyc.previousNameNepali || e.previous_name_nepali,
-            fullNameNepali: extraKyc.fullNameNepali || e.full_name_nepali,
-            designationNepali: extraKyc.designationNepali || e.designation_nepali,
-            departmentNepali: extraKyc.departmentNepali || e.department_nepali,
-            dobBs: extraKyc.dobBs || e.dob_bs,
-            nationality: extraKyc.nationality || e.nationality || 'Nepali',
-            permanentAddress: extraKyc.permanentAddress || e.permanent_address,
-            permanentAddressNepali: extraKyc.permanentAddressNepali || e.permanent_address_nepali,
-            temporaryAddress: extraKyc.temporaryAddress || e.temporary_address,
-            temporaryAddressNepali: extraKyc.temporaryAddressNepali || e.temporary_address_nepali,
-            bankName: extraKyc.bankName || e.bank_name,
-            bankAccountNo: extraKyc.bankAccountNo || e.bank_account_no,
-            accountHolderName: extraKyc.accountHolderName || e.account_holder_name,
-            bankBranch: extraKyc.bankBranch || e.bank_branch,
-            emergencyContact: extraKyc.emergencyContact || e.emergency_contact,
-            emergencyRelation: extraKyc.emergencyRelation || extraKyc.emergency_relation || e.emergency_relation,
-            emergencyPhone: extraKyc.emergencyPhone || e.emergency_phone,
-            emergencyAddress: extraKyc.emergencyAddress || e.emergency_address,
-            bloodGroup: extraKyc.bloodGroup || e.blood_group,
-            qualification: extraKyc.qualification || e.qualification,
-            institution: extraKyc.institution || e.institution,
-            passedYear: extraKyc.passedYear || e.passed_year,
-            previousEmployer: extraKyc.previousEmployer || e.previous_employer,
-            previousDesignation: extraKyc.previousDesignation || e.previous_designation,
-            totalExperience: extraKyc.totalExperience || e.total_experience,
-            expJoiningDate: extraKyc.expJoiningDate || e.exp_joining_date,
-            expLeavingDate: extraKyc.expLeavingDate || e.exp_leaving_date,
-            reportingManager: extraKyc.reportingManager || e.reporting_manager,
-            workLocation: extraKyc.workLocation || e.work_location,
-            docsCitizenship: extraKyc.docsCitizenship || extraKyc.citizenshipFrontUrl || e.citizenship_front_url,
-            docsNid: extraKyc.docsNid,
-            docsPan: extraKyc.docsPan,
-            docsEducation: extraKyc.docsEducation,
-            docsExperience: extraKyc.docsExperience,
-            docsContract: extraKyc.docsContract
+            citizenshipNo: fallbackKyc.citizenshipNo || e.citizenship_no,
+            citizenshipDistrict: fallbackKyc.citizenshipDistrict || e.citizenship_district,
+            citizenshipIssueDate: fallbackKyc.citizenshipIssueDate || e.citizenship_issue_date,
+            citizenshipFrontUrl: fallbackKyc.citizenshipFrontUrl || e.citizenship_front_url,
+            citizenshipBackUrl: fallbackKyc.citizenshipBackUrl || e.citizenship_back_url,
+            fatherName: fallbackKyc.fatherName || e.father_name,
+            fatherNameNepali: fallbackKyc.fatherNameNepali || e.father_name_nepali,
+            motherName: fallbackKyc.motherName || e.mother_name,
+            motherNameNepali: fallbackKyc.motherNameNepali || e.mother_name_nepali,
+            grandfatherName: fallbackKyc.grandfatherName || e.grandfather_name,
+            grandfatherNameNepali: fallbackKyc.grandfatherNameNepali || e.grandfather_name_nepali,
+            spouseName: fallbackKyc.spouseName || e.spouse_name,
+            spouseNameNepali: fallbackKyc.spouseNameNepali || e.spouse_name_nepali,
+            previousName: fallbackKyc.previousName || e.previous_name,
+            previousNameNepali: fallbackKyc.previousNameNepali || e.previous_name_nepali,
+            fullNameNepali: fallbackKyc.fullNameNepali || e.full_name_nepali,
+            designationNepali: fallbackKyc.designationNepali || e.designation_nepali,
+            departmentNepali: fallbackKyc.departmentNepali || e.department_nepali,
+            dobBs: fallbackKyc.dobBs || e.dob_bs,
+            nationality: fallbackKyc.nationality || e.nationality || 'Nepali',
+            permanentAddress: fallbackKyc.permanentAddress || e.permanent_address,
+            permanentAddressNepali: fallbackKyc.permanentAddressNepali || e.permanent_address_nepali,
+            temporaryAddress: fallbackKyc.temporaryAddress || e.temporary_address,
+            temporaryAddressNepali: fallbackKyc.temporaryAddressNepali || e.temporary_address_nepali,
+            bankName: fallbackKyc.bankName || e.bank_name,
+            bankAccountNo: fallbackKyc.bankAccountNo || e.bank_account_no,
+            accountHolderName: fallbackKyc.accountHolderName || e.account_holder_name,
+            bankBranch: fallbackKyc.bankBranch || e.bank_branch,
+            emergencyContact: fallbackKyc.emergencyContact || e.emergency_contact,
+            emergencyRelation: fallbackKyc.emergencyRelation || fallbackKyc.emergency_relation || e.emergency_relation,
+            emergencyPhone: fallbackKyc.emergencyPhone || e.emergency_phone,
+            emergencyAddress: fallbackKyc.emergencyAddress || e.emergency_address,
+            bloodGroup: fallbackKyc.bloodGroup || e.blood_group,
+            qualification: fallbackKyc.qualification || e.qualification,
+            institution: fallbackKyc.institution || e.institution,
+            passedYear: fallbackKyc.passedYear || e.passed_year,
+            previousEmployer: fallbackKyc.previousEmployer || e.previous_employer,
+            previousDesignation: fallbackKyc.previousDesignation || e.previous_designation,
+            totalExperience: fallbackKyc.totalExperience || e.total_experience,
+            expJoiningDate: fallbackKyc.expJoiningDate || e.exp_joining_date,
+            expLeavingDate: fallbackKyc.expLeavingDate || e.exp_leaving_date,
+            reportingManager: fallbackKyc.reportingManager || e.reporting_manager,
+            workLocation: fallbackKyc.workLocation || e.work_location,
+            docsCitizenship: fallbackKyc.docsCitizenship || fallbackKyc.citizenshipFrontUrl || e.citizenship_front_url,
+            docsNid: fallbackKyc.docsNid,
+            docsPan: fallbackKyc.docsPan,
+            docsEducation: fallbackKyc.docsEducation,
+            docsExperience: fallbackKyc.docsExperience,
+            docsContract: fallbackKyc.docsContract
           };
+          return normalizeEmployeePayrollFields(mappedEmp);
         });
 
         // Also check if there are employees in kycMap that were not in employees table
@@ -2192,10 +2345,10 @@ export const supabaseService = {
           if (kData && typeof kData === 'object' && kData.fullName && !kData.deleted) {
             const exists = employees.some(e => e.id === kId || (kData.id && e.id === kData.id));
             if (!exists) {
-              employees.push({
+              employees.push(normalizeEmployeePayrollFields({
                 ...kData,
                 id: kData.id || kId
-              });
+              }));
             }
           }
         });
@@ -2204,31 +2357,33 @@ export const supabaseService = {
         
         // 1. Seed master staff first so full 14 staff including Record #6: SUMIT KUMAR THAKUR are always guaranteed
         OFFICIAL_MASTER_STAFF.forEach(me => {
-          map.set(me.id, { ...me });
+          map.set(me.id, normalizeEmployeePayrollFields({ ...me }));
         });
 
         // 2. Overlay live Supabase query data
         (employees || []).forEach(e => {
           if (!e) return;
-          const key = e.id || e.employeeCode || (e.fullName ? e.fullName.trim().toLowerCase() : '');
-          if (key) map.set(key, e);
-          if (e.id) map.set(e.id, e);
+          const cleanE = normalizeEmployeePayrollFields(e);
+          const key = cleanE.id || cleanE.employeeCode || (cleanE.fullName ? cleanE.fullName.trim().toLowerCase() : '');
+          if (key) map.set(key, cleanE);
+          if (cleanE.id) map.set(cleanE.id, cleanE);
         });
 
-        // 3. Overlay locally updated data / KYC
+        // 3. Overlay locally updated data / KYC only if missing from Supabase
         (local || []).forEach(e => {
           if (!e) return;
-          const key = e.id || e.employeeCode || (e.fullName ? e.fullName.trim().toLowerCase() : '');
-          if (key && !map.has(key)) map.set(key, e);
-          if (e.id && !map.has(e.id)) map.set(e.id, e);
+          const cleanE = normalizeEmployeePayrollFields(e);
+          const key = cleanE.id || cleanE.employeeCode || (cleanE.fullName ? cleanE.fullName.trim().toLowerCase() : '');
+          if (key && !map.has(key)) map.set(key, cleanE);
+          if (cleanE.id && !map.has(cleanE.id)) map.set(cleanE.id, cleanE);
         });
 
         // 4. Double check Record #6: SUMIT KUMAR THAKUR is present
         if (!map.has(SUMIT_KUMAR_THAKUR_RECORD.id)) {
-          map.set(SUMIT_KUMAR_THAKUR_RECORD.id, { ...SUMIT_KUMAR_THAKUR_RECORD });
+          map.set(SUMIT_KUMAR_THAKUR_RECORD.id, normalizeEmployeePayrollFields({ ...SUMIT_KUMAR_THAKUR_RECORD }));
         }
 
-        const merged = deduplicateEmployees(Array.from(map.values()));
+        const merged = deduplicateEmployees(Array.from(map.values())).map(normalizeEmployeePayrollFields);
         if (merged.length > 0 || local.length === 0) {
           saveLocalDB('employees', merged);
         }
@@ -2239,15 +2394,15 @@ export const supabaseService = {
       } catch (e) {
         console.warn("Falling back to localStorage for getEmployees:", e);
         const local = getLocalDB<Employee[]>('employees', []);
-        const raw = [...(local || []), ...OFFICIAL_MASTER_STAFF, SUMIT_KUMAR_THAKUR_RECORD];
-        const merged = deduplicateEmployees(raw);
+        const raw = [...(local || []), ...OFFICIAL_MASTER_STAFF, SUMIT_KUMAR_THAKUR_RECORD].map(normalizeEmployeePayrollFields);
+        const merged = deduplicateEmployees(raw).map(normalizeEmployeePayrollFields);
         saveLocalDB('employees', merged);
         if (branchId && branchId !== 'all') {
           return merged.filter(emp => isBranchMatch(emp.branchId, branchId));
         }
         return merged;
       }
-    }, { ttlMs: 15000, fallbackLocalKey: 'employees' });
+    }, { ttlMs: 60000, timeoutMs: 30000, fallbackLocalKey: 'employees' });
   },
   async syncAllMasterEmployees(): Promise<Employee[]> {
     invalidateMemoryCache('employees');
@@ -2265,82 +2420,92 @@ export const supabaseService = {
     invalidateMemoryCache('ledger_accounts');
     const empId = (emp.id && emp.id.trim() !== '') ? emp.id : safeUUID();
     const verifiedBranchId = await this.verifyAndGetBranchId(emp.branchId);
-    const empToSave = { ...emp, id: empId, branchId: verifiedBranchId };
+    const localExisting = getLocalDB<Employee[]>('employees', []).find(e => e.id === empId);
+    const cleanedPhoto = isValidMediaUrl(emp.photoUrl)
+      ? emp.photoUrl!.trim()
+      : (emp.photoUrl === '[TRUNCATED_BASE64_FOR_CACHE]' && isValidMediaUrl(localExisting?.photoUrl)
+          ? localExisting!.photoUrl!.trim()
+          : '');
+    const normalizedEmp = normalizeEmployeePayrollFields({ ...emp, id: empId, branchId: verifiedBranchId, photoUrl: cleanedPhoto });
+    const nowIso = new Date().toISOString();
+    const empToSave = { ...normalizedEmp, updatedAt: nowIso };
 
     // 1. Direct database columns for Supabase PostgreSQL 'employees' table
-    const validDbPayload = {
+    const validDbPayload: Record<string, any> = {
       id: empId,
-      full_name: emp.fullName,
-      employee_code: emp.employeeCode,
-      mobile: emp.mobile,
-      email: emp.email,
-      department: emp.department,
+      full_name: empToSave.fullName,
+      employee_code: empToSave.employeeCode,
+      mobile: empToSave.mobile,
+      email: empToSave.email,
+      department: empToSave.department,
       branch_id: verifiedBranchId,
-      designation: emp.designation,
-      joined_date: emp.joinedDate,
-      basic_salary: emp.basicSalary,
-      da_type: emp.daType,
-      da_value: emp.daValue,
-      dearness_allowance: emp.dearnessAllowance,
-      grade_rate: emp.gradeRate,
-      grade_rate_amount: emp.gradeRateAmount,
-      has_ssf: emp.hasSSF,
-      ssf_contribution: emp.ssfContribution,
-      has_pf: emp.hasPF,
-      pf_contribution: emp.pfContribution,
-      has_gratuity: emp.hasGratuity,
-      gratuity: emp.gratuity,
-      has_dashain: emp.hasDashain,
-      dashain_bonus: emp.dashainBonus,
-      has_medical: emp.hasMedical,
-      medical_allowance: emp.medicalAllowance,
-      has_bonus: emp.hasBonus,
-      bonus_yearly: emp.bonusYearly,
-      pan_no: emp.panNo,
-      status: emp.status,
-      photo_url: emp.photoUrl,
-      gender: emp.gender,
-      marital_status: emp.maritalStatus,
-      months_active: emp.monthsActive,
-      festival_bonus: emp.sanchitLeaveAmount || 0,
-      employment_type: emp.employmentType,
-      life_insurance: emp.lifeInsurance,
-      has_life_insurance: emp.hasLifeInsurance,
-      health_insurance: emp.healthInsurance,
-      has_health_insurance: emp.hasHealthInsurance,
-      building_insurance: emp.buildingInsurance,
-      building_allowance: emp.buildingAllowance,
-      has_building_allowance: emp.hasBuildingAllowance,
-      medical_expenses_paid: emp.medicalExpensesPaid,
-      remote_area_category: emp.remoteAreaCategory,
-      remote_allowance: emp.remoteAllowance,
-      has_remote_allowance: emp.hasRemoteAllowance,
-      is_incapacitated: emp.isIncapacitated,
-      dress_allowance: emp.dressAllowance || 0,
+      designation: empToSave.designation,
+      joined_date: empToSave.joinedDate,
+      basic_salary: empToSave.basicSalary,
+      da_type: empToSave.daType,
+      da_value: empToSave.daValue,
+      dearness_allowance: empToSave.dearnessAllowance,
+      grade_rate: empToSave.gradeRate,
+      grade_rate_amount: empToSave.gradeRateAmount,
+      has_ssf: empToSave.hasSSF,
+      ssf_contribution: empToSave.ssfContribution,
+      has_pf: empToSave.hasPF,
+      pf_contribution: empToSave.pfContribution,
+      has_gratuity: empToSave.hasGratuity,
+      gratuity: empToSave.gratuity,
+      has_dashain: empToSave.hasDashain,
+      dashain_bonus: empToSave.dashainBonus,
+      has_medical: empToSave.hasMedical,
+      medical_allowance: empToSave.medicalAllowance,
+      has_bonus: empToSave.hasBonus,
+      bonus_yearly: empToSave.bonusYearly,
+      pan_no: empToSave.panNo,
+      status: empToSave.status,
+      photo_url: empToSave.photoUrl,
+      gender: empToSave.gender,
+      marital_status: empToSave.maritalStatus,
+      months_active: empToSave.monthsActive,
+      festival_bonus: empToSave.sanchitLeaveAmount || 0,
+      employment_type: empToSave.employmentType,
+      life_insurance: empToSave.lifeInsurance,
+      has_life_insurance: empToSave.hasLifeInsurance,
+      health_insurance: empToSave.healthInsurance,
+      has_health_insurance: empToSave.hasHealthInsurance,
+      building_insurance: empToSave.buildingInsurance,
+      building_allowance: empToSave.buildingAllowance,
+      has_building_allowance: empToSave.hasBuildingAllowance,
+      medical_expenses_paid: empToSave.medicalExpensesPaid,
+      remote_area_category: empToSave.remoteAreaCategory,
+      remote_allowance: empToSave.remoteAllowance,
+      has_remote_allowance: empToSave.hasRemoteAllowance,
+      is_incapacitated: empToSave.isIncapacitated,
+      has_dress_allowance: Boolean(empToSave.hasDressAllowance),
+      dress_allowance: empToSave.dressAllowance || 0,
+      updated_at: nowIso,
       // KYC fields matching PostgreSQL columns
-      citizenship_no: emp.citizenshipNo,
-      citizenship_district: emp.citizenshipDistrict,
-      citizenship_issue_date: emp.citizenshipIssueDate,
-      citizenship_front_url: emp.citizenshipFrontUrl,
-      citizenship_back_url: emp.citizenshipBackUrl,
-      father_name: emp.fatherName,
-      mother_name: emp.motherName,
-      grandfather_name: emp.grandfatherName,
-      spouse_name: emp.spouseName,
-      dob_bs: emp.dobBs,
-      permanent_address: emp.permanentAddress,
-      temporary_address: emp.temporaryAddress,
-      bank_name: emp.bankName,
-      bank_account_no: emp.bankAccountNo,
-      account_holder_name: emp.accountHolderName,
-      bank_branch: emp.bankBranch,
-      full_name_nepali: emp.fullNameNepali,
-      designation_nepali: emp.designationNepali,
-      department_nepali: emp.departmentNepali,
-      emergency_contact: emp.emergencyContact,
-      emergency_phone: emp.emergencyPhone,
-      blood_group: emp.bloodGroup,
-      qualification: emp.qualification
+      citizenship_no: empToSave.citizenshipNo,
+      citizenship_district: empToSave.citizenshipDistrict,
+      citizenship_issue_date: empToSave.citizenshipIssueDate,
+      citizenship_front_url: empToSave.citizenshipFrontUrl,
+      citizenship_back_url: empToSave.citizenshipBackUrl,
+      father_name: empToSave.fatherName,
+      mother_name: empToSave.motherName,
+      grandfather_name: empToSave.grandfatherName,
+      spouse_name: empToSave.spouseName,
+      dob_bs: empToSave.dobBs,
+      permanent_address: empToSave.permanentAddress,
+      temporary_address: empToSave.temporaryAddress,
+      bank_name: empToSave.bankName,
+      bank_account_no: empToSave.bankAccountNo,
+      account_holder_name: empToSave.accountHolderName,
+      bank_branch: empToSave.bankBranch,
+      full_name_nepali: empToSave.fullNameNepali,
+      designation_nepali: empToSave.designationNepali,
+      department_nepali: empToSave.departmentNepali,
+      emergency_contact: empToSave.emergencyContact,
+      emergency_phone: empToSave.emergencyPhone,
+      blood_group: empToSave.bloodGroup,
+      qualification: empToSave.qualification
     };
 
     // Save locally first
@@ -2398,79 +2563,94 @@ export const supabaseService = {
       window.dispatchEvent(new Event('ledgerAccountsUpdated'));
     } catch (e) {}
 
-    // Persist to Supabase:
-    // A. Upsert to 'employees' table in Supabase (with automatic schema fallback if extra columns don't exist)
-    try {
-      const { error: dbError } = await supabase.from('employees').upsert(validDbPayload);
-      if (dbError) {
-        console.warn('Supabase employees full upsert warning, retrying with core columns:', dbError.message);
-        const basePayload = {
-          id: empId,
-          full_name: emp.fullName,
-          employee_code: emp.employeeCode,
-          mobile: emp.mobile,
-          email: emp.email,
-          department: emp.department,
-          branch_id: (emp.branchId && emp.branchId.trim() !== '') ? emp.branchId : null,
-          designation: emp.designation,
-          joined_date: emp.joinedDate,
-          basic_salary: emp.basicSalary,
-          status: emp.status || 'Active',
-          pan_no: emp.panNo,
-          photo_url: emp.photoUrl,
-          gender: emp.gender || 'Male',
-          marital_status: emp.maritalStatus || 'Single',
-          employment_type: emp.employmentType || 'Permanent'
-        };
-        const { error: baseError } = await supabase.from('employees').upsert(basePayload);
-        if (baseError) {
-          console.warn('Supabase employees base upsert warning:', baseError.message);
-        } else {
-          console.log('✅ Employee core record saved successfully to Supabase employees table');
-        }
-      } else {
-        console.log('✅ Employee saved successfully to Supabase employees table');
-      }
-    } catch (dbEx) {
-      console.warn('Failed to upsert to Supabase employees table:', dbEx);
-    }
-
+    // Persist to Supabase in parallel:
+    // A. Upsert to 'employees' table (skipping any previously detected missing schema columns)
     // B. Persist individual employee KYC bundle into Supabase 'settings' under 'employee_kyc_${empId}'
-    // This guarantees no row size limit collision with other employees' documents!
-    try {
-      const { error: indError } = await supabase.from('settings').upsert({
-        id: `employee_kyc_${empId}`,
-        data: empToSave,
-        updated_at: new Date().toISOString()
-      });
-      if (indError) {
-        console.warn(`Supabase employee_kyc_${empId} upsert warning:`, indError.message);
-      } else {
-        console.log(`✅ Individual employee KYC bundle saved to Supabase settings for ${empId}`);
+    const upsertEmployeesTable = async () => {
+      try {
+        const payloadToUpsert: Record<string, any> = { ...validDbPayload };
+        knownMissingEmployeeColumns.forEach(col => {
+          delete payloadToUpsert[col];
+        });
+        let savedFullRow = false;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          const { error: dbError } = await supabase.from('employees').upsert(payloadToUpsert);
+          if (!dbError) {
+            savedFullRow = true;
+            break;
+          }
+          const colMatch = dbError.message?.match(/Could not find the '([^']+)' column|column "([^"]+)" of relation/i);
+          const missingCol = colMatch?.[1] || colMatch?.[2];
+          if (missingCol && missingCol in payloadToUpsert) {
+            knownMissingEmployeeColumns.add(missingCol);
+            delete payloadToUpsert[missingCol];
+            continue;
+          }
+          console.warn('Supabase employees upsert warning, retrying with core columns:', dbError.message);
+          break;
+        }
+        if (!savedFullRow) {
+          const basePayload = {
+            id: empId,
+            full_name: empToSave.fullName,
+            employee_code: empToSave.employeeCode,
+            mobile: empToSave.mobile,
+            email: empToSave.email,
+            department: empToSave.department,
+            branch_id: (empToSave.branchId && empToSave.branchId.trim() !== '') ? empToSave.branchId : null,
+            designation: empToSave.designation,
+            joined_date: empToSave.joinedDate,
+            basic_salary: empToSave.basicSalary,
+            status: empToSave.status || 'Active',
+            pan_no: empToSave.panNo,
+            photo_url: empToSave.photoUrl,
+            gender: empToSave.gender || 'Male',
+            marital_status: empToSave.maritalStatus || 'Single',
+            employment_type: empToSave.employmentType || 'Permanent'
+          };
+          const { error: baseError } = await supabase.from('employees').upsert(basePayload);
+          if (baseError) {
+            console.warn('Supabase employees base upsert warning:', baseError.message);
+          }
+        }
+      } catch (dbEx) {
+        console.warn('Failed to upsert to Supabase employees table:', dbEx);
       }
-    } catch (indEx) {
-      console.warn(`Failed to save employee_kyc_${empId}:`, indEx);
-    }
+    };
 
-    // C. Also maintain aggregated 'employee_kyc_store' for backward compatibility
-    try {
-      const { data: storeData } = await supabase.from('settings').select('data').eq('id', 'employee_kyc_store').maybeSingle();
-      const currentStore = (storeData?.data && typeof storeData.data === 'object') ? storeData.data : {};
-      currentStore[empId] = {
-        ...empToSave,
-        updatedAt: new Date().toISOString()
-      };
-      const { error: storeError } = await supabase.from('settings').upsert({
-        id: 'employee_kyc_store',
-        data: currentStore,
-        updated_at: new Date().toISOString()
-      });
-      if (storeError) {
-        console.warn('Supabase employee_kyc_store aggregate upsert warning:', storeError.message);
+    const upsertIndividualKyc = async () => {
+      try {
+        const { error: indError } = await supabase.from('settings').upsert({
+          id: `employee_kyc_${empId}`,
+          data: empToSave,
+          updated_at: nowIso
+        });
+        if (indError) {
+          console.warn(`Supabase employee_kyc_${empId} upsert warning:`, indError.message);
+        }
+      } catch (indEx) {
+        console.warn(`Failed to save employee_kyc_${empId}:`, indEx);
       }
-    } catch (storeEx) {
-      console.warn('Aggregated store error (non-fatal as individual record is saved):', storeEx);
-    }
+    };
+
+    await Promise.all([upsertEmployeesTable(), upsertIndividualKyc()]);
+
+    // C. Maintain aggregated 'employee_kyc_store' asynchronously in background without blocking save UI
+    void (async () => {
+      try {
+        const { data: storeData } = await supabase.from('settings').select('data').eq('id', 'employee_kyc_store').maybeSingle();
+        const currentStore = (storeData?.data && typeof storeData.data === 'object') ? storeData.data : {};
+        currentStore[empId] = {
+          ...empToSave,
+          updatedAt: nowIso
+        };
+        await supabase.from('settings').upsert({
+          id: 'employee_kyc_store',
+          data: currentStore,
+          updated_at: nowIso
+        });
+      } catch (_) {}
+    })();
 
     try {
       window.dispatchEvent(new Event('employeesUpdated'));

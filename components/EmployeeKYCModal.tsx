@@ -5,6 +5,7 @@ import {
   Phone, Mail, Landmark, CreditCard, Award, HeartHandshake, FileCheck
 } from 'lucide-react';
 import { Employee, SystemSettings, Branch } from '../types';
+import { isValidMediaUrl } from '../services/supabaseService';
 import { useDayEndLock, getDayEndedBlockMessage } from '../utils/dayEndLock';
 
 export const calculateRetirementInfo = (dobBsStr?: string, joinedDateStr?: string) => {
@@ -163,8 +164,8 @@ export const EmployeeKYCModal: React.FC<EmployeeKYCModalProps> = ({
           {/* Employee Hero Profile Box */}
           <div className="bg-slate-50 p-3.5 sm:p-4 rounded-xl border border-slate-200 flex flex-col md:flex-row items-center md:items-start gap-4 mb-5">
             <div className="w-24 h-24 rounded-xl overflow-hidden bg-slate-200 shrink-0 flex items-center justify-center border border-slate-300">
-              {employee.photoUrl ? (
-                <img src={employee.photoUrl} className="w-full h-full object-cover" alt={employee.fullName} />
+              {isValidMediaUrl(employee.photoUrl) ? (
+                <img src={employee.photoUrl} className="w-full h-full object-cover" alt={employee.fullName} referrerPolicy="no-referrer" />
               ) : (
                 <UserIcon size={44} className="text-slate-400" />
               )}

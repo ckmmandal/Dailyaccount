@@ -139,6 +139,10 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
   useEffect(() => {
     refreshMeetings();
     loadTemplates();
+    void meetingMinutesService.fetchAllFromSupabase().then(res => {
+      setMeetings(res.meetings);
+      setTemplates(res.templates);
+    });
   }, []);
 
   // Set default center, group, employee

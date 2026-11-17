@@ -1,17 +1,300 @@
 import NepaliDate from 'nepali-date-converter';
 import * as XLSX from 'xlsx';
+import { supabase } from './supabase';
 import { assertDayNotEnded } from '../utils/dayEndLock';
 import { 
   LoanInsuranceRecord, 
   InsuranceClaimRecord, 
   InsurancePartnerCompany,
-  ClaimLifecycleStage
+  ClaimLifecycleStage,
+  ClaimStatusType,
+  LoanInsuranceStatus
 } from '../types';
 
 const STORAGE_KEYS = {
   RECORDS: 'saccos_db_loan_insurance_records',
   CLAIMS: 'saccos_db_loan_insurance_claims',
   COMPANIES: 'saccos_db_loan_insurance_companies'
+};
+
+const mapCompanyToRow = (c: InsurancePartnerCompany) => ({
+  id: c.id,
+  name: c.name,
+  code: c.code,
+  contact_person: c.contactPerson || null,
+  phone: c.phone || null,
+  email: c.email || null,
+  portal_url: c.portalUrl || null,
+  default_premium_rate: Number(c.defaultPremiumRate) || 0.35,
+  status: c.status || 'Active',
+  updated_at: new Date().toISOString()
+});
+
+const mapRowToCompany = (r: Record<string, unknown>): InsurancePartnerCompany => ({
+  id: String(r.id),
+  name: String(r.name || ''),
+  code: String(r.code || ''),
+  contactPerson: r.contact_person ? String(r.contact_person) : undefined,
+  phone: r.phone ? String(r.phone) : undefined,
+  email: r.email ? String(r.email) : undefined,
+  portalUrl: r.portal_url ? String(r.portal_url) : undefined,
+  defaultPremiumRate: Number(r.default_premium_rate) || 0.35,
+  status: r.status === 'Inactive' ? 'Inactive' : 'Active'
+});
+
+const safeIntOrNull = (val: unknown): number | null => {
+  if (val === undefined || val === null || val === '') return null;
+  const n = Number(val);
+  return Number.isFinite(n) ? Math.round(n) : null;
+};
+
+const safeNumOrNull = (val: unknown): number | null => {
+  if (val === undefined || val === null || val === '') return null;
+  const n = Number(val);
+  return Number.isFinite(n) ? n : null;
+};
+
+const mapRecordToRow = (rec: LoanInsuranceRecord) => ({
+  id: rec.id,
+  sn: safeIntOrNull(rec.sn),
+  policy_no: rec.policyNo,
+  member_id: rec.memberId || '',
+  member_name: rec.memberName || rec.name || '',
+  gender: rec.gender || null,
+  citizenship_no: rec.citizenshipNo || null,
+  contact_number: rec.contactNumber || null,
+  branch_id: rec.branchId || 'main',
+  branch: rec.branch || null,
+  loan_account_no: rec.loanAccountNo || null,
+  loan_type: rec.loanType || null,
+  loan_disbursed_date: rec.loanDisbursedDate || null,
+  loan_disbursed_date_bs: rec.loanDisbursedDateBs || null,
+  loan_expiry_date: rec.loanExpiryDate || null,
+  loan_expiry_date_bs: rec.loanExpiryDateBs || null,
+  loan_amount: Number.isFinite(Number(rec.loanAmount)) ? Number(rec.loanAmount) : 0,
+  outstanding_balance: Number.isFinite(Number(rec.outstandingBalance)) ? Number(rec.outstandingBalance) : 0,
+  insurance_company: rec.insuranceCompany || null,
+  insurance_type: rec.insuranceType || null,
+  sum_assured: Number.isFinite(Number(rec.sumAssured)) ? Number(rec.sumAssured) : 0,
+  premium_rate_percent: Number.isFinite(Number(rec.premiumRatePercent)) ? Number(rec.premiumRatePercent) : 0,
+  premium_amount: Number.isFinite(Number(rec.premiumAmount)) ? Number(rec.premiumAmount) : 0,
+  policy_start_date: rec.policyStartDate || null,
+  policy_start_date_bs: rec.policyStartDateBs || null,
+  policy_expiry_date: rec.policyExpiryDate || null,
+  policy_expiry_date_bs: rec.policyExpiryDateBs || null,
+  status: rec.status || 'Active',
+  term_months: Math.max(1, Math.round(Number(rec.termMonths) || 12)),
+  age: safeIntOrNull(rec.age),
+  date_of_birth: rec.dateOfBirth || null,
+  date_of_birth_bs: rec.dateOfBirthBs || null,
+  address: rec.address || null,
+  occupation: rec.occupation || null,
+  disability: rec.disability || 'None',
+  living_active_life: rec.livingActiveLife || 'Yes',
+  living_status: rec.livingStatus || 'Active / Normal Life',
+  nominee_name: rec.nomineeName || null,
+  nominee_relation: rec.nomineeRelation || null,
+  nominee_contact: rec.nomineeContact || null,
+  nominee_citizenship: rec.nomineeCitizenship || null,
+  nominee_dob: rec.nomineeDob || null,
+  nominee_dob_bs: rec.nomineeDobBs || null,
+  nominee_gender: rec.nomineeGender || null,
+  document_url: rec.documentUrl || null,
+  document_name: rec.documentName || null,
+  ocr_extracted_text: rec.ocrExtractedText || null,
+  confidence: safeNumOrNull(rec.confidence),
+  premium_payment_status: rec.premiumPaymentStatus || 'Paid',
+  premium_payment_remark: rec.premiumPaymentRemark || null,
+  loan_duration_years: safeNumOrNull(rec.loanDurationYears),
+  paid_years: safeNumOrNull(rec.paidYears),
+  due_years: safeNumOrNull(rec.dueYears),
+  insurance_till_date: rec.insuranceTillDate || null,
+  insurance_till_date_bs: rec.insuranceTillDateBs || null,
+  is_premium_saved: Boolean(rec.isPremiumSaved),
+  is_first_policy: rec.isFirstPolicy ?? true,
+  member_photo: rec.memberPhoto || null,
+  signature_member: rec.signatureMember || null,
+  signature_manager: rec.signatureManager || null,
+  signature_officer: rec.signatureOfficer || null,
+  notes: rec.notes || null,
+  created_at: Math.round(Number(rec.createdAt) || Date.now()),
+  updated_at: Math.round(Number(rec.updatedAt) || Date.now())
+});
+
+const mapRowToRecord = (r: Record<string, unknown>): LoanInsuranceRecord => ({
+  id: String(r.id),
+  sn: r.sn !== undefined && r.sn !== null ? Number(r.sn) : undefined,
+  policyNo: String(r.policy_no || ''),
+  memberId: String(r.member_id || ''),
+  memberName: String(r.member_name || ''),
+  name: String(r.member_name || ''),
+  gender: r.gender ? (String(r.gender) as LoanInsuranceRecord['gender']) : undefined,
+  citizenshipNo: String(r.citizenship_no || ''),
+  contactNumber: r.contact_number ? String(r.contact_number) : undefined,
+  branchId: String(r.branch_id || 'main'),
+  branch: r.branch ? String(r.branch) : undefined,
+  loanAccountNo: r.loan_account_no ? String(r.loan_account_no) : undefined,
+  loanType: String(r.loan_type || ''),
+  loanDisbursedDate: r.loan_disbursed_date ? String(r.loan_disbursed_date) : undefined,
+  loanDisbursedDateBs: r.loan_disbursed_date_bs ? String(r.loan_disbursed_date_bs) : undefined,
+  loanExpiryDate: r.loan_expiry_date ? String(r.loan_expiry_date) : undefined,
+  loanExpiryDateBs: r.loan_expiry_date_bs ? String(r.loan_expiry_date_bs) : undefined,
+  loanAmount: Number(r.loan_amount) || 0,
+  outstandingBalance: r.outstanding_balance !== undefined && r.outstanding_balance !== null ? Number(r.outstanding_balance) : undefined,
+  insuranceCompany: String(r.insurance_company || ''),
+  insuranceType: String(r.insurance_type || ''),
+  sumAssured: Number(r.sum_assured) || 0,
+  premiumRatePercent: r.premium_rate_percent !== undefined && r.premium_rate_percent !== null ? Number(r.premium_rate_percent) : undefined,
+  premiumAmount: Number(r.premium_amount) || 0,
+  policyStartDate: String(r.policy_start_date || ''),
+  policyStartDateBs: r.policy_start_date_bs ? String(r.policy_start_date_bs) : undefined,
+  policyExpiryDate: String(r.policy_expiry_date || ''),
+  policyExpiryDateBs: r.policy_expiry_date_bs ? String(r.policy_expiry_date_bs) : undefined,
+  status: (String(r.status || 'Active') as LoanInsuranceStatus),
+  termMonths: r.term_months !== undefined && r.term_months !== null ? Number(r.term_months) : undefined,
+  age: r.age !== undefined && r.age !== null ? Number(r.age) : undefined,
+  dateOfBirth: r.date_of_birth ? String(r.date_of_birth) : undefined,
+  dateOfBirthBs: r.date_of_birth_bs ? String(r.date_of_birth_bs) : undefined,
+  address: r.address ? String(r.address) : undefined,
+  occupation: r.occupation ? String(r.occupation) : undefined,
+  disability: r.disability ? String(r.disability) : undefined,
+  livingActiveLife: r.living_active_life ? String(r.living_active_life) : undefined,
+  livingStatus: r.living_status ? String(r.living_status) : undefined,
+  nomineeName: String(r.nominee_name || ''),
+  nomineeRelation: String(r.nominee_relation || ''),
+  nomineeContact: r.nominee_contact ? String(r.nominee_contact) : undefined,
+  nomineeCitizenship: r.nominee_citizenship ? String(r.nominee_citizenship) : undefined,
+  nomineeDob: r.nominee_dob ? String(r.nominee_dob) : undefined,
+  nomineeDobBs: r.nominee_dob_bs ? String(r.nominee_dob_bs) : undefined,
+  nomineeGender: r.nominee_gender ? String(r.nominee_gender) : undefined,
+  documentUrl: r.document_url ? String(r.document_url) : undefined,
+  documentName: r.document_name ? String(r.document_name) : undefined,
+  ocrExtractedText: r.ocr_extracted_text ? String(r.ocr_extracted_text) : undefined,
+  confidence: r.confidence !== undefined && r.confidence !== null ? Number(r.confidence) : undefined,
+  premiumPaymentStatus: r.premium_payment_status === 'Due' ? 'Due' : 'Paid',
+  premiumPaymentRemark: r.premium_payment_remark ? String(r.premium_payment_remark) : undefined,
+  loanDurationYears: r.loan_duration_years !== undefined && r.loan_duration_years !== null ? Number(r.loan_duration_years) : undefined,
+  paidYears: r.paid_years !== undefined && r.paid_years !== null ? Number(r.paid_years) : undefined,
+  dueYears: r.due_years !== undefined && r.due_years !== null ? Number(r.due_years) : undefined,
+  insuranceTillDate: r.insurance_till_date ? String(r.insurance_till_date) : undefined,
+  insuranceTillDateBs: r.insurance_till_date_bs ? String(r.insurance_till_date_bs) : undefined,
+  isPremiumSaved: Boolean(r.is_premium_saved),
+  isFirstPolicy: r.is_first_policy !== undefined && r.is_first_policy !== null ? Boolean(r.is_first_policy) : true,
+  memberPhoto: r.member_photo ? String(r.member_photo) : undefined,
+  signatureMember: r.signature_member ? String(r.signature_member) : undefined,
+  signatureManager: r.signature_manager ? String(r.signature_manager) : undefined,
+  signatureOfficer: r.signature_officer ? String(r.signature_officer) : undefined,
+  notes: r.notes ? String(r.notes) : undefined,
+  createdAt: Number(r.created_at) || Date.now(),
+  updatedAt: Number(r.updated_at) || Date.now()
+});
+
+const mapClaimToRow = (c: InsuranceClaimRecord) => ({
+  id: c.id,
+  claim_no: c.claimNo,
+  insurance_record_id: c.insuranceRecordId || null,
+  policy_no: c.policyNo,
+  member_id: c.memberId,
+  member_name: c.memberName,
+  citizenship_no: c.citizenshipNo || null,
+  loan_account_no: c.loanAccountNo || null,
+  branch_id: c.branchId || 'main',
+  claim_date: c.claimDate,
+  claim_date_bs: c.claimDateBs || null,
+  incident_date: c.incidentDate || null,
+  incident_date_bs: c.incidentDateBs || null,
+  claim_cause: c.claimCause,
+  outstanding_loan_at_claim: Number(c.outstandingLoanAtClaim) || 0,
+  claim_amount_requested: Number(c.claimAmountRequested) || 0,
+  claim_amount_approved: Number(c.claimAmountApproved) || 0,
+  disbursed_amount: Number(c.disbursedAmount) || 0,
+  disbursement_date: c.disbursementDate || null,
+  disbursement_date_bs: c.disbursementDateBs || null,
+  payout_method: c.payoutMethod || null,
+  lifecycle_stage: c.lifecycleStage || 'Claim Submission',
+  status: c.status || 'Submitted',
+  insurer_reference_no: c.insurerReferenceNo || null,
+  settlement_date: c.settlementDate || null,
+  settlement_date_bs: c.settlementDateBs || null,
+  settlement_voucher_no: c.settlementVoucherNo || null,
+  death_certificate_no: c.deathCertificateNo || null,
+  hospital_report_summary: c.hospitalReportSummary || null,
+  verified_by: c.verifiedBy || null,
+  approved_by: c.approvedBy || null,
+  remarks: c.remarks || null,
+  supporting_documents: Array.isArray(c.supportingDocuments) ? c.supportingDocuments : [],
+  document_url: c.documentUrl || null,
+  created_at: Math.round(Number(c.createdAt) || Date.now()),
+  updated_at: Math.round(Number(c.updatedAt) || Date.now())
+});
+
+const mapRowToClaim = (r: Record<string, unknown>): InsuranceClaimRecord => ({
+  id: String(r.id),
+  claimNo: String(r.claim_no || ''),
+  insuranceRecordId: String(r.insurance_record_id || ''),
+  policyNo: String(r.policy_no || ''),
+  memberId: String(r.member_id || ''),
+  memberName: String(r.member_name || ''),
+  citizenshipNo: r.citizenship_no ? String(r.citizenship_no) : undefined,
+  loanAccountNo: r.loan_account_no ? String(r.loan_account_no) : undefined,
+  branchId: String(r.branch_id || 'main'),
+  claimDate: String(r.claim_date || ''),
+  claimDateBs: r.claim_date_bs ? String(r.claim_date_bs) : undefined,
+  incidentDate: r.incident_date ? String(r.incident_date) : undefined,
+  incidentDateBs: r.incident_date_bs ? String(r.incident_date_bs) : undefined,
+  claimCause: String(r.claim_cause || ''),
+  outstandingLoanAtClaim: Number(r.outstanding_loan_at_claim) || 0,
+  claimAmountRequested: Number(r.claim_amount_requested) || 0,
+  claimAmountApproved: r.claim_amount_approved !== undefined && r.claim_amount_approved !== null ? Number(r.claim_amount_approved) : undefined,
+  disbursedAmount: r.disbursed_amount !== undefined && r.disbursed_amount !== null ? Number(r.disbursed_amount) : undefined,
+  disbursementDate: r.disbursement_date ? String(r.disbursement_date) : undefined,
+  disbursementDateBs: r.disbursement_date_bs ? String(r.disbursement_date_bs) : undefined,
+  payoutMethod: r.payout_method ? (String(r.payout_method) as InsuranceClaimRecord['payoutMethod']) : undefined,
+  lifecycleStage: r.lifecycle_stage ? (String(r.lifecycle_stage) as ClaimLifecycleStage) : undefined,
+  status: (String(r.status || 'Submitted') as ClaimStatusType),
+  insurerReferenceNo: r.insurer_reference_no ? String(r.insurer_reference_no) : undefined,
+  settlementDate: r.settlement_date ? String(r.settlement_date) : undefined,
+  settlementDateBs: r.settlement_date_bs ? String(r.settlement_date_bs) : undefined,
+  settlementVoucherNo: r.settlement_voucher_no ? String(r.settlement_voucher_no) : undefined,
+  deathCertificateNo: r.death_certificate_no ? String(r.death_certificate_no) : undefined,
+  hospitalReportSummary: r.hospital_report_summary ? String(r.hospital_report_summary) : undefined,
+  verifiedBy: r.verified_by ? String(r.verified_by) : undefined,
+  approvedBy: r.approved_by ? String(r.approved_by) : undefined,
+  remarks: r.remarks ? String(r.remarks) : undefined,
+  supportingDocuments: Array.isArray(r.supporting_documents) ? (r.supporting_documents as string[]) : [],
+  documentUrl: r.document_url ? String(r.document_url) : undefined,
+  createdAt: Number(r.created_at) || Date.now(),
+  updatedAt: Number(r.updated_at) || Date.now()
+});
+
+const syncRecordsToSupabase = async (records: LoanInsuranceRecord[]): Promise<void> => {
+  if (!supabase || records.length === 0) return;
+  try {
+    const { error } = await supabase.from('loan_insurance_records').upsert(records.map(mapRecordToRow), { onConflict: 'id' });
+    if (error) console.warn('Supabase loan_insurance_records upsert warning:', error.message);
+  } catch (err) {
+    console.warn('Supabase loan_insurance_records sync failed:', err);
+  }
+};
+
+const syncClaimsToSupabase = async (claims: InsuranceClaimRecord[]): Promise<void> => {
+  if (!supabase || claims.length === 0) return;
+  try {
+    const { error } = await supabase.from('insurance_claims').upsert(claims.map(mapClaimToRow), { onConflict: 'id' });
+    if (error) console.warn('Supabase insurance_claims upsert warning:', error.message);
+  } catch (err) {
+    console.warn('Supabase insurance_claims sync failed:', err);
+  }
+};
+
+const syncCompaniesToSupabase = async (companies: InsurancePartnerCompany[]): Promise<void> => {
+  if (!supabase || companies.length === 0) return;
+  try {
+    const { error } = await supabase.from('insurance_companies').upsert(companies.map(mapCompanyToRow), { onConflict: 'id' });
+    if (error) console.warn('Supabase insurance_companies upsert warning:', error.message);
+  } catch (err) {
+    console.warn('Supabase insurance_companies sync failed:', err);
+  }
 };
 
 // Date Normalization & Bidirectional AD <-> BS Conversion Helpers
@@ -529,9 +812,10 @@ export const loanInsuranceService = {
     return INITIAL_LOAN_INSURANCE_RECORDS;
   },
 
-  // Save all policies
+  // Save all policies (syncs to localStorage & Supabase)
   saveRecords(records: LoanInsuranceRecord[]): void {
     localStorage.setItem(STORAGE_KEYS.RECORDS, JSON.stringify(records));
+    void syncRecordsToSupabase(records);
   },
 
   // Add a new policy
@@ -558,7 +842,8 @@ export const loanInsuranceService = {
       updatedAt: Date.now()
     };
     records.unshift(newRecord);
-    this.saveRecords(records);
+    localStorage.setItem(STORAGE_KEYS.RECORDS, JSON.stringify(records));
+    void syncRecordsToSupabase([newRecord]);
     return newRecord;
   },
 
@@ -582,7 +867,8 @@ export const loanInsuranceService = {
       policyExpiryDateBs: updates.policyExpiryDateBs || (expiryDate ? convertAdToBs(expiryDate) : current.policyExpiryDateBs),
       updatedAt: Date.now()
     };
-    this.saveRecords(records);
+    localStorage.setItem(STORAGE_KEYS.RECORDS, JSON.stringify(records));
+    void syncRecordsToSupabase([records[index]]);
     return records[index];
   },
 
@@ -590,9 +876,21 @@ export const loanInsuranceService = {
   deleteRecord(id: string): boolean {
     assertDayNotEnded();
     const records = this.getRecords();
+    const target = records.find(r => String(r.id) === String(id) || String(r.policyNo) === String(id));
     const filtered = records.filter(r => String(r.id) !== String(id) && String(r.policyNo) !== String(id));
     if (filtered.length !== records.length) {
-      this.saveRecords(filtered);
+      localStorage.setItem(STORAGE_KEYS.RECORDS, JSON.stringify(filtered));
+      if (supabase) {
+        const delId = target?.id || String(id);
+        void (async () => {
+          try {
+            const { error } = await supabase.from('loan_insurance_records').delete().eq('id', delId);
+            if (error) console.warn('Supabase loan_insurance_records delete warning:', error.message);
+          } catch (err) {
+            console.warn('Supabase loan_insurance_records delete failed:', err);
+          }
+        })();
+      }
       return true;
     }
     return false;
@@ -606,8 +904,9 @@ export const loanInsuranceService = {
 
     for (const item of newRecords) {
       if (!item.memberName && !item.name) continue;
-      
-      const loanAmt = item.loanAmount || item.policyAmount || 100000;
+
+      const legacyItem = item as Partial<LoanInsuranceRecord> & { policyAmount?: number };
+      const loanAmt = item.loanAmount || legacyItem.policyAmount || 100000;
       const termMonths = item.termMonths || item.term_month || 12;
       const premium = item.premiumAmount || item.premium || calculatePremium(loanAmt, termMonths);
       const startDate = item.policyStartDate || item.start_date || new Date().toISOString().split('T')[0];
@@ -891,6 +1190,7 @@ export const loanInsuranceService = {
 
   saveClaims(claims: InsuranceClaimRecord[]): void {
     localStorage.setItem(STORAGE_KEYS.CLAIMS, JSON.stringify(claims));
+    void syncClaimsToSupabase(claims);
   },
 
   addClaim(claim: Omit<InsuranceClaimRecord, 'id' | 'createdAt' | 'updatedAt' | 'claimNo'>): InsuranceClaimRecord {
@@ -911,7 +1211,8 @@ export const loanInsuranceService = {
       updatedAt: Date.now()
     };
     claims.unshift(newClaim);
-    this.saveClaims(claims);
+    localStorage.setItem(STORAGE_KEYS.CLAIMS, JSON.stringify(claims));
+    void syncClaimsToSupabase([newClaim]);
 
     // Update the corresponding policy status to Claimed
     if (claim.insuranceRecordId) {
@@ -937,7 +1238,8 @@ export const loanInsuranceService = {
       claimDateBs: updates.claimDateBs || (claimDate ? convertAdToBs(claimDate) : current.claimDateBs),
       updatedAt: Date.now()
     };
-    this.saveClaims(claims);
+    localStorage.setItem(STORAGE_KEYS.CLAIMS, JSON.stringify(claims));
+    void syncClaimsToSupabase([claims[index]]);
 
     if (updates.status === 'Settled' && claims[index].insuranceRecordId) {
       this.updateRecord(claims[index].insuranceRecordId, { status: 'Settled' });
@@ -981,6 +1283,65 @@ export const loanInsuranceService = {
   saveCompanies(companies: InsurancePartnerCompany[]): void {
     assertDayNotEnded();
     localStorage.setItem(STORAGE_KEYS.COMPANIES, JSON.stringify(companies));
+    void syncCompaniesToSupabase(companies);
+  },
+
+  // Sync & Hydrate from Supabase (also pushes local records if Supabase tables are empty)
+  async syncAllFromSupabase(): Promise<{
+    records: LoanInsuranceRecord[];
+    claims: InsuranceClaimRecord[];
+    companies: InsurancePartnerCompany[];
+  }> {
+    const localRecords = this.getRecords();
+    const localClaims = this.getClaims();
+    const localCompanies = this.getCompanies();
+
+    if (!supabase) {
+      return { records: localRecords, claims: localClaims, companies: localCompanies };
+    }
+
+    try {
+      const [recRes, clmRes, compRes] = await Promise.all([
+        supabase.from('loan_insurance_records').select('*').order('created_at', { ascending: false }),
+        supabase.from('insurance_claims').select('*').order('created_at', { ascending: false }),
+        supabase.from('insurance_companies').select('*')
+      ]);
+
+      let finalRecords = localRecords;
+      if (!recRes.error && Array.isArray(recRes.data)) {
+        if (recRes.data.length > 0) {
+          finalRecords = (recRes.data as Record<string, unknown>[]).map(mapRowToRecord);
+          localStorage.setItem(STORAGE_KEYS.RECORDS, JSON.stringify(finalRecords));
+        } else if (localRecords.length > 0) {
+          await syncRecordsToSupabase(localRecords);
+        }
+      }
+
+      let finalClaims = localClaims;
+      if (!clmRes.error && Array.isArray(clmRes.data)) {
+        if (clmRes.data.length > 0) {
+          finalClaims = (clmRes.data as Record<string, unknown>[]).map(mapRowToClaim);
+          localStorage.setItem(STORAGE_KEYS.CLAIMS, JSON.stringify(finalClaims));
+        } else if (localClaims.length > 0) {
+          await syncClaimsToSupabase(localClaims);
+        }
+      }
+
+      let finalCompanies = localCompanies;
+      if (!compRes.error && Array.isArray(compRes.data)) {
+        if (compRes.data.length > 0) {
+          finalCompanies = (compRes.data as Record<string, unknown>[]).map(mapRowToCompany);
+          localStorage.setItem(STORAGE_KEYS.COMPANIES, JSON.stringify(finalCompanies));
+        } else if (localCompanies.length > 0) {
+          await syncCompaniesToSupabase(localCompanies);
+        }
+      }
+
+      return { records: finalRecords, claims: finalClaims, companies: finalCompanies };
+    } catch (err) {
+      console.warn('Supabase insurance fetch failed, using local cache:', err);
+      return { records: localRecords, claims: localClaims, companies: localCompanies };
+    }
   },
 
   // OCR document parser simulator

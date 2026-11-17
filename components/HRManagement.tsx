@@ -15,7 +15,7 @@ import {
   List, ListOrdered, Image as ImageIcon, Link as LinkIcon, Type, Palette, Undo, Redo, RemoveFormatting, Paperclip, FileUp, File,
   Loader2, RefreshCw
 } from 'lucide-react';
-import { compressDocumentFile } from '../utils/imageCompression';
+import { compressDocumentFile, compressProfilePhoto } from '../utils/imageCompression';
 import { 
   cleanCitizenshipNo, 
   cleanMobileNo, 
@@ -23,8 +23,36 @@ import {
   isSameEmployeeName,
   deduplicateEmployees
 } from '../services/nameMatcher';
-import { normalizeBranchId, isBranchMatch, SUMIT_KUMAR_THAKUR_RECORD, OFFICIAL_MASTER_STAFF } from '../services/supabaseService';
+import { normalizeBranchId, isBranchMatch, SUMIT_KUMAR_THAKUR_RECORD, OFFICIAL_MASTER_STAFF, normalizeEmployeePayrollFields, getLocalSnapshot, isValidMediaUrl } from '../services/supabaseService';
 import { EmployeeDocumentsHub } from './EmployeeDocumentsHub';
+
+const SafeAvatarImg: React.FC<{
+  src?: string;
+  alt?: string;
+  className?: string;
+  fallback: React.ReactNode;
+}> = ({ src, alt = '', className = 'w-full h-full object-cover', fallback }) => {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
+  if (!isValidMediaUrl(src) || failed) {
+    return <>{fallback}</>;
+  }
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      loading="lazy"
+      decoding="async"
+      referrerPolicy="no-referrer"
+      className={className}
+      onError={() => setFailed(true)}
+    />
+  );
+};
 
 const calculateRetirementInfo = (dobBsStr?: string, joinedDateStr?: string) => {
   const parseBs = (str?: string) => {
@@ -195,20 +223,50 @@ const FISCAL_YEARS = getDynamicFiscalYears();
 const calculateDetailedPayroll = (emp: Employee, taxConfig: TaxConfig, selectedMonth?: string, overrideAdj?: any) => {
   const isP = emp.employmentType === 'Permanent';
   const monthsCount = emp.monthsActive ?? 12;
-  const basic = emp.basicSalary;
-  
-  const da = isP ? (basic * 0.20) : 0;
+  const basic = Number(emp.basicSalary) || 0;
+
+  const da = emp.daType === 'Amount'
+    ? (emp.dearnessAllowance ?? emp.daValue ?? 0)
+    : emp.daType === 'Percentage'
+      ? ((basic * (emp.daValue ?? 0)) / 100)
+      : emp.daType === 'None'
+        ? 0
+        : (emp.dearnessAllowance || 0);
   const grade = isP ? ((basic / 30) * (emp.gradeRate || 0)) : 0;
-  const ssf20 = isP ? (basic * 0.20) : 0;
-  const pf10 = isP ? (basic * 0.10) : 0;
-  const grat833 = isP ? (basic * 0.0833) : 0;
+
+  const hasSSF = Boolean(emp.hasSSF);
+  const hasPF = Boolean(emp.hasPF);
+  const hasGratuity = Boolean(emp.hasGratuity);
+
+  const ssfRateRaw = Number(emp.ssfContribution) || 0;
+  const ssf31 = hasSSF
+    ? (ssfRateRaw <= 0 ? basic * 0.31 : ssfRateRaw <= 100 ? basic * (ssfRateRaw / 100) : ssfRateRaw)
+    : 0;
+  const ssf20 = hasSSF
+    ? (ssfRateRaw <= 0 || Math.abs(ssfRateRaw - 31) < 0.001
+        ? basic * 0.20
+        : ssfRateRaw <= 100
+          ? basic * ((ssfRateRaw * 20) / 31 / 100)
+          : (ssfRateRaw * 20) / 31)
+    : 0;
+
+  const pfRateRaw = Number(emp.pfContribution) || 0;
+  const pf20_total = hasPF
+    ? (pfRateRaw <= 0 ? basic * 0.20 : pfRateRaw <= 100 ? basic * (pfRateRaw / 100) : pfRateRaw)
+    : 0;
+  const pf10 = hasPF ? pf20_total / 2 : 0;
+
+  const gratRateRaw = Number(emp.gratuity) || 0;
+  const grat833 = hasGratuity
+    ? (gratRateRaw <= 0 ? basic * 0.0833 : gratRateRaw <= 100 ? basic * (gratRateRaw / 100) : gratRateRaw)
+    : 0;
   const monthlyGross = basic + da + grade + ssf20 + pf10 + grat833;
 
-  const dashain = emp.dashainBonus ?? basic;
+  const dashain = emp.hasDashain ? (emp.dashainBonus || basic) : 0;
   const festival = emp.sanchitLeaveAmount ?? 0;
-  const bonus = emp.bonusYearly ?? 0;
-  const medical = isP ? (emp.medicalAllowance ?? basic) : 0;
-  const dress = (emp.hasDressAllowance || (emp.dressAllowance && emp.dressAllowance > 0)) ? (emp.dressAllowance || 0) : 0;
+  const bonus = emp.hasBonus === false ? 0 : ((emp.hasBonus || (emp.bonusYearly && emp.bonusYearly > 0)) ? (emp.bonusYearly || 0) : 0);
+  const medical = emp.hasMedical ? (emp.medicalAllowance || basic) : 0;
+  const dress = emp.hasDressAllowance === false ? 0 : ((emp.hasDressAllowance || (emp.dressAllowance && emp.dressAllowance > 0)) ? (emp.dressAllowance || 0) : 0);
   const totalLumpsum = dashain + festival + bonus + medical + dress;
 
   const annSalary = basic * monthsCount;
@@ -219,26 +277,24 @@ const calculateDetailedPayroll = (emp: Employee, taxConfig: TaxConfig, selectedM
   const annGrat833 = grat833 * monthsCount;
 
   // Base (unadjusted) calculation - assuming no bonus and no sanchit leave
-  const baseBonus = 0;
-  const baseFestival = 0;
   const baseTotalLumpsum = dashain + medical;
   const baseTotalAnnualIncome = annSalary + annDa + annGrade + annSsf20 + annPf10 + annGrat833 + baseTotalLumpsum;
 
-  const ssfFund31 = isP ? (basic * 0.31 * monthsCount) : 0;
-  const pfFund20 = isP ? (basic * 0.20 * monthsCount) : 0;
-  const gratFund833 = isP ? (basic * 0.0833 * monthsCount) : 0;
+  const ssfFund31 = ssf31 * monthsCount;
+  const pfFund20 = pf20_total * monthsCount;
+  const gratFund833 = grat833 * monthsCount;
   const totalContribution = ssfFund31 + pfFund20 + gratFund833;
 
   const baseOneThirdIncome = baseTotalAnnualIncome / 3;
-  const baseAllowableDed = isP ? Math.min(totalContribution, baseOneThirdIncome, taxConfig.retirementCap) : 0;
+  const baseAllowableDed = totalContribution > 0 ? Math.min(totalContribution, baseOneThirdIncome, taxConfig.retirementCap) : 0;
   const baseAdjustedTaxableIncome = baseTotalAnnualIncome - baseAllowableDed;
 
-  const lifeIns = Math.min(emp.lifeInsurance ?? 0, 40000);
-  const healthIns = Math.min(emp.healthInsurance ?? 0, 20000);
-  const buildingIns = Math.min(emp.buildingInsurance ?? 0, 5000);
-  const remoteAreaCategory = emp.remoteAreaCategory || 'None';
-  const remoteMap = { 'A': 50000, 'B': 40000, 'C': 30000, 'D': 20000, 'E': 10000, 'None': 0 };
-  const remoteReduct = remoteMap[remoteAreaCategory] || 0;
+  const lifeIns = emp.hasLifeInsurance === false ? 0 : Math.min(emp.lifeInsurance ?? 0, 40000);
+  const healthIns = emp.hasHealthInsurance === false ? 0 : Math.min(emp.healthInsurance ?? 0, 20000);
+  const buildingIns = emp.hasBuildingAllowance === false ? 0 : Math.min(emp.buildingInsurance ?? 0, 5000);
+  const remoteAreaCategory = emp.hasRemoteAllowance === false ? 'None' : (emp.remoteAreaCategory || 'None');
+  const remoteMap: Record<string, number> = { 'A': 50000, 'B': 40000, 'C': 30000, 'D': 20000, 'E': 10000, 'None': 0 };
+  const remoteReduct = emp.hasRemoteAllowance === false ? 0 : (remoteMap[remoteAreaCategory] || 0);
   const incapacitatedReduct = emp.isIncapacitated ? 100000 : 0;
   const totalReductions = lifeIns + healthIns + buildingIns + remoteReduct + incapacitatedReduct;
 
@@ -251,7 +307,7 @@ const calculateDetailedPayroll = (emp: Employee, taxConfig: TaxConfig, selectedM
   slabs.forEach((slab, index) => {
     if (baseRemainingIncome <= 0) return;
     let effectiveRate = slab.rate;
-    if (index === 0 && isP && effectiveRate === 1) effectiveRate = 0;
+    if (index === 0 && (isP || hasSSF) && effectiveRate === 1) effectiveRate = 0;
     const taxableInThisSlab = Math.min(baseRemainingIncome, slab.limit);
     const tax = taxableInThisSlab * (effectiveRate / 100);
     baseTotalRemunerationTax += tax;
@@ -266,7 +322,7 @@ const calculateDetailedPayroll = (emp: Employee, taxConfig: TaxConfig, selectedM
   // New (actual) calculation with Bonus & Festival included
   const totalAnnualIncome = annSalary + annDa + annGrade + annSsf20 + annPf10 + annGrat833 + totalLumpsum;
   const oneThirdIncome = totalAnnualIncome / 3;
-  const allowableDed = isP ? Math.min(totalContribution, oneThirdIncome, taxConfig.retirementCap) : 0;
+  const allowableDed = totalContribution > 0 ? Math.min(totalContribution, oneThirdIncome, taxConfig.retirementCap) : 0;
   const adjustedTaxableIncome = totalAnnualIncome - allowableDed;
   const finalTaxableIncome = Math.max(0, adjustedTaxableIncome - totalReductions);
 
@@ -277,7 +333,7 @@ const calculateDetailedPayroll = (emp: Employee, taxConfig: TaxConfig, selectedM
   slabs.forEach((slab, index) => {
     if (remainingIncome <= 0) return;
     let effectiveRate = slab.rate;
-    if (index === 0 && isP && effectiveRate === 1) effectiveRate = 0;
+    if (index === 0 && (isP || hasSSF) && effectiveRate === 1) effectiveRate = 0;
     const taxableInThisSlab = Math.min(remainingIncome, slab.limit);
     const tax = taxableInThisSlab * (effectiveRate / 100);
     totalRemunerationTax += tax;
@@ -293,8 +349,13 @@ const calculateDetailedPayroll = (emp: Employee, taxConfig: TaxConfig, selectedM
   const rawMonthlyTax = annualNetTax / 12;
 
   // Read saved adjustments
-  const savedAdjustmentsStr = typeof window !== 'undefined' ? localStorage.getItem('ZEN_TAX_ADJUSTMENTS_V1') : null;
-  const adjustments = savedAdjustmentsStr ? JSON.parse(savedAdjustmentsStr) : {};
+  let adjustments: Record<string, any> = {};
+  try {
+    const savedAdjustmentsStr = typeof window !== 'undefined' ? localStorage.getItem('ZEN_TAX_ADJUSTMENTS_V1') : null;
+    adjustments = savedAdjustmentsStr ? JSON.parse(savedAdjustmentsStr) : {};
+  } catch {
+    adjustments = {};
+  }
   const adj = overrideAdj !== undefined ? overrideAdj : adjustments[emp.id];
 
   let monthlyTax = rawMonthlyTax;
@@ -337,15 +398,15 @@ const calculateDetailedPayroll = (emp: Employee, taxConfig: TaxConfig, selectedM
     }
   }
 
-  const totalDeduction = (isP ? (basic * 0.31 + basic * 0.20 + basic * 0.0833) : 0) + monthlyTax;
+  const totalDeduction = ssf31 + pf20_total + grat833 + monthlyTax;
 
   return {
     employee: emp,
     monthly: { 
       basic, da, grade, ssf20, pf10, grat833, 
       monthlyGross, totalDeduction,
-      ssf31: isP ? basic * 0.31 : 0,
-      pf20_total: isP ? basic * 0.20 : 0
+      ssf31,
+      pf20_total
     },
     lumpsum: { dashain, festival, bonus, medical, dress, totalLumpsum },
     annual: { annSalary, annDa, annGrade, annSsf20, annPf10, annGrat833, totalAnnualIncome },
@@ -396,20 +457,20 @@ const buildPaySlipEmailContent = ({
   const dressAllowance = slip.dressAllowance ?? 0;
   const extraIncome = dashainBonus + bonusAmount + sanchitLeaveAmount + medicalAllowance + dressAllowance;
 
-  const ssfEmployee = slip.ssfEmployee ?? (slip as any).ssfEmp ?? (basicSalary * 0.20);
-  const pfEmployee = slip.pfEmployee ?? (slip as any).pfEmp ?? (basicSalary * 0.10);
-  const gratuity = slip.gratuity ?? (basicSalary * 0.0833);
+  const ssfEmployee = slip.ssfEmployee ?? (slip as any).ssfEmp ?? (emp?.hasSSF ? basicSalary * 0.20 : 0);
+  const pfEmployee = slip.pfEmployee ?? (slip as any).pfEmp ?? (emp?.hasPF ? basicSalary * 0.10 : 0);
+  const gratuity = slip.gratuity ?? (emp?.hasGratuity ? basicSalary * 0.0833 : 0);
 
   // Check if there is any remaining unitemized difference in totalIncome
   const subTotalCalculated = basicSalary + allowance + gradeAmt + extraIncome + ssfEmployee + pfEmployee + gratuity;
   const totalIncome = slip.totalIncome ?? (slip as any).grossTotal ?? subTotalCalculated;
   const unitemizedDiff = Math.max(0, totalIncome - subTotalCalculated);
 
-  const ssfEmployer = slip.ssfEmployer ?? (basicSalary * 0.31);
-  const pfEmployer = slip.pfEmployer ?? (basicSalary * 0.20);
-  const gratuityEmployer = slip.gratuity ?? (basicSalary * 0.0833);
+  const ssfEmployer = slip.ssfEmployer ?? (emp?.hasSSF ? basicSalary * 0.31 : 0);
+  const pfEmployer = slip.pfEmployer ?? (emp?.hasPF ? basicSalary * 0.20 : 0);
+  const gratuityEmployer = slip.gratuity ?? (emp?.hasGratuity ? basicSalary * 0.0833 : 0);
   const tax = slip.tax ?? 0;
-  const totalDeductions = (slip.ssfEmployer ? (slip.ssfEmployer + (slip.pfEmployer || 0) + (slip.gratuity || 0) + tax) : (ssfEmployer + pfEmployer + gratuityEmployer + tax));
+  const totalDeductions = (slip.ssfEmployer !== undefined ? (slip.ssfEmployer + (slip.pfEmployer || 0) + (slip.gratuity || 0) + tax) : (ssfEmployer + pfEmployer + gratuityEmployer + tax));
   const netSalary = slip.netSalary ?? (slip as any).netPay ?? (totalIncome - totalDeductions);
 
   const hasExtra = (extraIncome > 0) || (unitemizedDiff > 0.01);
@@ -680,16 +741,23 @@ const HRManagement: React.FC = () => {
   const handleEmployeeSubTabChange = (sub: EmployeeSubTab) => {
     navigate(`/hr/employees/${sub}`);
   };
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
-  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
-  const [payrollRecords, setPayrollRecords] = useState<PayrollRecord[]>([]);
-  const [complaints, setComplaints] = useState<Complaint[]>([]);
-  const [settings, setSettings] = useState<SystemSettings | null>(null);
-  const [branches, setBranches] = useState<Branch[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>(() => {
+    const snap = getLocalSnapshot<Employee[]>('employees', []);
+    return deduplicateEmployees((snap || []).map(normalizeEmployeePayrollFields));
+  });
+  const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>(() => getLocalSnapshot<LeaveType[]>('leave_types', []));
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>(() => getLocalSnapshot<LeaveRequest[]>('leave_requests', []));
+  const [payrollRecords, setPayrollRecords] = useState<PayrollRecord[]>(() => getLocalSnapshot<PayrollRecord[]>('payroll_records', []));
+  const [complaints, setComplaints] = useState<Complaint[]>(() => getLocalSnapshot<Complaint[]>('complaints', []));
+  const [settings, setSettings] = useState<SystemSettings | null>(() => getLocalSnapshot<SystemSettings | null>('settings', null));
+  const [branches, setBranches] = useState<Branch[]>(() => getLocalSnapshot<Branch[]>('branches', []));
   const [taxConfig, setTaxConfig] = useState<TaxConfig>(() => {
-    const saved = localStorage.getItem('ZEN_TAX_POLICY_V1');
-    return saved ? JSON.parse(saved) : DEFAULT_TAX_CONFIG;
+    try {
+      const saved = localStorage.getItem('ZEN_TAX_POLICY_V1');
+      return saved ? JSON.parse(saved) : DEFAULT_TAX_CONFIG;
+    } catch {
+      return DEFAULT_TAX_CONFIG;
+    }
   });
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [viewingEmployee, setViewingEmployee] = useState<Employee | null>(null);
@@ -747,59 +815,48 @@ const HRManagement: React.FC = () => {
 
   const loadData = useCallback(async () => {
     try {
-      const [emps, lTypes, lReqs, pRecs, comps, sets, brs, savedTaxCfg] = await Promise.all([
-        storageService.getEmployees(),
-        storageService.getLeaveTypes(),
-        storageService.getLeaveRequests(),
-        storageService.getPayrollRecords(),
-        storageService.getComplaints(),
-        storageService.getSettings(),
-        storageService.getBranches(),
-        storageService.getTaxConfig(),
-        storageService.getTaxAdjustments()
-      ]);
+      // Load employees & payroll records immediately without waiting for slowest secondary tables
+      const empsPromise = storageService.getEmployees().then(emps => {
+        const uniqueEmps: Employee[] = deduplicateEmployees(emps || []).map(normalizeEmployeePayrollFields);
+        const hasSumit = uniqueEmps.some(e =>
+          e.id === SUMIT_KUMAR_THAKUR_RECORD.id ||
+          (e.fullName && e.fullName.toUpperCase().includes('SUMIT KUMAR THAKUR')) ||
+          (e.employeeCode && (e.employeeCode === '6' || e.employeeCode === 'EMP-006' || e.employeeCode === 'EMP-005'))
+        );
+        if (!hasSumit) {
+          uniqueEmps.push(normalizeEmployeePayrollFields({ ...SUMIT_KUMAR_THAKUR_RECORD }));
+        }
+        if (emps && emps.length > uniqueEmps.length) {
+          try {
+            localStorage.setItem('saccos_db_employees', JSON.stringify(uniqueEmps));
+          } catch (_) {}
+        }
+        setEmployees(uniqueEmps);
+        return uniqueEmps;
+      });
 
-      // Robust employee deduplication by ID, name, code, and citizenship
-      const uniqueEmps: Employee[] = deduplicateEmployees(emps || []);
+      const payrollPromise = storageService.getPayrollRecords();
 
-      // Guarantee Record #6: SUMIT KUMAR THAKUR is ALWAYS present in state
-      const hasSumit = uniqueEmps.some(e => 
-        e.id === SUMIT_KUMAR_THAKUR_RECORD.id ||
-        (e.fullName && e.fullName.toUpperCase().includes('SUMIT KUMAR THAKUR')) ||
-        (e.employeeCode && (e.employeeCode === '6' || e.employeeCode === 'EMP-006' || e.employeeCode === 'EMP-005'))
-      );
-      if (!hasSumit) {
-        uniqueEmps.push({ ...SUMIT_KUMAR_THAKUR_RECORD });
-      }
+      // Update secondary HR collections incrementally as each resolves
+      void storageService.getLeaveTypes().then(setLeaveTypes).catch(() => {});
+      void storageService.getLeaveRequests().then(setLeaveRequests).catch(() => {});
+      void storageService.getComplaints().then(setComplaints).catch(() => {});
+      void storageService.getSettings().then(setSettings).catch(() => {});
+      void storageService.getBranches().then(setBranches).catch(() => {});
+      void storageService.getTaxConfig().then(cfg => { if (cfg) setTaxConfig(cfg); }).catch(() => {});
+      void storageService.getTaxAdjustments().catch(() => {});
 
-      // If duplicate records were found and cleaned, persist cleaned list to storage
-      if (emps && emps.length > uniqueEmps.length) {
-        try {
-          localStorage.setItem('saccos_db_employees', JSON.stringify(uniqueEmps));
-        } catch (_) {}
-      }
-
-      setEmployees(uniqueEmps);
-      setLeaveTypes(lTypes);
-      setLeaveRequests(lReqs);
-
-      // Clean up orphaned payroll records whose employee does not exist in active staff
+      const [uniqueEmps, pRecs] = await Promise.all([empsPromise, payrollPromise]);
       const validEmpIdSet = new Set(uniqueEmps.map(e => e.id));
       const cleanPayrollRecords = (pRecs || []).filter(pr => pr && pr.employeeId && validEmpIdSet.has(pr.employeeId));
       if (pRecs && pRecs.length > cleanPayrollRecords.length) {
-        // Automatically purge orphaned records from storage/database
         storageService.savePayrollRecords(cleanPayrollRecords).catch(() => {});
       }
       setPayrollRecords(cleanPayrollRecords);
-
-      setComplaints(comps);
-      setSettings(sets);
-      setBranches(brs);
-      if (savedTaxCfg) setTaxConfig(savedTaxCfg);
     } catch (error) {
       console.error("Error loading HR data:", error);
     }
-  }, [branch, user]);
+  }, [branch?.id, user?.id]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -1328,9 +1385,9 @@ const PayrollModule = ({ employees, payrollRecords, reload, taxConfig, onUpdateP
       basicSalary: data.monthly.basic, 
       gradeAmt: data.monthly.grade, 
       allowance: data.monthly.da,
-      ssfEmployee: data.monthly.basic * 0.20,
-      pfEmployee: data.monthly.basic * 0.10,
-      gratuity: data.monthly.basic * 0.0833,
+      ssfEmployee: data.monthly.ssf20,
+      pfEmployee: data.monthly.pf10,
+      gratuity: data.monthly.grat833,
       dashainBonus: dashainAmt,
       bonusAmount: bonusAmt,
       sanchitLeaveAmount: sanchitAmt,
@@ -1338,8 +1395,8 @@ const PayrollModule = ({ employees, payrollRecords, reload, taxConfig, onUpdateP
       dressAllowance: dressAmt,
       showDashain, showBonus, showSanchit, showMedical, showDress,
       totalIncome: data.monthly.monthlyGross + extraIncome, 
-      ssfEmployer: data.monthly.basic * 0.31,
-      pfEmployer: data.monthly.basic * 0.20,
+      ssfEmployer: data.monthly.ssf31,
+      pfEmployer: data.monthly.pf20_total,
       tax: data.tax.monthlyTax, 
       netSalary: (data.monthly.monthlyGross + extraIncome) - data.monthly.totalDeduction,
       generatedDate: Date.now(), status: 'Paid', preparedBy: 'System Registry', approvedBy: '',
@@ -1380,9 +1437,9 @@ const PayrollModule = ({ employees, payrollRecords, reload, taxConfig, onUpdateP
             basicSalary: r2(data.monthly.basic), 
             gradeAmt: r2(data.monthly.grade), 
             allowance: r2(data.monthly.da),
-            ssfEmployee: r2(data.monthly.basic * 0.20),
-            pfEmployee: r2(data.monthly.basic * 0.10),
-            gratuity: r2(data.monthly.basic * 0.0833),
+            ssfEmployee: r2(data.monthly.ssf20),
+            pfEmployee: r2(data.monthly.pf10),
+            gratuity: r2(data.monthly.grat833),
             dashainBonus: dashainAmt,
             bonusAmount: bonusAmt,
             sanchitLeaveAmount: sanchitAmt,
@@ -1394,8 +1451,8 @@ const PayrollModule = ({ employees, payrollRecords, reload, taxConfig, onUpdateP
             showMedical,
             showDress,
             totalIncome: gross, 
-            ssfEmployer: r2(data.monthly.basic * 0.31),
-            pfEmployer: r2(data.monthly.basic * 0.20),
+            ssfEmployer: r2(data.monthly.ssf31),
+            pfEmployer: r2(data.monthly.pf20_total),
             tax: r2(data.tax.monthlyTax), 
             netSalary: r2(gross - ded),
             generatedDate: Date.now(),
@@ -1824,13 +1881,13 @@ const SalarySheetView = ({
     const formatted = val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return toNepaliDigits(formatted);
   };
-  const [settings, setSettings] = useState<any>(null);
+  const [settings, setSettings] = useState<any>(() => getLocalSnapshot<any>('settings', null) || {});
   const [sortField, setSortField] = useState<'fullName' | 'employeeCode' | null>('employeeCode');
 
   useEffect(() => {
     const fetchSettings = async () => {
       const s = await storageService.getSettings();
-      setSettings(s);
+      if (s) setSettings(s);
     };
     fetchSettings();
   }, []);
@@ -1849,8 +1906,6 @@ const SalarySheetView = ({
       return valA.localeCompare(valB, undefined, { numeric: true, sensitivity: 'base' });
     });
   }, [employees, taxConfig, sortField, selectedMonth]);
-
-  if (!settings) return null;
 
   return (
     <div className="flex flex-col p-4 bg-white animate-in fade-in flex-1 overflow-auto scrollbar-hide text-black font-normal print:pl-8 print:pr-4 print:py-6">
@@ -2194,12 +2249,12 @@ const ArchivedSalarySheetView = ({ records = [], year, month, employees = [] }: 
     const val = n ?? 0;
     return val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
-  const [settings, setSettings] = useState<any>(null);
+  const [settings, setSettings] = useState<any>(() => getLocalSnapshot<any>('settings', null) || {});
 
   useEffect(() => {
     const fetchSettings = async () => {
       const s = await storageService.getSettings();
-      setSettings(s);
+      if (s) setSettings(s);
     };
     fetchSettings();
   }, []);
@@ -2222,8 +2277,6 @@ const ArchivedSalarySheetView = ({ records = [], year, month, employees = [] }: 
       return codeA.localeCompare(codeB, undefined, { numeric: true, sensitivity: 'base' });
     });
   }, [validRecords, employees]);
-
-  if (!settings) return null;
 
   const hasDashain = sortedRecords.some((r: any) => r.showDashain || (r.dashainBonus && r.dashainBonus > 0));
   const hasBonus = sortedRecords.some((r: any) => r.showBonus || (r.bonusAmount && r.bonusAmount > 0));
@@ -3031,11 +3084,11 @@ const EmployeeList = ({
                   {/* Employee Name */}
                   <td className="py-2.5 px-4 flex items-center space-x-3 text-slate-900">
                     <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 border border-slate-200">
-                      {e.photoUrl ? (
-                        <img src={e.photoUrl} alt={e.fullName} className="w-full h-full object-cover" />
-                      ) : (
-                        <UserIcon size={14} className="text-slate-400" />
-                      )}
+                      <SafeAvatarImg
+                        src={e.photoUrl}
+                        alt={e.fullName}
+                        fallback={<UserIcon size={14} className="text-slate-400" />}
+                      />
                     </div>
                     <div>
                       <span className="font-bold uppercase tracking-tight text-xs text-slate-900 block leading-tight">
@@ -3144,7 +3197,7 @@ const BulkEmployeeModal = ({
 }) => {
   const isDayEnded = useDayEndLock(branchId);
   const [draftList, setDraftList] = useState<Employee[]>(() => {
-    const list = employees.length > 0 ? JSON.parse(JSON.stringify(employees)) : [];
+    const list = employees.length > 0 ? JSON.parse(JSON.stringify(employees)).map((e: Employee) => normalizeEmployeePayrollFields(e)) : [];
     return list.sort((a: Employee, b: Employee) => {
       const numA = parseInt(a.employeeCode || '0', 10);
       const numB = parseInt(b.employeeCode || '0', 10);
@@ -3218,7 +3271,7 @@ const BulkEmployeeModal = ({
         panNo: '',
         joinedDate: new Date().toISOString().split('T')[0],
         basicSalary,
-        daType: 'None',
+        daType: dearnessAllowance > 0 ? 'Amount' : 'None',
         daValue: dearnessAllowance,
         dearnessAllowance,
         gradeRate,
@@ -3349,17 +3402,27 @@ const BulkEmployeeModal = ({
       const updatedItem = { ...next[index], [field]: value };
 
       if (field === 'bonusYearly') {
-        updatedItem.dashainBonus = Number(value) || 0;
         updatedItem.hasBonus = (Number(value) || 0) > 0;
       }
       if (field === 'sanchitLeaveAmount') {
         updatedItem.festivalBonus = Number(value) || 0;
       }
+      if (field === 'basicSalary') {
+        const newBasic = Number(value) || 0;
+        updatedItem.gradeRateAmount = Math.round(((newBasic / 30) * (Number(updatedItem.gradeRate) || 0)) * 100) / 100;
+        if (updatedItem.daType === 'Percentage') {
+          updatedItem.dearnessAllowance = Math.round(((newBasic * (Number(updatedItem.daValue) || 0)) / 100) * 100) / 100;
+        }
+      }
       if (field === 'gradeRate') {
-        updatedItem.gradeRateAmount = Number(value) || 0;
+        const basic = Number(updatedItem.basicSalary) || 0;
+        updatedItem.gradeRateAmount = Math.round(((basic / 30) * (Number(value) || 0)) * 100) / 100;
       }
       if (field === 'dearnessAllowance') {
-        updatedItem.daValue = Number(value) || 0;
+        const amt = Number(value) || 0;
+        updatedItem.dearnessAllowance = amt;
+        updatedItem.daType = amt > 0 ? 'Amount' : 'None';
+        updatedItem.daValue = amt;
       }
       if (field === 'dressAllowance') {
         updatedItem.hasDressAllowance = (Number(value) || 0) > 0;
@@ -3389,23 +3452,31 @@ const BulkEmployeeModal = ({
     try {
       for (let i = 0; i < draftList.length; i++) {
         const emp = draftList[i];
-        const formatted: Employee = {
+        const basicSal = Number(emp.basicSalary) || 0;
+        const gRate = Number(emp.gradeRate) || 0;
+        const daAmt = Number(emp.dearnessAllowance) || 0;
+        const keepPct = emp.daType === 'Percentage' && (Number(emp.daValue) || 0) > 0 && (Number(emp.daValue) || 0) <= 100;
+        const dressAmt = Number(emp.dressAllowance) || 0;
+
+        const formatted: Employee = normalizeEmployeePayrollFields({
           ...emp,
           fullName: emp.fullName.toUpperCase().trim(),
           designation: (emp.designation || 'STAFF').toUpperCase().trim(),
           department: (emp.department || 'GENERAL').toUpperCase().trim(),
-          basicSalary: Number(emp.basicSalary) || 0,
-          gradeRate: Number(emp.gradeRate) || 0,
-          gradeRateAmount: Number(emp.gradeRate) || 0,
-          dearnessAllowance: Number(emp.dearnessAllowance) || 0,
-          daValue: Number(emp.dearnessAllowance) || 0,
+          basicSalary: basicSal,
+          gradeRate: gRate,
+          gradeRateAmount: Math.round(((basicSal / 30) * gRate) * 100) / 100,
+          daType: keepPct ? 'Percentage' : (daAmt > 0 ? 'Amount' : 'None'),
+          daValue: keepPct ? Number(emp.daValue) : daAmt,
+          dearnessAllowance: keepPct ? Math.round(((basicSal * Number(emp.daValue)) / 100) * 100) / 100 : daAmt,
           bonusYearly: Number(emp.bonusYearly) || 0,
-          dashainBonus: Number(emp.dashainBonus ?? emp.bonusYearly) || 0,
+          hasBonus: (Number(emp.bonusYearly) || 0) > 0 ? true : Boolean(emp.hasBonus),
+          dashainBonus: emp.hasDashain ? basicSal : (Number(emp.dashainBonus) || 0),
           sanchitLeaveAmount: Number(emp.sanchitLeaveAmount) || 0,
           medicalAllowance: Number(emp.medicalAllowance) || 0,
-          dressAllowance: Number(emp.dressAllowance) || 0,
-          hasDressAllowance: (Number(emp.dressAllowance) || 0) > 0,
-        };
+          dressAllowance: dressAmt,
+          hasDressAllowance: dressAmt > 0 ? true : Boolean(emp.hasDressAllowance),
+        });
         setSaveStatus(`Saving: ${i + 1} / ${draftList.length} - ${formatted.fullName}`);
         await storageService.saveEmployee(formatted);
       }
@@ -4075,12 +4146,12 @@ const LeaveModule = ({ employees, leaveTypes, leaveRequests, onReload, branchId 
                                {/* Created By (Employee information) */}
                                <td className="p-3 text-left border-r border-slate-150">
                                   <div className="flex items-center space-x-2.5 text-left">
-                                     <div className="w-7 h-7 rounded-full bg-slate-100 overflow-hidden border border-slate-200 shrink-0">
-                                        {emp?.photoUrl ? (
-                                          <img src={emp.photoUrl} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                                        ) : (
-                                          <UserIcon size={12} className="m-1.5 text-slate-300" />
-                                        )}
+                                     <div className="w-7 h-7 rounded-full bg-slate-100 overflow-hidden border border-slate-200 shrink-0 flex items-center justify-center">
+                                        <SafeAvatarImg
+                                          src={emp?.photoUrl}
+                                          alt={emp?.fullName || 'Staff'}
+                                          fallback={<UserIcon size={12} className="text-slate-300" />}
+                                        />
                                      </div>
                                      <div>
                                         <div className="text-slate-950 uppercase text-[9.5px] leading-tight font-black mb-0.5">
@@ -4733,8 +4804,16 @@ const ComplaintsModule = ({ employees, complaints, onReload, branchId }: { emplo
                       </h4>
                       
                       <div className="flex items-center space-x-3 mt-auto pt-6 border-t border-slate-50">
-                         <div className="w-8 h-8 rounded-full bg-slate-100 overflow-hidden border border-slate-200">
-                            {c.isConfidential ? <ShieldAlert size={14} className="m-2 text-rose-300"/> : (emp?.photoUrl ? <img src={emp.photoUrl} className="w-full h-full object-cover" /> : <UserIcon size={14} className="m-2 text-slate-300"/>)}
+                         <div className="w-8 h-8 rounded-full bg-slate-100 overflow-hidden border border-slate-200 flex items-center justify-center">
+                            {c.isConfidential ? (
+                              <ShieldAlert size={14} className="text-rose-300"/>
+                            ) : (
+                              <SafeAvatarImg
+                                src={emp?.photoUrl}
+                                alt={emp?.fullName || 'Staff'}
+                                fallback={<UserIcon size={14} className="text-slate-300"/>}
+                              />
+                            )}
                          </div>
                          <div>
                             <div className="text-slate-950 uppercase text-[10px] leading-tight mb-0.5">{c.isConfidential ? 'CONFIDENTIAL IDENTITY' : (emp?.fullName || 'UNKNOWN')}</div>
@@ -5041,11 +5120,11 @@ const ViewEmployeeModal = ({
           {/* Employee Hero Profile Box */}
           <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex flex-col md:flex-row items-center md:items-start gap-4 mb-6">
             <div className="w-28 h-28 rounded-2xl overflow-hidden bg-slate-100 shadow-none shrink-0 flex items-center justify-center">
-              {employee.photoUrl ? (
-                <img src={employee.photoUrl} className="w-full h-full object-cover" alt={employee.fullName} />
-              ) : (
-                <UserIcon size={54} className="text-slate-300" />
-              )}
+              <SafeAvatarImg
+                src={employee.photoUrl}
+                alt={employee.fullName}
+                fallback={<UserIcon size={54} className="text-slate-300" />}
+              />
             </div>
 
             <div className="flex-1 w-full space-y-2">
@@ -5434,15 +5513,20 @@ const ViewEmployeeModal = ({
 };
 
 const EditEmployeeModal = ({ employee, onClose, onSave, branches, isSuper, isSaving }: { employee: Employee, onClose: () => void, onSave: (e: Employee) => void, branches: any[], isSuper: boolean, isSaving?: boolean }) => {
-  const [data, setData] = useState<Employee>(() => ({
-    ...employee,
-    gender: employee.gender || 'Male',
-    maritalStatus: employee.maritalStatus || 'Single',
-    employmentType: employee.employmentType || 'Permanent',
-    status: employee.status || 'Active',
-    branchId: employee.branchId || 'main',
-    daType: employee.daType || 'None'
-  }));
+  const [data, setData] = useState<Employee>(() =>
+    normalizeEmployeePayrollFields({
+      ...employee,
+      gender: employee.gender || 'Male',
+      maritalStatus: employee.maritalStatus || 'Single',
+      employmentType: employee.employmentType || 'Permanent',
+      status: employee.status || 'Active',
+      branchId: employee.branchId || 'main',
+      daType: employee.daType || 'None',
+      ssfContribution: employee.hasSSF && !(Number(employee.ssfContribution) > 0) ? 31 : employee.ssfContribution,
+      pfContribution: employee.hasPF && !(Number(employee.pfContribution) > 0) ? 20 : employee.pfContribution,
+      gratuity: employee.hasGratuity && !(Number(employee.gratuity) > 0) ? 8.33 : employee.gratuity
+    })
+  );
   const [activeModalTab, setActiveModalTab] = useState<'basic' | 'kyc'>('basic');
   const [previewDoc, setPreviewDoc] = useState<{ title: string; url: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -5463,6 +5547,7 @@ const EditEmployeeModal = ({ employee, onClose, onSave, branches, isSuper, isSav
     const pf = data.hasPF ? (data.pfContribution || 0) : 0;
     const grat = data.hasGratuity ? (data.gratuity || 0) : 0;
     const bonus = data.hasBonus ? (data.bonusYearly || 0) : 0;
+    const dress = data.hasDressAllowance ? (data.dressAllowance || 0) : 0;
     const sanchitAmount = (data.basicSalary / 30) * (data.sanchitLeaveDays || 0);
 
     if (
@@ -5474,7 +5559,8 @@ const EditEmployeeModal = ({ employee, onClose, onSave, branches, isSuper, isSav
       pf !== data.pfContribution ||
       grat !== data.gratuity ||
       sanchitAmount !== data.sanchitLeaveAmount ||
-      bonus !== data.bonusYearly
+      bonus !== data.bonusYearly ||
+      dress !== (data.dressAllowance || 0)
     ) {
       setData(prev => ({
         ...prev,
@@ -5486,7 +5572,8 @@ const EditEmployeeModal = ({ employee, onClose, onSave, branches, isSuper, isSav
         pfContribution: pf,
         gratuity: grat,
         sanchitLeaveAmount: sanchitAmount,
-        bonusYearly: bonus
+        bonusYearly: bonus,
+        dressAllowance: dress
       }));
     }
   }, [
@@ -5500,6 +5587,7 @@ const EditEmployeeModal = ({ employee, onClose, onSave, branches, isSuper, isSav
     data.hasPF, 
     data.hasGratuity,
     data.hasBonus,
+    data.hasDressAllowance,
     data.sanchitLeaveDays,
     data.dearnessAllowance,
     data.gradeRateAmount,
@@ -5509,7 +5597,8 @@ const EditEmployeeModal = ({ employee, onClose, onSave, branches, isSuper, isSav
     data.pfContribution,
     data.gratuity,
     data.sanchitLeaveAmount,
-    data.bonusYearly
+    data.bonusYearly,
+    data.dressAllowance
   ]);
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -5517,7 +5606,7 @@ const EditEmployeeModal = ({ employee, onClose, onSave, branches, isSuper, isSav
     const file = e.target.files?.[0];
     if (file) {
       try {
-        const val = await compressDocumentFile(file);
+        const val = await compressProfilePhoto(file);
         setData(prev => ({ ...prev, photoUrl: val }));
       } catch (err) {
         console.error("Failed to process photo:", err);
@@ -5617,17 +5706,18 @@ const EditEmployeeModal = ({ employee, onClose, onSave, branches, isSuper, isSav
                      <div className="relative group">
                         <div 
                           onClick={() => {
-                            if (data.photoUrl) setPreviewDoc({ title: `${data.fullName || 'Employee'} - Photo`, url: data.photoUrl });
+                            if (isValidMediaUrl(data.photoUrl)) setPreviewDoc({ title: `${data.fullName || 'Employee'} - Photo`, url: data.photoUrl! });
                           }}
-                          className={`w-28 h-28 rounded-2xl bg-emerald-100/60 border-2 border-emerald-300 overflow-hidden shadow-inner flex items-center justify-center transition-all ${data.photoUrl ? 'cursor-pointer hover:border-emerald-500 hover:shadow-md' : ''}`}
-                          title={data.photoUrl ? "Click to view photo (हेर्न क्लिक गर्नुहोस्)" : "Upload photo"}
+                          className={`w-28 h-28 rounded-2xl bg-emerald-100/60 border-2 border-emerald-300 overflow-hidden shadow-inner flex items-center justify-center transition-all ${isValidMediaUrl(data.photoUrl) ? 'cursor-pointer hover:border-emerald-500 hover:shadow-md' : ''}`}
+                          title={isValidMediaUrl(data.photoUrl) ? "Click to view photo (हेर्न क्लिक गर्नुहोस्)" : "Upload photo"}
                         >
-                           {data.photoUrl ? (
-                             <img src={data.photoUrl} className="w-full h-full object-cover transition-transform group-hover:scale-105" alt="Employee Photo" />
-                           ) : (
-                             <UserIcon size={42} className="text-emerald-400" />
-                           )}
-                           {data.photoUrl && (
+                           <SafeAvatarImg
+                             src={data.photoUrl}
+                             alt="Employee Photo"
+                             className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                             fallback={<UserIcon size={42} className="text-emerald-400" />}
+                           />
+                           {isValidMediaUrl(data.photoUrl) && (
                              <div className="absolute inset-0 bg-emerald-950/30 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity rounded-2xl">
                                <Eye size={22} className="text-white drop-shadow" />
                              </div>
@@ -5641,12 +5731,12 @@ const EditEmployeeModal = ({ employee, onClose, onSave, branches, isSuper, isSav
                           className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-emerald-600 hover:bg-emerald-700 text-white p-1 px-3 rounded-xl shadow-md border border-emerald-400 font-black text-[9px] uppercase tracking-wider transition-all active:scale-90 flex items-center space-x-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                            <Camera size={11} />
-                           <span className="text-[8px] font-black tracking-wider uppercase">{data.photoUrl ? 'Change' : 'Photo'}</span>
+                           <span className="text-[8px] font-black tracking-wider uppercase">{isValidMediaUrl(data.photoUrl) ? 'Change' : 'Photo'}</span>
                         </button>
                         <input ref={fileInputRef} type="file" accept="image/*" disabled={isDayEnded} onChange={handlePhotoUpload} className="hidden" />
                      </div>
 
-                     {data.photoUrl && (
+                     {isValidMediaUrl(data.photoUrl) && (
                        <div className="flex items-center space-x-2 pt-0.5">
                          <button
                            type="button"
@@ -5796,7 +5886,26 @@ const EditEmployeeModal = ({ employee, onClose, onSave, branches, isSuper, isSav
                             <div className="space-y-0.5">
                                <label className="text-[9px] font-black uppercase text-slate-500 ml-1">D.A. (महङ्गी भत्ता)</label>
                                <div className="flex items-center space-x-1.5">
-                                  <select value={data.daType || 'None'} onChange={e => setData({...data, daType: e.target.value as any})} className="h-8 bg-white border border-slate-300 rounded-lg px-2 font-bold text-xs outline-none focus:border-emerald-600 text-black">
+                                  <select
+                                    value={data.daType || 'None'}
+                                    onChange={e => {
+                                      const nextType = e.target.value as 'None' | 'Percentage' | 'Amount';
+                                      const basic = Number(data.basicSalary) || 0;
+                                      const curVal = Number(data.daValue) || 0;
+                                      let nextVal = curVal;
+                                      if (nextType === 'None') {
+                                        nextVal = 0;
+                                      } else if (nextType === 'Percentage' && data.daType === 'Amount') {
+                                        nextVal = basic > 0 ? Math.min(100, Number(((curVal / basic) * 100).toFixed(2))) : 0;
+                                      } else if (nextType === 'Amount' && data.daType === 'Percentage') {
+                                        nextVal = Math.round((basic * Math.min(curVal, 100)) / 100);
+                                      } else if (nextType === 'Percentage' && curVal > 100) {
+                                        nextVal = basic > 0 ? Math.min(100, Number(((curVal / basic) * 100).toFixed(2))) : 20;
+                                      }
+                                      setData({ ...data, daType: nextType, daValue: nextVal });
+                                    }}
+                                    className="h-8 bg-white border border-slate-300 rounded-lg px-2 font-bold text-xs outline-none focus:border-emerald-600 text-black"
+                                  >
                                      <option value="None">None</option>
                                      <option value="Percentage">%</option>
                                      <option value="Amount">Amt</option>
@@ -5837,7 +5946,20 @@ const EditEmployeeModal = ({ employee, onClose, onSave, branches, isSuper, isSav
                                         <label className="text-[9px] font-black uppercase text-slate-600">{item.label}</label>
                                         <button 
                                           type="button"
-                                          onClick={() => setData({...data, [item.key]: !data[item.key as keyof Employee]})}
+                                          onClick={() => {
+                                            const nextVal = !data[item.key as keyof Employee];
+                                            const updates: Partial<Employee> = { [item.key]: nextVal };
+                                            if (nextVal) {
+                                              if (item.key === 'hasSSF' && !(Number(data.ssfContribution) > 0)) {
+                                                updates.ssfContribution = 31;
+                                              } else if (item.key === 'hasPF' && !(Number(data.pfContribution) > 0)) {
+                                                updates.pfContribution = 20;
+                                              } else if (item.key === 'hasGratuity' && !(Number(data.gratuity) > 0)) {
+                                                updates.gratuity = 8.33;
+                                              }
+                                            }
+                                            setData({ ...data, ...updates });
+                                          }}
                                           className={`w-7 h-3.5 rounded-full relative transition-all ${data[item.key as keyof Employee] ? 'bg-emerald-600' : 'bg-slate-300'}`}
                                         >
                                            <div className={`absolute top-0.5 w-2.5 h-2.5 bg-white rounded-full transition-all ${data[item.key as keyof Employee] ? 'right-0.5' : 'left-0.5'}`} />
@@ -5846,7 +5968,8 @@ const EditEmployeeModal = ({ employee, onClose, onSave, branches, isSuper, isSav
                                      {data[item.key as keyof Employee] && (
                                        <input 
                                          type="number" 
-                                         value={(data[item.amountKey as keyof Employee] as number) || 0} 
+                                         step="any"
+                                         value={(data[item.amountKey as keyof Employee] as number) ?? 0} 
                                          onChange={e => setData({...data, [item.amountKey]: Number(e.target.value)})} 
                                          className="w-full h-7 bg-white border border-slate-200 rounded-lg px-1.5 font-bold text-[10px] outline-none focus:border-emerald-500 text-black"
                                          disabled={item.key === 'hasDashain' || item.key === 'hasMedical'}
@@ -6146,7 +6269,21 @@ const EditEmployeeModal = ({ employee, onClose, onSave, branches, isSuper, isSav
                   <div className="space-y-0.5">
                     <label className="text-[9px] font-black uppercase text-slate-600 ml-1">D.A. Allowance</label>
                     <div className="flex items-center space-x-1">
-                      <select value={data.daType || 'None'} onChange={e => setData({...data, daType: e.target.value as any})} className="h-8 bg-white border border-slate-300 rounded-lg px-1.5 font-bold text-xs outline-none text-black">
+                      <select
+                        value={data.daType || 'None'}
+                        onChange={e => {
+                          const nextType = e.target.value as 'None' | 'Percentage' | 'Amount';
+                          const basic = Number(data.basicSalary) || 0;
+                          const curVal = Number(data.daValue) || 0;
+                          let nextVal = curVal;
+                          if (nextType === 'None') nextVal = 0;
+                          else if (nextType === 'Percentage' && data.daType === 'Amount') nextVal = basic > 0 ? Math.min(100, Number(((curVal / basic) * 100).toFixed(2))) : 0;
+                          else if (nextType === 'Amount' && data.daType === 'Percentage') nextVal = Math.round((basic * Math.min(curVal, 100)) / 100);
+                          else if (nextType === 'Percentage' && curVal > 100) nextVal = basic > 0 ? Math.min(100, Number(((curVal / basic) * 100).toFixed(2))) : 20;
+                          setData({ ...data, daType: nextType, daValue: nextVal });
+                        }}
+                        className="h-8 bg-white border border-slate-300 rounded-lg px-1.5 font-bold text-xs outline-none text-black"
+                      >
                         <option value="None">None</option>
                         <option value="Percentage">%</option>
                         <option value="Amount">Amt</option>
@@ -6598,14 +6735,14 @@ const EmployeePaySlipList = ({
 
     const extraIncome = dashainBonus + bonusAmount + sanchitLeaveAmount + medicalAllowance + dressAllowance;
 
-    const ssfEmployee = matchedRec?.ssfEmployee ?? (basicSalary * 0.20);
-    const pfEmployee = matchedRec?.pfEmployee ?? (basicSalary * 0.10);
-    const gratuity = matchedRec?.gratuity ?? (basicSalary * 0.0833);
+    const ssfEmployee = matchedRec?.ssfEmployee ?? (calcData?.monthly?.ssf20 ?? (e.hasSSF ? basicSalary * 0.20 : 0));
+    const pfEmployee = matchedRec?.pfEmployee ?? (calcData?.monthly?.pf10 ?? (e.hasPF ? basicSalary * 0.10 : 0));
+    const gratuity = matchedRec?.gratuity ?? (calcData?.monthly?.grat833 ?? (e.hasGratuity ? basicSalary * 0.0833 : 0));
 
     const totalIncome = matchedRec?.totalIncome ?? matchedRec?.grossTotal ?? ((calcData?.monthly?.monthlyGross || (basicSalary + allowance + gradeAmt + ssfEmployee + pfEmployee + gratuity)) + extraIncome);
 
-    const ssfEmployer = matchedRec?.ssfEmployer ?? (basicSalary * 0.31);
-    const pfEmployer = matchedRec?.pfEmployer ?? (basicSalary * 0.20);
+    const ssfEmployer = matchedRec?.ssfEmployer ?? (calcData?.monthly?.ssf31 ?? (e.hasSSF ? basicSalary * 0.31 : 0));
+    const pfEmployer = matchedRec?.pfEmployer ?? (calcData?.monthly?.pf20_total ?? (e.hasPF ? basicSalary * 0.20 : 0));
     const tax = matchedRec?.tax ?? (calcData?.tax?.monthlyTax || 0);
     const totalDeduction = ssfEmployer + pfEmployer + gratuity + tax;
     const netSalary = matchedRec?.netSalary ?? matchedRec?.netPay ?? (totalIncome - totalDeduction);
@@ -6927,7 +7064,11 @@ const EmployeePaySlipList = ({
                     <td className="py-1 px-3 text-left border-r border-slate-100 font-black">
                       <div className="flex items-center space-x-2.5">
                         <div className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 border border-slate-200">
-                          {e.photoUrl ? <img src={e.photoUrl} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : <UserIcon size={11}/>}
+                          <SafeAvatarImg
+                            src={e.photoUrl}
+                            alt={e.fullName}
+                            fallback={<UserIcon size={11}/>}
+                          />
                         </div>
                         <span className="font-bold uppercase tracking-tighter text-[10px]">{e.fullName}</span>
                       </div>
@@ -8254,9 +8395,9 @@ const SalarySlipPrintView = ({
   const dressAllowance = slip.dressAllowance || 0;
   const extraIncome = dashainBonus + bonusAmount + sanchitLeaveAmount + medicalAllowance + dressAllowance;
 
-  const ssfEmployee = slip.ssfEmployee ?? (basicSalary * 0.20);
-  const pfEmployee = slip.pfEmployee ?? (basicSalary * 0.10);
-  const gratuity = slip.gratuity ?? (basicSalary * 0.0833);
+  const ssfEmployee = slip.ssfEmployee ?? (employee?.hasSSF ? basicSalary * 0.20 : 0);
+  const pfEmployee = slip.pfEmployee ?? (employee?.hasPF ? basicSalary * 0.10 : 0);
+  const gratuity = slip.gratuity ?? (employee?.hasGratuity ? basicSalary * 0.0833 : 0);
 
   const subTotalCalculated = basicSalary + allowance + gradeAmt + extraIncome + ssfEmployee + pfEmployee + gratuity;
   const totalIncome = slip.totalIncome ?? subTotalCalculated;
@@ -8266,11 +8407,11 @@ const SalarySlipPrintView = ({
   const contribSecNum = hasExtra ? '३' : '२';
   const dedSecNum = hasExtra ? '४' : '३';
 
-  const ssfEmployer = slip.ssfEmployer ?? (basicSalary * 0.31);
-  const pfEmployer = slip.pfEmployer ?? (basicSalary * 0.20);
-  const gratuityEmployer = slip.gratuity ?? (basicSalary * 0.0833);
+  const ssfEmployer = slip.ssfEmployer ?? (employee?.hasSSF ? basicSalary * 0.31 : 0);
+  const pfEmployer = slip.pfEmployer ?? (employee?.hasPF ? basicSalary * 0.20 : 0);
+  const gratuityEmployer = slip.gratuity ?? (employee?.hasGratuity ? basicSalary * 0.0833 : 0);
   const tax = slip.tax ?? 0;
-  const totalDeductions = (slip.ssfEmployer ? (slip.ssfEmployer + (slip.pfEmployer || 0) + (slip.gratuity || 0) + tax) : (ssfEmployer + pfEmployer + gratuityEmployer + tax));
+  const totalDeductions = (slip.ssfEmployer !== undefined ? (slip.ssfEmployer + (slip.pfEmployer || 0) + (slip.gratuity || 0) + tax) : (ssfEmployer + pfEmployer + gratuityEmployer + tax));
   const netSalary = slip.netSalary ?? (totalIncome - totalDeductions);
 
   return (
@@ -8646,11 +8787,12 @@ const LumpsumTaxAdjustmentModal = ({ employee, taxConfig, branchId, onClose, onS
 
         <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-100 flex items-center space-x-3 shrink-0">
            <div className="w-10 h-10 bg-slate-200 rounded-full flex items-center justify-center text-slate-700 text-sm font-black uppercase overflow-hidden">
-              {employee.photoUrl ? (
-                 <img src={employee.photoUrl} className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
-              ) : (
-                 employee.fullName.charAt(0)
-              )}
+              <SafeAvatarImg
+                src={employee.photoUrl}
+                alt={employee.fullName}
+                className="w-full h-full object-cover rounded-full"
+                fallback={employee.fullName.charAt(0)}
+              />
            </div>
            <div>
               <div className="text-slate-900 font-extrabold text-xs">{employee.fullName}</div>
@@ -8983,7 +9125,7 @@ const EmployeeEmailCenter = ({
       const { emp, email: recipientEmail } = targetRecipients[i];
       const payrollData = calculateDetailedPayroll(emp, taxConfig, selectedMonth);
 
-      const extraEmpIncome = (emp.dashainBonus || 0) + (emp.bonusAmount || 0) + (emp.sanchitLeaveAmount || 0) + (emp.medicalAllowance || 0) + (emp.dressAllowance || 0);
+      const extraEmpIncome = payrollData.lumpsum?.totalLumpsum || 0;
       const grossEmpSalary = (payrollData.monthly.monthlyGross || 0) + extraEmpIncome;
       const netEmpSalary = grossEmpSalary - (payrollData.monthly.totalDeduction || 0);
 

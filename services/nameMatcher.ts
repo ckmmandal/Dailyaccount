@@ -198,10 +198,20 @@ export const deduplicateEmployees = <T extends Record<string, any>>(rawList: T[]
       result.push({ ...emp });
     } else {
       const existing = result[existingIdx];
+      const empHasDbTs = Boolean(emp.updatedAt || (emp as { updated_at?: string }).updated_at);
+      const isCleanPhoto = (u: unknown): u is string => {
+        if (typeof u !== 'string') return false;
+        const s = u.trim();
+        if (!s || s === '[TRUNCATED_BASE64_FOR_CACHE]') return false;
+        return s.startsWith('data:image/') || s.startsWith('http://') || s.startsWith('https://') || s.startsWith('/') || s.startsWith('blob:');
+      };
+      const existingHasPhoto = isCleanPhoto(existing.photoUrl);
+      const empHasPhoto = isCleanPhoto(emp.photoUrl);
+      const resolvedPhoto = existingHasPhoto ? existing.photoUrl : (empHasPhoto ? emp.photoUrl : '');
       const merged: T = {
         ...existing,
         ...emp,
-        photoUrl: existing.photoUrl || emp.photoUrl || '',
+        photoUrl: resolvedPhoto,
         branchId: (existing.branchId && existing.branchId !== 'main' ? existing.branchId : emp.branchId) || existing.branchId || 'main',
         designation: (existing.designation && existing.designation !== 'STAFF' && existing.designation !== 'GENERAL' 
           ? existing.designation 
@@ -209,7 +219,7 @@ export const deduplicateEmployees = <T extends Record<string, any>>(rawList: T[]
         department: (existing.department && existing.department !== 'GENERAL' 
           ? existing.department 
           : emp.department) || existing.department || emp.department,
-        id: existing.photoUrl ? existing.id : (emp.photoUrl ? emp.id : existing.id),
+        id: (existingHasPhoto && !empHasPhoto) ? existing.id : (empHasPhoto || empHasDbTs ? (emp.id || existing.id) : (existing.id || emp.id)),
         employeeCode: existing.employeeCode || emp.employeeCode
       };
       result[existingIdx] = merged;

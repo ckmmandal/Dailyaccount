@@ -9,6 +9,7 @@ import {
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { Employee, SystemSettings, Branch } from '../types';
+import { isValidMediaUrl } from '../services/supabaseService';
 import { RatauliOfficialEmblem } from './RatauliLogo';
 import { CooperativeHeaderBrand } from './CooperativeHeaderBrand';
 import { OfficialSecurityQrCode } from './OfficialSecurityQrCode';
@@ -1017,8 +1018,8 @@ export const EmployeeDocumentsHub: React.FC<Props> = ({
                     {/* Employee Photo & Identification */}
                     <div className="flex flex-col items-center pt-2 px-4">
                       <div className="w-24 h-28 rounded-xl border-2 border-amber-400 p-0.5 bg-gradient-to-b from-amber-100 to-emerald-50 shadow-md overflow-hidden mb-1.5">
-                        {selectedEmployee?.photoUrl ? (
-                          <img src={selectedEmployee.photoUrl} alt={selectedEmployee.fullName} className="w-full h-full object-cover rounded-lg" />
+                        {isValidMediaUrl(selectedEmployee?.photoUrl) ? (
+                          <img src={selectedEmployee!.photoUrl} alt={selectedEmployee!.fullName} className="w-full h-full object-cover rounded-lg" referrerPolicy="no-referrer" />
                         ) : (
                           <div className="w-full h-full bg-slate-100 flex items-center justify-center text-slate-400">
                             <User size={36} />

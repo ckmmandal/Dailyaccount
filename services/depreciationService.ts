@@ -490,14 +490,348 @@ const writeLocalStore = (data: DepreciationStoreData): void => {
   }
 };
 
-const syncCloudStore = async (data: DepreciationStoreData): Promise<void> => {
+const mapCategoryToRow = (c: AssetCategory) => ({
+  id: c.id,
+  code: c.code,
+  name: c.name,
+  default_method: c.defaultMethod,
+  rate: Number(c.rate) || 0,
+  tax_block: c.taxBlock,
+  tax_rate: Number(c.taxRate) || 0,
+  useful_life_years: Math.max(1, Math.round(Number(c.usefulLifeYears) || 5)),
+  salvage_percent: Number(c.salvagePercent) || 0,
+  gl_asset_account: c.glAssetAccount || '',
+  gl_expense_account: c.glExpenseAccount || '',
+  gl_accumulated_account: c.glAccumulatedAccount || '',
+  status: c.status || 'Active',
+  updated_at: new Date().toISOString()
+});
+
+const mapRowToCategory = (r: Record<string, unknown>): AssetCategory => ({
+  id: String(r.id),
+  code: String(r.code || ''),
+  name: String(r.name || ''),
+  defaultMethod: (r.default_method === 'SLM' ? 'SLM' : 'WDV'),
+  rate: Number(r.rate) || 0,
+  taxBlock: (r.tax_block as AssetCategory['taxBlock']) || 'Block B',
+  taxRate: Number(r.tax_rate) || 0,
+  usefulLifeYears: Number(r.useful_life_years) || 5,
+  salvagePercent: Number(r.salvage_percent) || 0,
+  glAssetAccount: String(r.gl_asset_account || ''),
+  glExpenseAccount: String(r.gl_expense_account || ''),
+  glAccumulatedAccount: String(r.gl_accumulated_account || ''),
+  status: (r.status === 'Inactive' ? 'Inactive' : 'Active')
+});
+
+const mapAssetToRow = (a: FixedAsset) => ({
+  id: a.id,
+  asset_code: a.assetCode,
+  name: a.name,
+  category_id: a.categoryId,
+  category_name: a.categoryName || '',
+  branch_id: a.branchId || 'main',
+  branch_name: a.branchName || '',
+  purchase_date: a.purchaseDate || '',
+  purchase_date_bs: a.purchaseDateBs || '',
+  put_to_use_date: a.putToUseDate || null,
+  put_to_use_date_bs: a.putToUseDateBs || null,
+  purchase_value: Number(a.purchaseValue) || 0,
+  salvage_value: Number(a.salvageValue) || 0,
+  useful_life_years: Math.max(1, Math.round(Number(a.usefulLifeYears) || 5)),
+  method: a.method || 'WDV',
+  depreciation_rate: Number(a.depreciationRate) || 0,
+  tax_block: a.taxBlock || 'Block B',
+  tax_rate: Number(a.taxRate) || 0,
+  vendor_name: a.vendorName || null,
+  invoice_no: a.invoiceNo || null,
+  serial_no: a.serialNo || null,
+  location: a.location || null,
+  custodian: a.custodian || null,
+  remarks: a.remarks || null,
+  status: a.status || 'Active',
+  accumulated_depreciation: Number(a.accumulatedDepreciation) || 0,
+  net_book_value: Number(a.netBookValue) || 0,
+  disposal_date: a.disposalDate || null,
+  disposal_date_bs: a.disposalDateBs || null,
+  disposal_type: a.disposalType || null,
+  sale_proceeds: Number(a.saleProceeds) || 0,
+  disposal_gain_loss: Number(a.disposalGainLoss) || 0,
+  disposal_remarks: a.disposalRemarks || null,
+  documents: Array.isArray(a.documents) ? a.documents : [],
+  created_by: a.createdBy || null,
+  created_at: a.createdAt || new Date().toISOString(),
+  updated_at: a.updatedAt || new Date().toISOString()
+});
+
+const mapRowToAsset = (r: Record<string, unknown>): FixedAsset => ({
+  id: String(r.id),
+  assetCode: String(r.asset_code || ''),
+  name: String(r.name || ''),
+  categoryId: String(r.category_id || ''),
+  categoryName: String(r.category_name || ''),
+  branchId: String(r.branch_id || 'main'),
+  branchName: String(r.branch_name || ''),
+  purchaseDate: String(r.purchase_date || ''),
+  purchaseDateBs: String(r.purchase_date_bs || ''),
+  putToUseDate: r.put_to_use_date ? String(r.put_to_use_date) : undefined,
+  putToUseDateBs: r.put_to_use_date_bs ? String(r.put_to_use_date_bs) : undefined,
+  purchaseValue: Number(r.purchase_value) || 0,
+  salvageValue: Number(r.salvage_value) || 0,
+  usefulLifeYears: Number(r.useful_life_years) || 5,
+  method: (r.method === 'SLM' ? 'SLM' : 'WDV'),
+  depreciationRate: Number(r.depreciation_rate) || 0,
+  taxBlock: (r.tax_block as FixedAsset['taxBlock']) || 'Block B',
+  taxRate: Number(r.tax_rate) || 0,
+  vendorName: r.vendor_name ? String(r.vendor_name) : undefined,
+  invoiceNo: r.invoice_no ? String(r.invoice_no) : undefined,
+  serialNo: r.serial_no ? String(r.serial_no) : undefined,
+  location: r.location ? String(r.location) : undefined,
+  custodian: r.custodian ? String(r.custodian) : undefined,
+  remarks: r.remarks ? String(r.remarks) : undefined,
+  status: (r.status as AssetStatus) || 'Active',
+  accumulatedDepreciation: Number(r.accumulated_depreciation) || 0,
+  netBookValue: Number(r.net_book_value) || 0,
+  disposalDate: r.disposal_date ? String(r.disposal_date) : undefined,
+  disposalDateBs: r.disposal_date_bs ? String(r.disposal_date_bs) : undefined,
+  disposalType: r.disposal_type ? (r.disposal_type as DisposalType) : undefined,
+  saleProceeds: r.sale_proceeds !== undefined && r.sale_proceeds !== null ? Number(r.sale_proceeds) : undefined,
+  disposalGainLoss: r.disposal_gain_loss !== undefined && r.disposal_gain_loss !== null ? Number(r.disposal_gain_loss) : undefined,
+  disposalRemarks: r.disposal_remarks ? String(r.disposal_remarks) : undefined,
+  documents: Array.isArray(r.documents) ? (r.documents as AssetDocument[]) : [],
+  createdBy: r.created_by ? String(r.created_by) : undefined,
+  createdAt: String(r.created_at || ''),
+  updatedAt: String(r.updated_at || '')
+});
+
+const mapTransferToRow = (t: AssetTransfer) => ({
+  id: t.id,
+  asset_id: t.assetId,
+  asset_code: t.assetCode,
+  asset_name: t.assetName,
+  from_branch_id: t.fromBranchId,
+  from_branch_name: t.fromBranchName || '',
+  to_branch_id: t.toBranchId,
+  to_branch_name: t.toBranchName || '',
+  transfer_date: t.transferDate,
+  transfer_date_bs: t.transferDateBs,
+  transferred_by: t.transferredBy,
+  remarks: t.remarks || null,
+  created_at: t.createdAt
+});
+
+const mapRowToTransfer = (r: Record<string, unknown>): AssetTransfer => ({
+  id: String(r.id),
+  assetId: String(r.asset_id || ''),
+  assetCode: String(r.asset_code || ''),
+  assetName: String(r.asset_name || ''),
+  fromBranchId: String(r.from_branch_id || ''),
+  fromBranchName: String(r.from_branch_name || ''),
+  toBranchId: String(r.to_branch_id || ''),
+  toBranchName: String(r.to_branch_name || ''),
+  transferDate: String(r.transfer_date || ''),
+  transferDateBs: String(r.transfer_date_bs || ''),
+  transferredBy: String(r.transferred_by || ''),
+  remarks: r.remarks ? String(r.remarks) : undefined,
+  createdAt: String(r.created_at || '')
+});
+
+const mapEntryToRow = (e: DepreciationEntry) => ({
+  id: e.id,
+  asset_id: e.assetId,
+  asset_code: e.assetCode,
+  asset_name: e.assetName,
+  category_id: e.categoryId,
+  category_name: e.categoryName || '',
+  branch_id: e.branchId || 'main',
+  branch_name: e.branchName || '',
+  financial_year: e.financialYear,
+  period_type: e.periodType,
+  period_label: e.periodLabel,
+  method: e.method,
+  rate: Number(e.rate) || 0,
+  opening_value: Number(e.openingValue) || 0,
+  depreciation_amount: Number(e.depreciationAmount) || 0,
+  tax_depreciation_amount: Number(e.taxDepreciationAmount) || 0,
+  accumulated_depreciation: Number(e.accumulatedDepreciation) || 0,
+  closing_net_book_value: Number(e.closingNetBookValue) || 0,
+  voucher_id: e.voucherId || null,
+  calculated_at: e.calculatedAt,
+  calculated_by: e.calculatedBy
+});
+
+const mapRowToEntry = (r: Record<string, unknown>): DepreciationEntry => ({
+  id: String(r.id),
+  assetId: String(r.asset_id || ''),
+  assetCode: String(r.asset_code || ''),
+  assetName: String(r.asset_name || ''),
+  categoryId: String(r.category_id || ''),
+  categoryName: String(r.category_name || ''),
+  branchId: String(r.branch_id || 'main'),
+  branchName: String(r.branch_name || ''),
+  financialYear: String(r.financial_year || ''),
+  periodType: (r.period_type === 'Monthly' ? 'Monthly' : 'Yearly'),
+  periodLabel: String(r.period_label || ''),
+  method: (r.method === 'SLM' ? 'SLM' : 'WDV'),
+  rate: Number(r.rate) || 0,
+  openingValue: Number(r.opening_value) || 0,
+  depreciationAmount: Number(r.depreciation_amount) || 0,
+  taxDepreciationAmount: Number(r.tax_depreciation_amount) || 0,
+  accumulatedDepreciation: Number(r.accumulated_depreciation) || 0,
+  closingNetBookValue: Number(r.closing_net_book_value) || 0,
+  voucherId: r.voucher_id ? String(r.voucher_id) : undefined,
+  calculatedAt: String(r.calculated_at || ''),
+  calculatedBy: String(r.calculated_by || '')
+});
+
+const mapVoucherToRow = (v: DepreciationJournalVoucher) => ({
+  id: v.id,
+  voucher_no: v.voucherNo,
+  voucher_date: v.voucherDate,
+  voucher_date_bs: v.voucherDateBs,
+  financial_year: v.financialYear,
+  branch_id: v.branchId || 'main',
+  branch_name: v.branchName || '',
+  period_label: v.periodLabel,
+  voucher_type: v.voucherType,
+  debit_account: v.debitAccount,
+  debit_amount: Number(v.debitAmount) || 0,
+  credit_account: v.creditAccount,
+  credit_amount: Number(v.creditAmount) || 0,
+  narration: v.narration || '',
+  asset_count: Math.max(1, Math.round(Number(v.assetCount) || 1)),
+  status: v.status || 'Posted',
+  lines: Array.isArray(v.lines) ? v.lines : [],
+  created_by: v.createdBy || '',
+  created_at: v.createdAt || new Date().toISOString()
+});
+
+const mapRowToVoucher = (r: Record<string, unknown>): DepreciationJournalVoucher => ({
+  id: String(r.id),
+  voucherNo: String(r.voucher_no || ''),
+  voucherDate: String(r.voucher_date || ''),
+  voucherDateBs: String(r.voucher_date_bs || ''),
+  financialYear: String(r.financial_year || ''),
+  branchId: String(r.branch_id || 'main'),
+  branchName: String(r.branch_name || ''),
+  periodLabel: String(r.period_label || ''),
+  voucherType: (r.voucher_type as DepreciationJournalVoucher['voucherType']) || 'Depreciation',
+  debitAccount: String(r.debit_account || ''),
+  debitAmount: Number(r.debit_amount) || 0,
+  creditAccount: String(r.credit_account || ''),
+  creditAmount: Number(r.credit_amount) || 0,
+  narration: String(r.narration || ''),
+  assetCount: Number(r.asset_count) || 1,
+  status: (r.status === 'Draft' ? 'Draft' : 'Posted'),
+  lines: Array.isArray(r.lines) ? (r.lines as JournalVoucherLine[]) : [],
+  createdBy: String(r.created_by || ''),
+  createdAt: String(r.created_at || '')
+});
+
+const mapFyToRow = (f: DepreciationFinancialYear) => ({
+  id: f.id,
+  label: f.label,
+  start_date_bs: f.startDateBs,
+  end_date_bs: f.endDateBs,
+  is_current: Boolean(f.isCurrent),
+  status: f.status || 'Open'
+});
+
+const mapRowToFy = (r: Record<string, unknown>): DepreciationFinancialYear => ({
+  id: String(r.id),
+  label: String(r.label || ''),
+  startDateBs: String(r.start_date_bs || ''),
+  endDateBs: String(r.end_date_bs || ''),
+  isCurrent: Boolean(r.is_current),
+  status: (r.status === 'Closed' ? 'Closed' : 'Open')
+});
+
+const mapSettingsToRow = (s: DepreciationSettings) => ({
+  id: 'default',
+  default_method: s.defaultMethod,
+  default_useful_life_years: Math.max(1, Math.round(Number(s.defaultUsefulLifeYears) || 5)),
+  default_salvage_percent: Number(s.defaultSalvagePercent) || 5,
+  rounding_rule: s.roundingRule,
+  auto_post_journal_voucher: Boolean(s.autoPostJournalVoucher),
+  tax_comparison_enabled: Boolean(s.taxComparisonEnabled),
+  default_gl_asset_account: s.defaultGlAssetAccount,
+  default_gl_expense_account: s.defaultGlExpenseAccount,
+  default_gl_accumulated_account: s.defaultGlAccumulatedAccount,
+  current_financial_year: s.currentFinancialYear,
+  updated_at: new Date().toISOString()
+});
+
+const mapRowToSettings = (r: Record<string, unknown>): Partial<DepreciationSettings> => ({
+  defaultMethod: (r.default_method === 'SLM' ? 'SLM' : 'WDV'),
+  defaultUsefulLifeYears: Number(r.default_useful_life_years) || 5,
+  defaultSalvagePercent: Number(r.default_salvage_percent) || 5,
+  roundingRule: (r.rounding_rule as DepreciationSettings['roundingRule']) || 'Nearest',
+  autoPostJournalVoucher: r.auto_post_journal_voucher !== undefined ? Boolean(r.auto_post_journal_voucher) : true,
+  taxComparisonEnabled: r.tax_comparison_enabled !== undefined ? Boolean(r.tax_comparison_enabled) : true,
+  defaultGlAssetAccount: String(r.default_gl_asset_account || DEFAULT_SETTINGS.defaultGlAssetAccount),
+  defaultGlExpenseAccount: String(r.default_gl_expense_account || DEFAULT_SETTINGS.defaultGlExpenseAccount),
+  defaultGlAccumulatedAccount: String(r.default_gl_accumulated_account || DEFAULT_SETTINGS.defaultGlAccumulatedAccount),
+  currentFinancialYear: String(r.current_financial_year || DEFAULT_SETTINGS.currentFinancialYear)
+});
+
+const syncCloudStore = async (
+  data: DepreciationStoreData,
+  deletions?: { deletedAssetId?: string; deletedCategoryId?: string }
+): Promise<void> => {
   writeLocalStore(data);
   if (!supabase) return;
+
   try {
-    await supabase.from('daily_data').upsert({
-      key: CLOUD_KEY,
-      data,
-      updated_at: new Date().toISOString()
+    const ops: Array<{ label: string; promise: PromiseLike<{ error: { message: string } | null }> }> = [
+      {
+        label: 'daily_data',
+        promise: supabase.from('daily_data').upsert(
+          {
+            id: CLOUD_KEY,
+            key: CLOUD_KEY,
+            data,
+            updated_at: new Date().toISOString()
+          },
+          { onConflict: 'id' }
+        )
+      }
+    ];
+
+    if (data.categories.length > 0) {
+      ops.push({ label: 'asset_categories', promise: supabase.from('asset_categories').upsert(data.categories.map(mapCategoryToRow), { onConflict: 'id' }) });
+    }
+    if (data.assets.length > 0) {
+      ops.push({ label: 'fixed_assets', promise: supabase.from('fixed_assets').upsert(data.assets.map(mapAssetToRow), { onConflict: 'id' }) });
+    }
+    if (data.transfers.length > 0) {
+      ops.push({ label: 'asset_transfers', promise: supabase.from('asset_transfers').upsert(data.transfers.map(mapTransferToRow), { onConflict: 'id' }) });
+    }
+    if (data.entries.length > 0) {
+      ops.push({ label: 'depreciation_entries', promise: supabase.from('depreciation_entries').upsert(data.entries.map(mapEntryToRow), { onConflict: 'id' }) });
+    }
+    if (data.vouchers.length > 0) {
+      ops.push({ label: 'depreciation_vouchers', promise: supabase.from('depreciation_vouchers').upsert(data.vouchers.map(mapVoucherToRow), { onConflict: 'id' }) });
+    }
+    if (data.financialYears.length > 0) {
+      ops.push({ label: 'depreciation_financial_years', promise: supabase.from('depreciation_financial_years').upsert(data.financialYears.map(mapFyToRow), { onConflict: 'id' }) });
+    }
+    ops.push({ label: 'depreciation_settings', promise: supabase.from('depreciation_settings').upsert(mapSettingsToRow(data.settings), { onConflict: 'id' }) });
+
+    if (deletions?.deletedAssetId) {
+      ops.push({ label: 'delete_entries', promise: supabase.from('depreciation_entries').delete().eq('asset_id', deletions.deletedAssetId) });
+      ops.push({ label: 'delete_transfers', promise: supabase.from('asset_transfers').delete().eq('asset_id', deletions.deletedAssetId) });
+      ops.push({ label: 'delete_asset', promise: supabase.from('fixed_assets').delete().eq('id', deletions.deletedAssetId) });
+    }
+    if (deletions?.deletedCategoryId) {
+      ops.push({ label: 'delete_category', promise: supabase.from('asset_categories').delete().eq('id', deletions.deletedCategoryId) });
+    }
+
+    const results = await Promise.allSettled(ops.map(o => o.promise));
+    results.forEach((res, idx) => {
+      if (res.status === 'fulfilled' && res.value?.error) {
+        console.warn(`Supabase depreciation sync warning [${ops[idx].label}]:`, res.value.error.message);
+      } else if (res.status === 'rejected') {
+        console.warn(`Supabase depreciation sync rejected [${ops[idx].label}]:`, res.reason);
+      }
     });
   } catch (err) {
     console.warn('Depreciation cloud sync failed (using local persistence):', err);
@@ -509,25 +843,74 @@ export const depreciationService = {
     const local = readLocalStore();
     if (supabase) {
       try {
-        const { data, error } = await supabase
-          .from('daily_data')
-          .select('data')
-          .eq('key', CLOUD_KEY)
-          .maybeSingle();
-        if (!error && data?.data) {
-          const remote = data.data as Partial<DepreciationStoreData>;
-          const merged: DepreciationStoreData = {
-            categories: Array.isArray(remote.categories) && remote.categories.length > 0 ? remote.categories : (local?.categories || [...DEFAULT_CATEGORIES]),
-            assets: Array.isArray(remote.assets) ? remote.assets : (local?.assets || []),
-            transfers: Array.isArray(remote.transfers) ? remote.transfers : (local?.transfers || []),
-            entries: Array.isArray(remote.entries) ? remote.entries : (local?.entries || []),
-            vouchers: Array.isArray(remote.vouchers) ? remote.vouchers : (local?.vouchers || []),
-            financialYears: Array.isArray(remote.financialYears) && remote.financialYears.length > 0 ? remote.financialYears : (local?.financialYears || [...DEFAULT_FINANCIAL_YEARS]),
-            settings: { ...DEFAULT_SETTINGS, ...(local?.settings || {}), ...(remote.settings || {}) }
-          };
-          writeLocalStore(merged);
-          return merged;
+        const [
+          catRes,
+          assetRes,
+          trRes,
+          entryRes,
+          vouchRes,
+          fyRes,
+          setRes,
+          dailyRes
+        ] = await Promise.all([
+          supabase.from('asset_categories').select('*'),
+          supabase.from('fixed_assets').select('*').order('created_at', { ascending: false }),
+          supabase.from('asset_transfers').select('*').order('created_at', { ascending: false }),
+          supabase.from('depreciation_entries').select('*').order('calculated_at', { ascending: false }),
+          supabase.from('depreciation_vouchers').select('*').order('created_at', { ascending: false }),
+          supabase.from('depreciation_financial_years').select('*'),
+          supabase.from('depreciation_settings').select('*').eq('id', 'default').maybeSingle(),
+          supabase.from('daily_data').select('data').or(`id.eq.${CLOUD_KEY},key.eq.${CLOUD_KEY}`).limit(1).maybeSingle()
+        ]);
+
+        const remoteDaily = (!dailyRes.error && dailyRes.data?.data) ? (dailyRes.data.data as Partial<DepreciationStoreData>) : undefined;
+
+        const hasNormCats = !catRes.error && Array.isArray(catRes.data) && catRes.data.length > 0;
+        const hasNormAssets = !assetRes.error && Array.isArray(assetRes.data) && assetRes.data.length > 0;
+        const hasNormTransfers = !trRes.error && Array.isArray(trRes.data) && trRes.data.length > 0;
+        const hasNormEntries = !entryRes.error && Array.isArray(entryRes.data) && entryRes.data.length > 0;
+        const hasNormVouchers = !vouchRes.error && Array.isArray(vouchRes.data) && vouchRes.data.length > 0;
+        const hasNormFys = !fyRes.error && Array.isArray(fyRes.data) && fyRes.data.length > 0;
+        const hasNormSettings = !setRes.error && Boolean(setRes.data);
+
+        const merged: DepreciationStoreData = {
+          categories: hasNormCats
+            ? (catRes.data as Record<string, unknown>[]).map(mapRowToCategory)
+            : (Array.isArray(remoteDaily?.categories) && remoteDaily.categories.length > 0
+                ? remoteDaily.categories
+                : (local?.categories || [...DEFAULT_CATEGORIES])),
+          assets: hasNormAssets
+            ? (assetRes.data as Record<string, unknown>[]).map(mapRowToAsset)
+            : (Array.isArray(remoteDaily?.assets) ? remoteDaily.assets : (local?.assets || [])),
+          transfers: hasNormTransfers
+            ? (trRes.data as Record<string, unknown>[]).map(mapRowToTransfer)
+            : (Array.isArray(remoteDaily?.transfers) ? remoteDaily.transfers : (local?.transfers || [])),
+          entries: hasNormEntries
+            ? (entryRes.data as Record<string, unknown>[]).map(mapRowToEntry)
+            : (Array.isArray(remoteDaily?.entries) ? remoteDaily.entries : (local?.entries || [])),
+          vouchers: hasNormVouchers
+            ? (vouchRes.data as Record<string, unknown>[]).map(mapRowToVoucher)
+            : (Array.isArray(remoteDaily?.vouchers) ? remoteDaily.vouchers : (local?.vouchers || [])),
+          financialYears: hasNormFys
+            ? (fyRes.data as Record<string, unknown>[]).map(mapRowToFy)
+            : (Array.isArray(remoteDaily?.financialYears) && remoteDaily.financialYears.length > 0
+                ? remoteDaily.financialYears
+                : (local?.financialYears || [...DEFAULT_FINANCIAL_YEARS])),
+          settings: {
+            ...DEFAULT_SETTINGS,
+            ...(local?.settings || {}),
+            ...(remoteDaily?.settings || {}),
+            ...(hasNormSettings ? mapRowToSettings(setRes.data as Record<string, unknown>) : {})
+          }
+        };
+
+        // If local/daily_data had assets that haven't been pushed to normalized tables yet, backfill silently
+        if (!hasNormAssets && merged.assets.length > 0) {
+          void syncCloudStore(merged);
         }
+
+        writeLocalStore(merged);
+        return merged;
       } catch {
         // Fallback to local store
       }
@@ -627,7 +1010,7 @@ export const depreciationService = {
     store.assets = store.assets.filter(a => a.id !== assetId);
     store.entries = store.entries.filter(e => e.assetId !== assetId);
     store.transfers = store.transfers.filter(t => t.assetId !== assetId);
-    await syncCloudStore(store);
+    await syncCloudStore(store, { deletedAssetId: assetId });
     if (target) {
       await storageService.saveLog(actorName, 'ASSET_DELETED', `Deleted fixed asset ${target.assetCode} (${target.name})`, target.branchId);
     }
@@ -1017,7 +1400,7 @@ export const depreciationService = {
       throw new Error('Cannot delete a category that has registered fixed assets.');
     }
     store.categories = store.categories.filter(c => c.id !== categoryId);
-    await syncCloudStore(store);
+    await syncCloudStore(store, { deletedCategoryId: categoryId });
     await storageService.saveLog(actorName, 'ASSET_CATEGORY_DELETED', `Deleted asset category ${categoryId}`);
     return store;
   },

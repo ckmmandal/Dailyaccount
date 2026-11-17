@@ -964,7 +964,7 @@ export const MicroFinanceManagement: React.FC = () => {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  // Keep state in sync with service & fetch active/matured loans from Supabase (excludes CLOSED for low data load)
+  // Keep state in sync with service & hydrate all Micro-Finance entities from Supabase
   const reloadData = () => {
     setCenters(microFinanceService.getCenters());
     setGroups(microFinanceService.getGroups());
@@ -974,15 +974,33 @@ export const MicroFinanceManagement: React.FC = () => {
     setSheets(microFinanceService.getSheets());
     setSignatureSheets(microFinanceService.getSignatureSheets());
     setMeetingMinutes(meetingMinutesService.getMeetings());
-    void microFinanceService.fetchActiveLoansFromSupabase().then(activeLoans => {
-      setLoans(activeLoans);
+    void microFinanceService.fetchAllFromSupabase().then(res => {
+      setCenters(res.centers);
+      setGroups(res.groups);
+      setMembers(res.members);
+      setSavings(res.savings);
+      setLoans(res.loans);
+      setSheets(res.sheets);
+      setSignatureSheets(res.signatureSheets);
+    });
+    void meetingMinutesService.fetchAllFromSupabase().then(res => {
+      setMeetingMinutes(res.meetings);
     });
     showToast('Data refreshed successfully');
   };
 
   useEffect(() => {
-    void microFinanceService.fetchActiveLoansFromSupabase().then(activeLoans => {
-      setLoans(activeLoans);
+    void microFinanceService.fetchAllFromSupabase().then(res => {
+      setCenters(res.centers);
+      setGroups(res.groups);
+      setMembers(res.members);
+      setSavings(res.savings);
+      setLoans(res.loans);
+      setSheets(res.sheets);
+      setSignatureSheets(res.signatureSheets);
+    });
+    void meetingMinutesService.fetchAllFromSupabase().then(res => {
+      setMeetingMinutes(res.meetings);
     });
   }, []);
 

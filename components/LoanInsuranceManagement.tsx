@@ -360,12 +360,25 @@ export const LoanInsuranceManagement: React.FC = () => {
 
   const [claimForm, setClaimForm] = useState<Partial<InsuranceClaimRecord>>(initialClaimForm);
 
-  // Refresh data from service
+  // Refresh data from service & Supabase
   const refreshData = () => {
     setRecords(loanInsuranceService.getRecords());
     setClaims(loanInsuranceService.getClaims());
     setCompanies(loanInsuranceService.getCompanies());
+    void loanInsuranceService.syncAllFromSupabase().then(res => {
+      setRecords(res.records);
+      setClaims(res.claims);
+      setCompanies(res.companies);
+    });
   };
+
+  useEffect(() => {
+    void loanInsuranceService.syncAllFromSupabase().then(res => {
+      setRecords(res.records);
+      setClaims(res.claims);
+      setCompanies(res.companies);
+    });
+  }, []);
 
   // Generate QR Code when viewing policy certificate
   useEffect(() => {

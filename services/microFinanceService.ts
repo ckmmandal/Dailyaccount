@@ -537,6 +537,8 @@ interface SupabaseLoanRow {
   maturity_date: string;
   closed_date?: string;
   closed_date_bs?: string;
+  created_by?: string;
+  created_by_name?: string;
   created_at?: string;
 }
 
@@ -552,14 +554,16 @@ const mapLoanToRow = (loan: MFLoanRecord): SupabaseLoanRow => ({
   loan_amount: Number(loan.loanAmount) || 0,
   remaining_amount: Number(loan.remainingAmount) || 0,
   installment_amount: Number(loan.installmentAmount) || 0,
-  total_installments: Number(loan.totalInstallments) || 12,
-  paid_installments: Number(loan.paidInstallments) || 0,
+  total_installments: Math.max(1, Math.round(Number(loan.totalInstallments) || 12)),
+  paid_installments: Math.max(0, Math.round(Number(loan.paidInstallments) || 0)),
   interest_rate: Number(loan.interestRate) || 14,
   status: loan.status,
   loan_product: loan.loanProduct || '',
   maturity_date: loan.maturityDate || '',
   closed_date: loan.closedDate || '',
   closed_date_bs: normalizeBsDate(loan.closedDateBs || ''),
+  created_by: loan.createdBy || '',
+  created_by_name: loan.createdByName || '',
   created_at: loan.createdAt ? (loan.createdAt.includes('T') ? loan.createdAt : `${loan.createdAt}T00:00:00.000Z`) : new Date().toISOString()
 });
 
@@ -583,8 +587,262 @@ const mapRowToLoan = (row: SupabaseLoanRow): MFLoanRecord => ({
   maturityDate: row.maturity_date || '',
   closedDate: row.closed_date || '',
   closedDateBs: row.closed_date_bs || '',
+  createdBy: row.created_by || undefined,
+  createdByName: row.created_by_name || undefined,
   createdAt: row.created_at ? String(row.created_at).split('T')[0] : new Date().toISOString().split('T')[0]
 });
+
+const mapCenterToRow = (c: MFCenter) => ({
+  id: c.id,
+  code: c.code,
+  name: c.name,
+  location: c.location || '',
+  branch: c.branch || '',
+  meeting_day: c.meetingDay || '',
+  status: c.status || 'ACTIVE',
+  field_officer: c.fieldOfficer || '',
+  contact_no: c.contactNo || '',
+  created_at: c.createdAt || new Date().toISOString().split('T')[0],
+  updated_at: new Date().toISOString()
+});
+
+const mapRowToCenter = (r: Record<string, unknown>): MFCenter => ({
+  id: String(r.id),
+  code: String(r.code || ''),
+  name: String(r.name || ''),
+  location: String(r.location || ''),
+  branch: String(r.branch || ''),
+  meetingDay: String(r.meeting_day || ''),
+  status: r.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+  fieldOfficer: r.field_officer ? String(r.field_officer) : undefined,
+  contactNo: r.contact_no ? String(r.contact_no) : undefined,
+  createdAt: String(r.created_at || '')
+});
+
+const mapGroupToRow = (g: MFSamuhGroup) => ({
+  id: g.id,
+  code: g.code,
+  name: g.name,
+  center_id: g.centerId,
+  center_name: g.centerName || '',
+  place: g.place || '',
+  members_count: Math.max(0, Math.round(Number(g.membersCount) || 0)),
+  meeting_day: g.meetingDay || '',
+  status: g.status || 'ACTIVE',
+  leader_name: g.leaderName || '',
+  leader_mobile: g.leaderMobile || '',
+  created_at: g.createdAt || new Date().toISOString().split('T')[0],
+  updated_at: new Date().toISOString()
+});
+
+const mapRowToGroup = (r: Record<string, unknown>): MFSamuhGroup => ({
+  id: String(r.id),
+  code: String(r.code || ''),
+  name: String(r.name || ''),
+  centerId: String(r.center_id || ''),
+  centerName: String(r.center_name || ''),
+  place: String(r.place || ''),
+  membersCount: Number(r.members_count) || 0,
+  meetingDay: String(r.meeting_day || ''),
+  status: r.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+  leaderName: r.leader_name ? String(r.leader_name) : undefined,
+  leaderMobile: r.leader_mobile ? String(r.leader_mobile) : undefined,
+  createdAt: String(r.created_at || '')
+});
+
+const mapMemberToRow = (m: MFMember) => ({
+  id: m.id,
+  member_id: m.memberId,
+  name: m.name,
+  citizenship_no: m.citizenshipNo || '',
+  mobile: m.mobile || '',
+  gender: m.gender || 'Female',
+  branch: m.branch || '',
+  center_id: m.centerId || '',
+  center_name: m.centerName || '',
+  samuh_id: m.samuhId || '',
+  samuh_name: m.samuhName || '',
+  role: m.role || 'Member',
+  savings_account_no: m.savingsAccountNo || '',
+  address: m.address || '',
+  joined_date: m.joinedDate || '',
+  status: m.status || 'ACTIVE',
+  total_savings: Number(m.totalSavings) || 0,
+  active_loan_amount: Number(m.activeLoanAmount) || 0,
+  photo_url: m.photoUrl || null,
+  created_at: m.createdAt || new Date().toISOString().split('T')[0],
+  updated_at: new Date().toISOString()
+});
+
+const mapRowToMember = (r: Record<string, unknown>): MFMember => ({
+  id: String(r.id),
+  memberId: String(r.member_id || ''),
+  name: String(r.name || ''),
+  citizenshipNo: String(r.citizenship_no || ''),
+  mobile: String(r.mobile || ''),
+  gender: (r.gender === 'Male' || r.gender === 'Other' ? r.gender : 'Female'),
+  branch: String(r.branch || ''),
+  centerId: String(r.center_id || ''),
+  centerName: String(r.center_name || ''),
+  samuhId: String(r.samuh_id || ''),
+  samuhName: String(r.samuh_name || ''),
+  role: (['Leader', 'Secretary', 'Treasurer', 'Member'].includes(String(r.role)) ? String(r.role) : 'Member') as MFMember['role'],
+  savingsAccountNo: String(r.savings_account_no || ''),
+  address: String(r.address || ''),
+  joinedDate: String(r.joined_date || ''),
+  status: r.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+  totalSavings: Number(r.total_savings) || 0,
+  activeLoanAmount: Number(r.active_loan_amount) || 0,
+  photoUrl: r.photo_url ? String(r.photo_url) : undefined,
+  createdAt: String(r.created_at || '')
+});
+
+const mapSavingToRow = (s: MFSavingsRecord) => ({
+  id: s.id,
+  member_id: s.memberId,
+  account_no: s.accountNo,
+  name: s.name,
+  group_name: s.groupName || '',
+  center_name: s.centerName || '',
+  date: s.date || '',
+  date_bs: s.dateBs || '',
+  amount: Number(s.amount) || 0,
+  saving_type: s.savingType || 'Compulsory',
+  status: s.status || 'PAID',
+  collected_by: s.collectedBy || '',
+  created_by: s.createdBy || null,
+  created_by_name: s.createdByName || null,
+  receipt_no: s.receiptNo || '',
+  remarks: s.remarks || '',
+  created_at: s.createdAt || new Date().toISOString().split('T')[0],
+  updated_at: new Date().toISOString()
+});
+
+const mapRowToSaving = (r: Record<string, unknown>): MFSavingsRecord => ({
+  id: String(r.id),
+  memberId: String(r.member_id || ''),
+  accountNo: String(r.account_no || ''),
+  name: String(r.name || ''),
+  groupName: String(r.group_name || ''),
+  centerName: String(r.center_name || ''),
+  date: String(r.date || ''),
+  dateBs: r.date_bs ? String(r.date_bs) : undefined,
+  amount: Number(r.amount) || 0,
+  savingType: String(r.saving_type || 'Compulsory'),
+  status: (['PAID', 'DUE', 'PENDING'].includes(String(r.status)) ? String(r.status) : 'PAID') as MFSavingsRecord['status'],
+  collectedBy: r.collected_by ? String(r.collected_by) : undefined,
+  createdBy: r.created_by ? String(r.created_by) : undefined,
+  createdByName: r.created_by_name ? String(r.created_by_name) : undefined,
+  receiptNo: r.receipt_no ? String(r.receipt_no) : undefined,
+  remarks: r.remarks ? String(r.remarks) : undefined,
+  createdAt: String(r.created_at || '')
+});
+
+const mapSheetToRow = (s: MFCollectionSheet) => ({
+  id: s.id,
+  center_id: s.centerId,
+  center_name: s.centerName || '',
+  group_id: s.groupId,
+  group_name: s.groupName || '',
+  year: s.year || '',
+  month: s.month || '',
+  day: s.day || '',
+  date_display: s.dateDisplay || '',
+  status: s.status || 'GENERATED',
+  total_compulsory_saving: Number(s.totalCompulsorySaving) || 0,
+  total_optional_saving: Number(s.totalOptionalSaving) || 0,
+  total_loan_principal: Number(s.totalLoanPrincipal) || 0,
+  total_loan_interest: Number(s.totalLoanInterest) || 0,
+  total_expected: Number(s.totalExpected) || 0,
+  total_collected: Number(s.totalCollected) || 0,
+  member_count: Math.max(0, Math.round(Number(s.memberCount) || 0)),
+  collected_by: s.collectedBy || '',
+  created_at: s.createdAt || new Date().toISOString().split('T')[0],
+  updated_at: new Date().toISOString()
+});
+
+const mapRowToSheet = (r: Record<string, unknown>): MFCollectionSheet => ({
+  id: String(r.id),
+  centerId: String(r.center_id || ''),
+  centerName: String(r.center_name || ''),
+  groupId: String(r.group_id || ''),
+  groupName: String(r.group_name || ''),
+  year: String(r.year || ''),
+  month: String(r.month || ''),
+  day: String(r.day || ''),
+  dateDisplay: String(r.date_display || ''),
+  status: (['GENERATED', 'COLLECTED', 'PENDING'].includes(String(r.status)) ? String(r.status) : 'GENERATED') as MFCollectionSheet['status'],
+  totalCompulsorySaving: Number(r.total_compulsory_saving) || 0,
+  totalOptionalSaving: Number(r.total_optional_saving) || 0,
+  totalLoanPrincipal: Number(r.total_loan_principal) || 0,
+  totalLoanInterest: Number(r.total_loan_interest) || 0,
+  totalExpected: Number(r.total_expected) || 0,
+  totalCollected: Number(r.total_collected) || 0,
+  memberCount: Number(r.member_count) || 0,
+  collectedBy: r.collected_by ? String(r.collected_by) : undefined,
+  createdAt: String(r.created_at || '')
+});
+
+const mapSigSheetToRow = (s: MFSignatureSheet) => ({
+  id: s.id,
+  sheet_no: s.sheetNo,
+  center_id: s.centerId,
+  center_name: s.centerName || '',
+  group_id: s.groupId,
+  group_name: s.groupName || '',
+  date_bs: s.dateBs || '',
+  location: s.location || '',
+  branch_name: s.branchName || '',
+  branch_address: s.branchAddress || '',
+  members: Array.isArray(s.members) ? s.members : [],
+  total_members: Math.max(0, Math.round(Number(s.totalMembers) || 0)),
+  total_savings: Number(s.totalSavings) || 0,
+  total_loans: Number(s.totalLoans) || 0,
+  total_due: Number(s.totalDue) || 0,
+  officer_name: s.officerName || '',
+  created_at: s.createdAt || new Date().toISOString().split('T')[0],
+  updated_at: new Date().toISOString()
+});
+
+const mapRowToSigSheet = (r: Record<string, unknown>): MFSignatureSheet => ({
+  id: String(r.id),
+  sheetNo: String(r.sheet_no || ''),
+  centerId: String(r.center_id || ''),
+  centerName: String(r.center_name || ''),
+  groupId: String(r.group_id || ''),
+  groupName: String(r.group_name || ''),
+  dateBs: String(r.date_bs || ''),
+  location: String(r.location || ''),
+  branchName: String(r.branch_name || ''),
+  branchAddress: String(r.branch_address || ''),
+  members: Array.isArray(r.members) ? (r.members as MFSignatureSheetMember[]) : [],
+  totalMembers: Number(r.total_members) || 0,
+  totalSavings: Number(r.total_savings) || 0,
+  totalLoans: Number(r.total_loans) || 0,
+  totalDue: r.total_due !== undefined && r.total_due !== null ? Number(r.total_due) : undefined,
+  officerName: String(r.officer_name || ''),
+  createdAt: String(r.created_at || '')
+});
+
+const bgUpsert = async (table: string, rows: Record<string, unknown>[]): Promise<void> => {
+  if (!supabase || rows.length === 0) return;
+  try {
+    const { error } = await supabase.from(table).upsert(rows, { onConflict: 'id' });
+    if (error) console.warn(`Supabase ${table} upsert warning:`, error.message);
+  } catch (err) {
+    console.warn(`Supabase ${table} upsert failed:`, err);
+  }
+};
+
+const bgDelete = async (table: string, id: string): Promise<void> => {
+  if (!supabase || !id) return;
+  try {
+    const { error } = await supabase.from(table).delete().eq('id', id);
+    if (error) console.warn(`Supabase ${table} delete warning:`, error.message);
+  } catch (err) {
+    console.warn(`Supabase ${table} delete failed:`, err);
+  }
+};
 
 const getClosedLoansLocalRaw = (): MFLoanRecord[] => {
   try {
@@ -833,6 +1091,7 @@ export const microFinanceService = {
 
   saveCenters: (centers: MFCenter[]): void => {
     localStorage.setItem(STORAGE_KEYS.CENTERS, JSON.stringify(centers));
+    void bgUpsert('mf_centers', centers.map(mapCenterToRow));
   },
 
   addCenter: (center: Omit<MFCenter, 'id' | 'createdAt'>): MFCenter => {
@@ -844,21 +1103,31 @@ export const microFinanceService = {
       createdAt: new Date().toISOString().split('T')[0]
     };
     const updated = [newCenter, ...centers];
-    microFinanceService.saveCenters(updated);
+    localStorage.setItem(STORAGE_KEYS.CENTERS, JSON.stringify(updated));
+    void bgUpsert('mf_centers', [mapCenterToRow(newCenter)]);
     return newCenter;
   },
 
   updateCenter: (id: string, updates: Partial<MFCenter>): MFCenter[] => {
     assertDayNotEnded(updates.branch);
-    const centers = microFinanceService.getCenters().map(c => c.id === id ? { ...c, ...updates } : c);
-    microFinanceService.saveCenters(centers);
+    let updatedItem: MFCenter | null = null;
+    const centers = microFinanceService.getCenters().map(c => {
+      if (c.id === id) {
+        updatedItem = { ...c, ...updates };
+        return updatedItem;
+      }
+      return c;
+    });
+    localStorage.setItem(STORAGE_KEYS.CENTERS, JSON.stringify(centers));
+    if (updatedItem) void bgUpsert('mf_centers', [mapCenterToRow(updatedItem)]);
     return centers;
   },
 
   deleteCenter: (id: string): MFCenter[] => {
     assertDayNotEnded();
     const centers = microFinanceService.getCenters().filter(c => c.id !== id);
-    microFinanceService.saveCenters(centers);
+    localStorage.setItem(STORAGE_KEYS.CENTERS, JSON.stringify(centers));
+    void bgDelete('mf_centers', id);
     return centers;
   },
 
@@ -876,6 +1145,7 @@ export const microFinanceService = {
 
   saveGroups: (groups: MFSamuhGroup[]): void => {
     localStorage.setItem(STORAGE_KEYS.GROUPS, JSON.stringify(groups));
+    void bgUpsert('mf_groups', groups.map(mapGroupToRow));
   },
 
   addGroup: (group: Omit<MFSamuhGroup, 'id' | 'createdAt'>): MFSamuhGroup => {
@@ -887,21 +1157,31 @@ export const microFinanceService = {
       createdAt: new Date().toISOString().split('T')[0]
     };
     const updated = [newGroup, ...groups];
-    microFinanceService.saveGroups(updated);
+    localStorage.setItem(STORAGE_KEYS.GROUPS, JSON.stringify(updated));
+    void bgUpsert('mf_groups', [mapGroupToRow(newGroup)]);
     return newGroup;
   },
 
   updateGroup: (id: string, updates: Partial<MFSamuhGroup>): MFSamuhGroup[] => {
     assertDayNotEnded();
-    const groups = microFinanceService.getGroups().map(g => g.id === id ? { ...g, ...updates } : g);
-    microFinanceService.saveGroups(groups);
+    let updatedItem: MFSamuhGroup | null = null;
+    const groups = microFinanceService.getGroups().map(g => {
+      if (g.id === id) {
+        updatedItem = { ...g, ...updates };
+        return updatedItem;
+      }
+      return g;
+    });
+    localStorage.setItem(STORAGE_KEYS.GROUPS, JSON.stringify(groups));
+    if (updatedItem) void bgUpsert('mf_groups', [mapGroupToRow(updatedItem)]);
     return groups;
   },
 
   deleteGroup: (id: string): MFSamuhGroup[] => {
     assertDayNotEnded();
     const groups = microFinanceService.getGroups().filter(g => g.id !== id);
-    microFinanceService.saveGroups(groups);
+    localStorage.setItem(STORAGE_KEYS.GROUPS, JSON.stringify(groups));
+    void bgDelete('mf_groups', id);
     return groups;
   },
 
@@ -919,6 +1199,7 @@ export const microFinanceService = {
 
   saveMembers: (members: MFMember[]): void => {
     localStorage.setItem(STORAGE_KEYS.MEMBERS, JSON.stringify(members));
+    void bgUpsert('mf_members', members.map(mapMemberToRow));
   },
 
   addMember: (member: Omit<MFMember, 'id' | 'createdAt'>): MFMember => {
@@ -930,20 +1211,37 @@ export const microFinanceService = {
       createdAt: new Date().toISOString().split('T')[0]
     };
     const updated = [newMember, ...members];
-    microFinanceService.saveMembers(updated);
+    localStorage.setItem(STORAGE_KEYS.MEMBERS, JSON.stringify(updated));
+    void bgUpsert('mf_members', [mapMemberToRow(newMember)]);
     // Also update member count in group
     if (newMember.samuhId) {
       const groups = microFinanceService.getGroups();
-      const updatedGroups = groups.map(g => g.id === newMember.samuhId ? { ...g, membersCount: g.membersCount + 1 } : g);
-      microFinanceService.saveGroups(updatedGroups);
+      let changedGroup: MFSamuhGroup | null = null;
+      const updatedGroups = groups.map(g => {
+        if (g.id === newMember.samuhId) {
+          changedGroup = { ...g, membersCount: g.membersCount + 1 };
+          return changedGroup;
+        }
+        return g;
+      });
+      localStorage.setItem(STORAGE_KEYS.GROUPS, JSON.stringify(updatedGroups));
+      if (changedGroup) void bgUpsert('mf_groups', [mapGroupToRow(changedGroup)]);
     }
     return newMember;
   },
 
   updateMember: (id: string, updates: Partial<MFMember>): MFMember[] => {
     assertDayNotEnded(updates.branch);
-    const members = microFinanceService.getMembers().map(m => m.id === id ? { ...m, ...updates } : m);
-    microFinanceService.saveMembers(members);
+    let updatedItem: MFMember | null = null;
+    const members = microFinanceService.getMembers().map(m => {
+      if (m.id === id) {
+        updatedItem = { ...m, ...updates };
+        return updatedItem;
+      }
+      return m;
+    });
+    localStorage.setItem(STORAGE_KEYS.MEMBERS, JSON.stringify(members));
+    if (updatedItem) void bgUpsert('mf_members', [mapMemberToRow(updatedItem)]);
     return members;
   },
 
@@ -952,11 +1250,20 @@ export const microFinanceService = {
     const members = microFinanceService.getMembers();
     const target = members.find(m => m.id === id);
     const updated = members.filter(m => m.id !== id);
-    microFinanceService.saveMembers(updated);
+    localStorage.setItem(STORAGE_KEYS.MEMBERS, JSON.stringify(updated));
+    void bgDelete('mf_members', id);
     if (target?.samuhId) {
       const groups = microFinanceService.getGroups();
-      const updatedGroups = groups.map(g => g.id === target.samuhId ? { ...g, membersCount: Math.max(0, g.membersCount - 1) } : g);
-      microFinanceService.saveGroups(updatedGroups);
+      let changedGroup: MFSamuhGroup | null = null;
+      const updatedGroups = groups.map(g => {
+        if (g.id === target.samuhId) {
+          changedGroup = { ...g, membersCount: Math.max(0, g.membersCount - 1) };
+          return changedGroup;
+        }
+        return g;
+      });
+      localStorage.setItem(STORAGE_KEYS.GROUPS, JSON.stringify(updatedGroups));
+      if (changedGroup) void bgUpsert('mf_groups', [mapGroupToRow(changedGroup)]);
     }
     return updated;
   },
@@ -983,6 +1290,7 @@ export const microFinanceService = {
 
   saveSavings: (savings: MFSavingsRecord[]): void => {
     localStorage.setItem(STORAGE_KEYS.SAVINGS, JSON.stringify(savings));
+    void bgUpsert('mf_savings', savings.map(mapSavingToRow));
   },
 
   addSaving: (saving: Omit<MFSavingsRecord, 'id' | 'createdAt'>): MFSavingsRecord => {
@@ -994,18 +1302,28 @@ export const microFinanceService = {
       createdAt: new Date().toISOString().split('T')[0]
     };
     const updated = [newSaving, ...savings];
-    microFinanceService.saveSavings(updated);
+    localStorage.setItem(STORAGE_KEYS.SAVINGS, JSON.stringify(updated));
+    void bgUpsert('mf_savings', [mapSavingToRow(newSaving)]);
     // Also update member's total savings
     const members = microFinanceService.getMembers();
-    const updatedMembers = members.map(m => m.memberId === newSaving.memberId ? { ...m, totalSavings: m.totalSavings + newSaving.amount } : m);
-    microFinanceService.saveMembers(updatedMembers);
+    let changedMember: MFMember | null = null;
+    const updatedMembers = members.map(m => {
+      if (m.memberId === newSaving.memberId) {
+        changedMember = { ...m, totalSavings: m.totalSavings + newSaving.amount };
+        return changedMember;
+      }
+      return m;
+    });
+    localStorage.setItem(STORAGE_KEYS.MEMBERS, JSON.stringify(updatedMembers));
+    if (changedMember) void bgUpsert('mf_members', [mapMemberToRow(changedMember)]);
     return newSaving;
   },
 
   deleteSaving: (id: string): MFSavingsRecord[] => {
     assertDayNotEnded();
     const savings = microFinanceService.getSavings().filter(s => s.id !== id);
-    microFinanceService.saveSavings(savings);
+    localStorage.setItem(STORAGE_KEYS.SAVINGS, JSON.stringify(savings));
+    void bgDelete('mf_savings', id);
     return savings;
   },
 
@@ -1522,6 +1840,7 @@ export const microFinanceService = {
 
   saveSheets: (sheets: MFCollectionSheet[]): void => {
     localStorage.setItem(STORAGE_KEYS.SHEETS, JSON.stringify(sheets));
+    void bgUpsert('mf_collection_sheets', sheets.map(mapSheetToRow));
   },
 
   addSheet: (sheet: Omit<MFCollectionSheet, 'id' | 'createdAt'>): MFCollectionSheet => {
@@ -1533,14 +1852,16 @@ export const microFinanceService = {
       createdAt: new Date().toISOString().split('T')[0]
     };
     const updated = [newSheet, ...sheets];
-    microFinanceService.saveSheets(updated);
+    localStorage.setItem(STORAGE_KEYS.SHEETS, JSON.stringify(updated));
+    void bgUpsert('mf_collection_sheets', [mapSheetToRow(newSheet)]);
     return newSheet;
   },
 
   deleteSheet: (id: string): MFCollectionSheet[] => {
     assertDayNotEnded();
     const sheets = microFinanceService.getSheets().filter(s => s.id !== id);
-    microFinanceService.saveSheets(sheets);
+    localStorage.setItem(STORAGE_KEYS.SHEETS, JSON.stringify(sheets));
+    void bgDelete('mf_collection_sheets', id);
     return sheets;
   },
 
@@ -1570,6 +1891,7 @@ export const microFinanceService = {
 
   saveSignatureSheets: (sheets: MFSignatureSheet[]): void => {
     localStorage.setItem(STORAGE_KEYS.SIGNATURE_SHEETS, JSON.stringify(sheets));
+    void bgUpsert('mf_signature_sheets', sheets.map(mapSigSheetToRow));
   },
 
   addSignatureSheet: (sheet: Omit<MFSignatureSheet, 'id' | 'createdAt'>): MFSignatureSheet => {
@@ -1581,21 +1903,31 @@ export const microFinanceService = {
       createdAt: new Date().toISOString().split('T')[0]
     };
     const updated = [newSheet, ...sheets];
-    microFinanceService.saveSignatureSheets(updated);
+    localStorage.setItem(STORAGE_KEYS.SIGNATURE_SHEETS, JSON.stringify(updated));
+    void bgUpsert('mf_signature_sheets', [mapSigSheetToRow(newSheet)]);
     return newSheet;
   },
 
   updateSignatureSheet: (id: string, updatedSheet: Partial<MFSignatureSheet>): MFSignatureSheet[] => {
     assertDayNotEnded();
-    const sheets = microFinanceService.getSignatureSheets().map(s => s.id === id ? { ...s, ...updatedSheet } : s);
-    microFinanceService.saveSignatureSheets(sheets);
+    let changed: MFSignatureSheet | null = null;
+    const sheets = microFinanceService.getSignatureSheets().map(s => {
+      if (s.id === id) {
+        changed = { ...s, ...updatedSheet };
+        return changed;
+      }
+      return s;
+    });
+    localStorage.setItem(STORAGE_KEYS.SIGNATURE_SHEETS, JSON.stringify(sheets));
+    if (changed) void bgUpsert('mf_signature_sheets', [mapSigSheetToRow(changed)]);
     return sheets;
   },
 
   deleteSignatureSheet: (id: string): MFSignatureSheet[] => {
     assertDayNotEnded();
     const sheets = microFinanceService.getSignatureSheets().filter(s => s.id !== id);
-    microFinanceService.saveSignatureSheets(sheets);
+    localStorage.setItem(STORAGE_KEYS.SIGNATURE_SHEETS, JSON.stringify(sheets));
+    void bgDelete('mf_signature_sheets', id);
     return sheets;
   },
 
@@ -1614,5 +1946,141 @@ export const microFinanceService = {
   saveSettings: (settings: MFSettings): void => {
     assertDayNotEnded();
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+    void bgUpsert('mf_settings', [{ id: 'mf_general_settings', data: settings, updated_at: new Date().toISOString() }]);
+  },
+
+  // Hydrate ALL Micro-Finance entities from Supabase (and seed local items if Supabase tables are empty)
+  fetchAllFromSupabase: async (): Promise<{
+    centers: MFCenter[];
+    groups: MFSamuhGroup[];
+    members: MFMember[];
+    savings: MFSavingsRecord[];
+    loans: MFLoanRecord[];
+    sheets: MFCollectionSheet[];
+    signatureSheets: MFSignatureSheet[];
+    settings: MFSettings;
+  }> => {
+    const localCenters = microFinanceService.getCenters();
+    const localGroups = microFinanceService.getGroups();
+    const localMembers = microFinanceService.getMembers();
+    const localSavings = microFinanceService.getSavings();
+    const localSheets = microFinanceService.getSheets();
+    const localSigSheets = microFinanceService.getSignatureSheets();
+    const localSettings = microFinanceService.getSettings();
+
+    if (!supabase) {
+      return {
+        centers: localCenters,
+        groups: localGroups,
+        members: localMembers,
+        savings: localSavings,
+        loans: microFinanceService.getLoans(),
+        sheets: localSheets,
+        signatureSheets: localSigSheets,
+        settings: localSettings
+      };
+    }
+
+    try {
+      const [
+        cRes,
+        gRes,
+        mRes,
+        sRes,
+        shRes,
+        sigRes,
+        setRes,
+        loans
+      ] = await Promise.all([
+        supabase.from('mf_centers').select('*').order('created_at', { ascending: false }),
+        supabase.from('mf_groups').select('*').order('created_at', { ascending: false }),
+        supabase.from('mf_members').select('*').order('created_at', { ascending: false }),
+        supabase.from('mf_savings').select('*').order('created_at', { ascending: false }),
+        supabase.from('mf_collection_sheets').select('*').order('created_at', { ascending: false }),
+        supabase.from('mf_signature_sheets').select('*').order('created_at', { ascending: false }),
+        supabase.from('mf_settings').select('data').eq('id', 'mf_general_settings').maybeSingle(),
+        microFinanceService.fetchActiveLoansFromSupabase()
+      ]);
+
+      let centers = localCenters;
+      if (!cRes.error && Array.isArray(cRes.data)) {
+        if (cRes.data.length > 0) {
+          centers = (cRes.data as Record<string, unknown>[]).map(mapRowToCenter);
+          localStorage.setItem(STORAGE_KEYS.CENTERS, JSON.stringify(centers));
+        } else if (localCenters.length > 0) {
+          void bgUpsert('mf_centers', localCenters.map(mapCenterToRow));
+        }
+      }
+
+      let groups = localGroups;
+      if (!gRes.error && Array.isArray(gRes.data)) {
+        if (gRes.data.length > 0) {
+          groups = (gRes.data as Record<string, unknown>[]).map(mapRowToGroup);
+          localStorage.setItem(STORAGE_KEYS.GROUPS, JSON.stringify(groups));
+        } else if (localGroups.length > 0) {
+          void bgUpsert('mf_groups', localGroups.map(mapGroupToRow));
+        }
+      }
+
+      let members = localMembers;
+      if (!mRes.error && Array.isArray(mRes.data)) {
+        if (mRes.data.length > 0) {
+          members = (mRes.data as Record<string, unknown>[]).map(mapRowToMember);
+          localStorage.setItem(STORAGE_KEYS.MEMBERS, JSON.stringify(members));
+        } else if (localMembers.length > 0) {
+          void bgUpsert('mf_members', localMembers.map(mapMemberToRow));
+        }
+      }
+
+      let savings = localSavings;
+      if (!sRes.error && Array.isArray(sRes.data)) {
+        if (sRes.data.length > 0) {
+          savings = (sRes.data as Record<string, unknown>[]).map(mapRowToSaving);
+          localStorage.setItem(STORAGE_KEYS.SAVINGS, JSON.stringify(savings));
+        } else if (localSavings.length > 0) {
+          void bgUpsert('mf_savings', localSavings.map(mapSavingToRow));
+        }
+      }
+
+      let sheets = localSheets;
+      if (!shRes.error && Array.isArray(shRes.data)) {
+        if (shRes.data.length > 0) {
+          sheets = (shRes.data as Record<string, unknown>[]).map(mapRowToSheet);
+          localStorage.setItem(STORAGE_KEYS.SHEETS, JSON.stringify(sheets));
+        } else if (localSheets.length > 0) {
+          void bgUpsert('mf_collection_sheets', localSheets.map(mapSheetToRow));
+        }
+      }
+
+      let signatureSheets = localSigSheets;
+      if (!sigRes.error && Array.isArray(sigRes.data)) {
+        if (sigRes.data.length > 0) {
+          signatureSheets = (sigRes.data as Record<string, unknown>[]).map(mapRowToSigSheet);
+          localStorage.setItem(STORAGE_KEYS.SIGNATURE_SHEETS, JSON.stringify(signatureSheets));
+        } else if (localSigSheets.length > 0) {
+          void bgUpsert('mf_signature_sheets', localSigSheets.map(mapSigSheetToRow));
+        }
+      }
+
+      let settings = localSettings;
+      if (!setRes.error && setRes.data?.data) {
+        settings = { ...DEFAULT_SETTINGS, ...(setRes.data.data as Partial<MFSettings>) };
+        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+      }
+
+      return { centers, groups, members, savings, loans, sheets, signatureSheets, settings };
+    } catch (err) {
+      console.warn('Supabase MF fetchAll failed, using local cache:', err);
+      return {
+        centers: localCenters,
+        groups: localGroups,
+        members: localMembers,
+        savings: localSavings,
+        loans: microFinanceService.getLoans(),
+        sheets: localSheets,
+        signatureSheets: localSigSheets,
+        settings: localSettings
+      };
+    }
   }
 };

@@ -509,17 +509,18 @@ export const meetingMinutesService = {
     const updated = [newMeeting, ...list];
     meetingMinutesService.saveMeetings(updated);
 
-    // Sync to Supabase in background if table exists
+    // Sync to Supabase in background
     try {
-      await supabase.from('group_meetings').insert([{
+      await supabase.from('group_meetings').upsert([{
         id: newMeeting.id,
         meeting_no: newMeeting.meetingNo,
         group_id: newMeeting.groupId,
         group_name: newMeeting.groupName,
         meeting_date_bs: newMeeting.meetingDateBs,
         status: newMeeting.status,
-        payload: newMeeting
-      }]).select('id');
+        payload: newMeeting,
+        updated_at: new Date().toISOString()
+      }], { onConflict: 'id' });
     } catch {
       // Supabase is optional/graceful fallback
     }
@@ -553,19 +554,24 @@ export const meetingMinutesService = {
 
     meetingMinutesService.saveMeetings(updated);
 
-    // Sync to Supabase
+    // Sync to Supabase via upsert so local-created items also persist
     if (updatedRecord) {
+      const rec = updatedRecord as GroupMeetingRecord;
       try {
-        await supabase.from('group_meetings').update({
-          meeting_no: (updatedRecord as GroupMeetingRecord).meetingNo,
-          status: (updatedRecord as GroupMeetingRecord).status,
-          payload: updatedRecord,
+        await supabase.from('group_meetings').upsert([{
+          id: rec.id,
+          meeting_no: rec.meetingNo,
+          group_id: rec.groupId,
+          group_name: rec.groupName,
+          meeting_date_bs: rec.meetingDateBs,
+          status: rec.status,
+          payload: rec,
           updated_at: new Date().toISOString()
-        }).eq('id', id);
+        }], { onConflict: 'id' });
       } catch {
         // graceful
       }
-      return updatedRecord;
+      return rec;
     }
     throw new Error('Meeting not found: ' + id);
   },
@@ -643,6 +649,15 @@ export const meetingMinutesService = {
   saveSettings: (settings: MeetingMinutesSettings): void => {
     assertDayNotEnded();
     localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
+    try {
+      void supabase.from('mf_settings').upsert({
+        id: 'mf_meeting_settings',
+        data: settings,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'id' });
+    } catch {
+      // graceful
+    }
   },
 
   // Proposal & Decision Templates Management
@@ -665,6 +680,75 @@ export const meetingMinutesService = {
   saveProposalTemplates: (templates: ProposalDecisionTemplate[]): void => {
     assertDayNotEnded();
     localStorage.setItem(STORAGE_KEY_TEMPLATES, JSON.stringify(templates));
+    try {
+      void supabase.from('mf_settings').upsert({
+        id: 'mf_proposal_templates',
+        data: { templates },
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'id' });
+    } catch {
+      // graceful
+    }
+  },
+
+  fetchAllFromSupabase: async (): Promise<{
+    meetings: GroupMeetingRecord[];
+    settings: MeetingMinutesSettings;
+    templates: ProposalDecisionTemplate[];
+  }> => {
+    const localMeetings = meetingMinutesService.getMeetings();
+    const localSettings = meetingMinutesService.getSettings();
+    const localTemplates = meetingMinutesService.getProposalTemplates();
+
+    try {
+      const [mtgRes, setRes, tplRes] = await Promise.all([
+        supabase.from('group_meetings').select('payload').order('created_at', { ascending: false }),
+        supabase.from('mf_settings').select('data').eq('id', 'mf_meeting_settings').maybeSingle(),
+        supabase.from('mf_settings').select('data').eq('id', 'mf_proposal_templates').maybeSingle()
+      ]);
+
+      let meetings = localMeetings;
+      if (!mtgRes.error && Array.isArray(mtgRes.data)) {
+        const remoteList = mtgRes.data
+          .map((r: { payload?: GroupMeetingRecord }) => r.payload)
+          .filter((p): p is GroupMeetingRecord => Boolean(p && p.id));
+        if (remoteList.length > 0) {
+          meetings = remoteList;
+          localStorage.setItem(STORAGE_KEY_MEETINGS, JSON.stringify(meetings));
+        } else if (localMeetings.length > 0) {
+          void supabase.from('group_meetings').upsert(
+            localMeetings.map(m => ({
+              id: m.id,
+              meeting_no: m.meetingNo,
+              group_id: m.groupId,
+              group_name: m.groupName,
+              meeting_date_bs: m.meetingDateBs,
+              status: m.status,
+              payload: m,
+              updated_at: new Date().toISOString()
+            })),
+            { onConflict: 'id' }
+          );
+        }
+      }
+
+      let settings = localSettings;
+      if (!setRes.error && setRes.data?.data) {
+        settings = { ...DEFAULT_MEETING_SETTINGS, ...(setRes.data.data as Partial<MeetingMinutesSettings>) };
+        localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
+      }
+
+      let templates = localTemplates;
+      const tplData = tplRes.data?.data as { templates?: ProposalDecisionTemplate[] } | undefined;
+      if (!tplRes.error && Array.isArray(tplData?.templates) && tplData.templates.length > 0) {
+        templates = tplData.templates;
+        localStorage.setItem(STORAGE_KEY_TEMPLATES, JSON.stringify(templates));
+      }
+
+      return { meetings, settings, templates };
+    } catch {
+      return { meetings: localMeetings, settings: localSettings, templates: localTemplates };
+    }
   },
 
   generateNextMeetingNumber: (groupCode: string): string => {

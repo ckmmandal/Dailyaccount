@@ -965,6 +965,7 @@ CREATE TABLE IF NOT EXISTS public.employees (
     remote_allowance NUMERIC DEFAULT 0,
     has_remote_allowance BOOLEAN DEFAULT false,
     is_incapacitated BOOLEAN DEFAULT false,
+    has_dress_allowance BOOLEAN DEFAULT false,
     dress_allowance NUMERIC DEFAULT 0,
     -- Full KYC, Family, Address, Bank, Education & Emergency
     citizenship_no TEXT,
@@ -1067,6 +1068,7 @@ ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS remote_area_category TEXT 
 ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS remote_allowance NUMERIC DEFAULT 0;
 ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS has_remote_allowance BOOLEAN DEFAULT false;
 ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS is_incapacitated BOOLEAN DEFAULT false;
+ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS has_dress_allowance BOOLEAN DEFAULT false;
 ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS dress_allowance NUMERIC DEFAULT 0;
 ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS citizenship_no TEXT;
 ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS citizenship_district TEXT;
