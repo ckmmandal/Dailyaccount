@@ -239,7 +239,9 @@ export const FDCertificateModal: React.FC<{ onClose: () => void }> = ({ onClose 
     const loadFdProducts = async () => {
       try {
         const allProducts = await productService.getSavingProducts();
-        const filtered = allProducts.filter(p => p.showInMicrofinanceAndFD && p.status !== 'Inactive');
+        const filtered = allProducts.filter(
+          p => Boolean(p.showInFD ?? p.showInMicrofinanceAndFD) && p.status !== 'Inactive'
+        );
         setFdSavingProducts(filtered);
       } catch (e) {
         console.error("Failed to load FD products:", e);

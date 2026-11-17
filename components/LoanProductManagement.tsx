@@ -62,7 +62,7 @@ export const LoanProductManagement: React.FC<LoanProductManagementProps> = ({ on
     maxTenureMonths: string;
     description: string;
     status: 'Active' | 'Inactive';
-    showInMicrofinanceAndFD: boolean;
+    showInMicrofinance: boolean;
   }>({
     name: '',
     nameNp: '',
@@ -71,27 +71,31 @@ export const LoanProductManagement: React.FC<LoanProductManagementProps> = ({ on
     maxTenureMonths: '36',
     description: '',
     status: 'Active',
-    showInMicrofinanceAndFD: false
+    showInMicrofinance: false
   });
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const toggleEpochRef = React.useRef(0);
 
-  const loadProducts = useCallback(async () => {
+  const loadProducts = useCallback(async (silent = false) => {
+    const startEpoch = toggleEpochRef.current;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const data = await productService.getLoanProducts();
-      setProducts(data);
-      if (onProductCountChange) onProductCountChange(data.length);
+      if (toggleEpochRef.current === startEpoch) {
+        setProducts(data);
+        if (onProductCountChange) onProductCountChange(data.length);
+      }
     } catch (err) {
       console.error('Failed to load loan products:', err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [onProductCountChange]);
 
   useEffect(() => {
     loadProducts();
-    const handleUpdate = () => loadProducts();
+    const handleUpdate = () => loadProducts(true);
     window.addEventListener('loanProductsUpdated', handleUpdate);
     return () => window.removeEventListener('loanProductsUpdated', handleUpdate);
   }, [loadProducts]);
@@ -121,7 +125,7 @@ export const LoanProductManagement: React.FC<LoanProductManagementProps> = ({ on
       maxTenureMonths: '36',
       description: '',
       status: 'Active',
-      showInMicrofinanceAndFD: false
+      showInMicrofinance: false
     });
     setFormError(null);
     setSelectedProduct(null);
@@ -140,7 +144,7 @@ export const LoanProductManagement: React.FC<LoanProductManagementProps> = ({ on
       maxTenureMonths: product.maxTenureMonths !== undefined ? product.maxTenureMonths.toString() : '36',
       description: product.description || '',
       status: product.status || 'Active',
-      showInMicrofinanceAndFD: Boolean(product.showInMicrofinanceAndFD)
+      showInMicrofinance: Boolean(product.showInMicrofinance ?? product.showInMicrofinanceAndFD)
     });
     setFormError(null);
     setIsFormModalOpen(true);
@@ -152,16 +156,23 @@ export const LoanProductManagement: React.FC<LoanProductManagementProps> = ({ on
       alert(getDayEndedBlockMessage());
       return;
     }
+    const myEpoch = ++toggleEpochRef.current;
+    const nextMf = !(product.showInMicrofinance ?? product.showInMicrofinanceAndFD);
+    const updatedProduct: LoanProduct = {
+      ...product,
+      showInMicrofinance: nextMf,
+      showInMicrofinanceAndFD: nextMf,
+      updatedAt: Date.now()
+    };
+    setProducts(prev => prev.map(p => (p.id === product.id ? updatedProduct : p)));
     try {
-      const updatedProduct: LoanProduct = {
-        ...product,
-        showInMicrofinanceAndFD: !product.showInMicrofinanceAndFD,
-        updatedAt: Date.now()
-      };
       const updated = await productService.saveLoanProduct(updatedProduct);
-      setProducts(updated);
+      if (toggleEpochRef.current === myEpoch) {
+        setProducts(updated);
+      }
     } catch (err) {
       console.error('Failed to toggle MF status:', err);
+      loadProducts(true);
     }
   };
 
@@ -209,7 +220,8 @@ export const LoanProductManagement: React.FC<LoanProductManagementProps> = ({ on
         maxTenureMonths: formData.maxTenureMonths ? parseInt(formData.maxTenureMonths, 10) : 36,
         description: formData.description.trim(),
         status: formData.status,
-        showInMicrofinanceAndFD: formData.showInMicrofinanceAndFD,
+        showInMicrofinance: formData.showInMicrofinance,
+        showInMicrofinanceAndFD: formData.showInMicrofinance,
         createdAt: selectedProduct?.createdAt || Date.now(),
         updatedAt: Date.now(),
         createdBy: user?.username || 'admin'
@@ -355,19 +367,24 @@ export const LoanProductManagement: React.FC<LoanProductManagementProps> = ({ on
                         </span>
                       </td>
                       <td className="py-3.5 px-3 text-center">
-                        <button
-                          type="button"
-                          disabled={!isAdmin || isDayEnded}
-                          onClick={() => handleToggleMFFD(product)}
-                          title={isDayEnded ? getDayEndedBlockMessage() : (product.showInMicrofinanceAndFD ? "Enabled in Microfinance (Click to disable)" : "Disabled in Microfinance (Click to enable)")}
-                          className={`w-7 h-7 mx-auto rounded-lg flex items-center justify-center transition-all ${
-                            product.showInMicrofinanceAndFD
-                              ? 'bg-[#006400] text-white shadow-xs'
-                              : 'bg-slate-100 text-slate-300 hover:text-slate-500 border border-slate-200'
-                          } ${isAdmin && !isDayEnded ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}
-                        >
-                          <Check size={14} className={product.showInMicrofinanceAndFD ? 'opacity-100' : 'opacity-0'} />
-                        </button>
+                        {(() => {
+                          const isMfEnabled = Boolean(product.showInMicrofinance ?? product.showInMicrofinanceAndFD);
+                          return (
+                            <button
+                              type="button"
+                              disabled={!isAdmin || isDayEnded}
+                              onClick={() => handleToggleMFFD(product)}
+                              title={isDayEnded ? getDayEndedBlockMessage() : (isMfEnabled ? "Enabled in Microfinance (Click to disable)" : "Disabled in Microfinance (Click to enable)")}
+                              className={`w-7 h-7 mx-auto rounded-lg flex items-center justify-center transition-all ${
+                                isMfEnabled
+                                  ? 'bg-[#006400] text-white shadow-xs'
+                                  : 'bg-slate-100 text-slate-300 hover:text-slate-500 border border-slate-200'
+                              } ${isAdmin && !isDayEnded ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}
+                            >
+                              <Check size={14} className={isMfEnabled ? 'opacity-100' : 'opacity-0'} />
+                            </button>
+                          );
+                        })()}
                       </td>
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
@@ -598,8 +615,8 @@ export const LoanProductManagement: React.FC<LoanProductManagementProps> = ({ on
                 <input
                   type="checkbox"
                   id="loanShowInMF"
-                  checked={formData.showInMicrofinanceAndFD}
-                  onChange={(e) => setFormData({ ...formData, showInMicrofinanceAndFD: e.target.checked })}
+                  checked={formData.showInMicrofinance}
+                  onChange={(e) => setFormData({ ...formData, showInMicrofinance: e.target.checked })}
                   className="mt-0.5 w-4 h-4 rounded text-[#006400] focus:ring-[#006400] border-slate-300 cursor-pointer"
                 />
                 <label htmlFor="loanShowInMF" className="cursor-pointer">

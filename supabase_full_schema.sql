@@ -204,6 +204,8 @@ CREATE TABLE IF NOT EXISTS public.saving_products (
     minimum_balance NUMERIC DEFAULT 0,
     description TEXT,
     status TEXT NOT NULL DEFAULT 'Active',
+    show_in_mf BOOLEAN DEFAULT false,
+    show_in_fd BOOLEAN DEFAULT false,
     show_in_mf_fd BOOLEAN DEFAULT false,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -217,6 +219,8 @@ ALTER TABLE public.saving_products ADD COLUMN IF NOT EXISTS capitalization TEXT 
 ALTER TABLE public.saving_products ADD COLUMN IF NOT EXISTS minimum_balance NUMERIC DEFAULT 0;
 ALTER TABLE public.saving_products ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE public.saving_products ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Active';
+ALTER TABLE public.saving_products ADD COLUMN IF NOT EXISTS show_in_mf BOOLEAN DEFAULT false;
+ALTER TABLE public.saving_products ADD COLUMN IF NOT EXISTS show_in_fd BOOLEAN DEFAULT false;
 ALTER TABLE public.saving_products ADD COLUMN IF NOT EXISTS show_in_mf_fd BOOLEAN DEFAULT false;
 ALTER TABLE public.saving_products ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE public.saving_products ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
@@ -231,6 +235,7 @@ CREATE TABLE IF NOT EXISTS public.loan_products (
     max_tenure_months INT DEFAULT 36,
     description TEXT,
     status TEXT NOT NULL DEFAULT 'Active',
+    show_in_mf BOOLEAN DEFAULT false,
     show_in_mf_fd BOOLEAN DEFAULT false,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -244,6 +249,7 @@ ALTER TABLE public.loan_products ADD COLUMN IF NOT EXISTS installment TEXT DEFAU
 ALTER TABLE public.loan_products ADD COLUMN IF NOT EXISTS max_tenure_months INT DEFAULT 36;
 ALTER TABLE public.loan_products ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE public.loan_products ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Active';
+ALTER TABLE public.loan_products ADD COLUMN IF NOT EXISTS show_in_mf BOOLEAN DEFAULT false;
 ALTER TABLE public.loan_products ADD COLUMN IF NOT EXISTS show_in_mf_fd BOOLEAN DEFAULT false;
 ALTER TABLE public.loan_products ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE public.loan_products ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
@@ -1901,20 +1907,20 @@ INSERT INTO public.settings (id, data, updated_at) VALUES
 ON CONFLICT (id) DO NOTHING;
 
 -- 10.5 Default Saving & Loan Products
-INSERT INTO public.saving_products (id, name, name_np, interest_rate, capitalization, minimum_balance, description, status, show_in_mf_fd) VALUES
-('sp-1', 'General Saving', 'साधारण बचत', 6.0, 'Quarterly', 500, 'Standard general savings product with quarterly interest capitalization for all members.', 'Active', true),
-('sp-2', 'Regular Saving', 'नियमित बचत', 5.0, 'Quarterly', 1000, 'Regular voluntary savings account designed for steady capital accumulation.', 'Active', true),
-('sp-3', 'Daily Saving', 'दैनिक बचत', 5.5, 'Monthly', 100, 'Door-to-door daily collection savings with monthly interest payout.', 'Active', false),
-('sp-4', 'Child Welfare Saving', 'बाल कल्याण बचत', 7.0, 'Quarterly', 500, 'High-yield savings scheme specifically for children’s education and future.', 'Active', false),
-('sp-5', 'Senior Citizen Saving', 'जेष्ठ नागरिक बचत', 7.5, 'Monthly', 500, 'Priority welfare savings account for senior members with monthly interest.', 'Active', false)
+INSERT INTO public.saving_products (id, name, name_np, interest_rate, capitalization, minimum_balance, description, status, show_in_mf, show_in_fd, show_in_mf_fd) VALUES
+('sp-1', 'General Saving', 'साधारण बचत', 6.0, 'Quarterly', 500, 'Standard general savings product with quarterly interest capitalization for all members.', 'Active', true, true, true),
+('sp-2', 'Regular Saving', 'नियमित बचत', 5.0, 'Quarterly', 1000, 'Regular voluntary savings account designed for steady capital accumulation.', 'Active', true, true, true),
+('sp-3', 'Daily Saving', 'दैनिक बचत', 5.5, 'Monthly', 100, 'Door-to-door daily collection savings with monthly interest payout.', 'Active', false, false, false),
+('sp-4', 'Child Welfare Saving', 'बाल कल्याण बचत', 7.0, 'Quarterly', 500, 'High-yield savings scheme specifically for children’s education and future.', 'Active', false, false, false),
+('sp-5', 'Senior Citizen Saving', 'जेष्ठ नागरिक बचत', 7.5, 'Monthly', 500, 'Priority welfare savings account for senior members with monthly interest.', 'Active', false, false, false)
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO public.loan_products (id, name, name_np, interest_rate, installment, max_tenure_months, description, status, show_in_mf_fd) VALUES
-('lp-1', 'General Loan', 'साधारण ऋण', 13.0, 'Monthly', 36, 'Standard collateralized personal and household general credit facility.', 'Active', true),
-('lp-2', 'Agricultural Loan', 'कृषि ऋण', 13.0, 'Monthly', 24, 'Specialized agro-financing for crops, seeds, irrigation, fertilizer and livestock farming.', 'Active', false),
-('lp-3', 'Business & Commercial Loan', 'व्यापार तथा व्यावसायिक ऋण', 14.0, 'Monthly', 60, 'Term credit and working capital financing for retail, wholesale, and enterprises.', 'Active', false),
-('lp-4', 'Micro-Finance / Group Loan', 'लघुवित्त / समूह ऋण', 15.0, 'Monthly', 12, 'Group-guaranteed collateral-free loans for grassroots micro-finance entrepreneurs.', 'Active', false),
-('lp-5', 'Emergency / Education Loan', 'आकस्मिक / शैक्षिक ऋण', 12.0, 'Monthly', 24, 'Rapid disbursement credit support for medical emergencies or academic tuition fees.', 'Active', false)
+INSERT INTO public.loan_products (id, name, name_np, interest_rate, installment, max_tenure_months, description, status, show_in_mf, show_in_mf_fd) VALUES
+('lp-1', 'General Loan', 'साधारण ऋण', 13.0, 'Monthly', 36, 'Standard collateralized personal and household general credit facility.', 'Active', true, true),
+('lp-2', 'Agricultural Loan', 'कृषि ऋण', 13.0, 'Monthly', 24, 'Specialized agro-financing for crops, seeds, irrigation, fertilizer and livestock farming.', 'Active', false, false),
+('lp-3', 'Business & Commercial Loan', 'व्यापार तथा व्यावसायिक ऋण', 14.0, 'Monthly', 60, 'Term credit and working capital financing for retail, wholesale, and enterprises.', 'Active', false, false),
+('lp-4', 'Micro-Finance / Group Loan', 'लघुवित्त / समूह ऋण', 15.0, 'Monthly', 12, 'Group-guaranteed collateral-free loans for grassroots micro-finance entrepreneurs.', 'Active', false, false),
+('lp-5', 'Emergency / Education Loan', 'आकस्मिक / शैक्षिक ऋण', 12.0, 'Monthly', 24, 'Rapid disbursement credit support for medical emergencies or academic tuition fees.', 'Active', false, false)
 ON CONFLICT (id) DO NOTHING;
 
 -- 10.6 Default Branch Operational Statuses & Nepali Calendar Holidays

@@ -14,6 +14,8 @@ const DEFAULT_SAVING_PRODUCTS: SavingProduct[] = [
     minimumBalance: 500,
     description: 'Standard general savings product with quarterly interest capitalization for all members.',
     status: 'Active',
+    showInMicrofinance: true,
+    showInFD: true,
     showInMicrofinanceAndFD: true,
     createdAt: Date.now() - 86400000 * 30,
     updatedAt: Date.now() - 86400000 * 30
@@ -27,6 +29,8 @@ const DEFAULT_SAVING_PRODUCTS: SavingProduct[] = [
     minimumBalance: 1000,
     description: 'Regular voluntary savings account designed for steady capital accumulation.',
     status: 'Active',
+    showInMicrofinance: true,
+    showInFD: true,
     showInMicrofinanceAndFD: true,
     createdAt: Date.now() - 86400000 * 25,
     updatedAt: Date.now() - 86400000 * 25
@@ -40,6 +44,9 @@ const DEFAULT_SAVING_PRODUCTS: SavingProduct[] = [
     minimumBalance: 100,
     description: 'Door-to-door daily collection savings with monthly interest payout.',
     status: 'Active',
+    showInMicrofinance: false,
+    showInFD: false,
+    showInMicrofinanceAndFD: false,
     createdAt: Date.now() - 86400000 * 20,
     updatedAt: Date.now() - 86400000 * 20
   },
@@ -52,6 +59,9 @@ const DEFAULT_SAVING_PRODUCTS: SavingProduct[] = [
     minimumBalance: 500,
     description: 'High-yield savings scheme specifically for children’s education and future.',
     status: 'Active',
+    showInMicrofinance: false,
+    showInFD: false,
+    showInMicrofinanceAndFD: false,
     createdAt: Date.now() - 86400000 * 15,
     updatedAt: Date.now() - 86400000 * 15
   },
@@ -64,6 +74,9 @@ const DEFAULT_SAVING_PRODUCTS: SavingProduct[] = [
     minimumBalance: 500,
     description: 'Priority welfare savings account for senior members with monthly interest.',
     status: 'Active',
+    showInMicrofinance: false,
+    showInFD: false,
+    showInMicrofinanceAndFD: false,
     createdAt: Date.now() - 86400000 * 10,
     updatedAt: Date.now() - 86400000 * 10
   }
@@ -79,6 +92,7 @@ const DEFAULT_LOAN_PRODUCTS: LoanProduct[] = [
     maxTenureMonths: 36,
     description: 'Standard collateralized personal and household general credit facility.',
     status: 'Active',
+    showInMicrofinance: true,
     showInMicrofinanceAndFD: true,
     createdAt: Date.now() - 86400000 * 30,
     updatedAt: Date.now() - 86400000 * 30
@@ -92,6 +106,8 @@ const DEFAULT_LOAN_PRODUCTS: LoanProduct[] = [
     maxTenureMonths: 24,
     description: 'Specialized agro-financing for crops, seeds, irrigation, fertilizer and livestock farming.',
     status: 'Active',
+    showInMicrofinance: false,
+    showInMicrofinanceAndFD: false,
     createdAt: Date.now() - 86400000 * 25,
     updatedAt: Date.now() - 86400000 * 25
   },
@@ -104,6 +120,8 @@ const DEFAULT_LOAN_PRODUCTS: LoanProduct[] = [
     maxTenureMonths: 60,
     description: 'Term credit and working capital financing for retail, wholesale, and enterprises.',
     status: 'Active',
+    showInMicrofinance: false,
+    showInMicrofinanceAndFD: false,
     createdAt: Date.now() - 86400000 * 20,
     updatedAt: Date.now() - 86400000 * 20
   },
@@ -116,6 +134,8 @@ const DEFAULT_LOAN_PRODUCTS: LoanProduct[] = [
     maxTenureMonths: 12,
     description: 'Group-guaranteed collateral-free loans for grassroots micro-finance entrepreneurs.',
     status: 'Active',
+    showInMicrofinance: false,
+    showInMicrofinanceAndFD: false,
     createdAt: Date.now() - 86400000 * 15,
     updatedAt: Date.now() - 86400000 * 15
   },
@@ -128,6 +148,8 @@ const DEFAULT_LOAN_PRODUCTS: LoanProduct[] = [
     maxTenureMonths: 6,
     description: 'Immediate soft loan designed to cover medical, hospital and unforeseen emergencies.',
     status: 'Active',
+    showInMicrofinance: false,
+    showInMicrofinanceAndFD: false,
     createdAt: Date.now() - 86400000 * 10,
     updatedAt: Date.now() - 86400000 * 10
   }
@@ -152,6 +174,35 @@ function setLocal<T>(key: string, val: T): void {
   }
 }
 
+function toMillis(val?: number | string): number {
+  if (typeof val === 'number' && !Number.isNaN(val)) return val;
+  if (typeof val === 'string' && val.trim()) {
+    const parsed = Date.parse(val);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+  return 0;
+}
+
+function normalizeSavingProduct(p: SavingProduct): SavingProduct {
+  const showInMicrofinance = Boolean(p.showInMicrofinance ?? p.showInMicrofinanceAndFD);
+  const showInFD = Boolean(p.showInFD ?? p.showInMicrofinanceAndFD);
+  return {
+    ...p,
+    showInMicrofinance,
+    showInFD,
+    showInMicrofinanceAndFD: showInMicrofinance || showInFD
+  };
+}
+
+function normalizeLoanProduct(p: LoanProduct): LoanProduct {
+  const showInMicrofinance = Boolean(p.showInMicrofinance ?? p.showInMicrofinanceAndFD);
+  return {
+    ...p,
+    showInMicrofinance,
+    showInMicrofinanceAndFD: showInMicrofinance
+  };
+}
+
 interface SupabaseSavingRecord {
   id: string;
   name: string;
@@ -164,7 +215,11 @@ interface SupabaseSavingRecord {
   minimumBalance?: number;
   description?: string;
   status?: 'Active' | 'Inactive';
-  show_in_mf_fd?: boolean;
+  show_in_mf?: boolean | null;
+  show_in_fd?: boolean | null;
+  show_in_mf_fd?: boolean | null;
+  showInMicrofinance?: boolean;
+  showInFD?: boolean;
   showInMicrofinanceAndFD?: boolean;
   created_at?: string;
   createdAt?: number;
@@ -186,7 +241,9 @@ interface SupabaseLoanRecord {
   maxTenureMonths?: number;
   description?: string;
   status?: 'Active' | 'Inactive';
-  show_in_mf_fd?: boolean;
+  show_in_mf?: boolean | null;
+  show_in_mf_fd?: boolean | null;
+  showInMicrofinance?: boolean;
   showInMicrofinanceAndFD?: boolean;
   created_at?: string;
   createdAt?: number;
@@ -196,419 +253,590 @@ interface SupabaseLoanRecord {
   createdBy?: string;
 }
 
+// Serialized in-memory queues and caches to prevent rapid-toggle race conditions
+let cachedSavingProducts: SavingProduct[] | null = null;
+let cachedLoanProducts: LoanProduct[] | null = null;
+let savingMutationQueue: Promise<unknown> = Promise.resolve();
+let loanMutationQueue: Promise<unknown> = Promise.resolve();
+let savingMutationInFlight = 0;
+let loanMutationInFlight = 0;
+
+function enqueueSavingMutation<T>(fn: () => Promise<T>): Promise<T> {
+  savingMutationInFlight += 1;
+  const run = savingMutationQueue.then(fn, fn);
+  savingMutationQueue = run.then(
+    () => { savingMutationInFlight = Math.max(0, savingMutationInFlight - 1); },
+    () => { savingMutationInFlight = Math.max(0, savingMutationInFlight - 1); }
+  );
+  return run;
+}
+
+function enqueueLoanMutation<T>(fn: () => Promise<T>): Promise<T> {
+  loanMutationInFlight += 1;
+  const run = loanMutationQueue.then(fn, fn);
+  loanMutationQueue = run.then(
+    () => { loanMutationInFlight = Math.max(0, loanMutationInFlight - 1); },
+    () => { loanMutationInFlight = Math.max(0, loanMutationInFlight - 1); }
+  );
+  return run;
+}
+
+async function fetchSavingProductsInternal(): Promise<SavingProduct[]> {
+  // Load settings backup container too so Nepali names/MF/FD flags always merge cleanly
+  const settingsMap = new Map<string, Partial<SavingProduct>>();
+  let settingsArray: SavingProduct[] = [];
+  try {
+    const { data: settingsRow } = await supabase
+      .from('settings')
+      .select('data')
+      .eq('id', 'saccos_saving_products')
+      .maybeSingle();
+    if (Array.isArray(settingsRow?.data)) {
+      settingsArray = (settingsRow.data as SavingProduct[]).map(normalizeSavingProduct);
+      settingsArray.forEach(sp => {
+        if (sp?.id) settingsMap.set(sp.id, sp);
+      });
+    }
+  } catch {
+    // ignore
+  }
+
+  const localSaved = getLocal<SavingProduct[]>(SAVING_STORAGE_KEY, []).map(normalizeSavingProduct);
+  const localMap = new Map<string, Partial<SavingProduct>>();
+  localSaved.forEach(lp => {
+    if (lp?.id) localMap.set(lp.id, lp);
+  });
+
+  // 1. Try dedicated table first
+  try {
+    const { data, error } = await supabase
+      .from('saving_products')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (!error && Array.isArray(data) && data.length > 0) {
+      const mapped: SavingProduct[] = (data as SupabaseSavingRecord[]).map(item => {
+        const settingsMeta = settingsMap.get(item.id);
+        const localMeta = localMap.get(item.id);
+        const itemUpdatedMs = toMillis(item.updated_at ?? item.updatedAt);
+        const settingsUpdatedMs = toMillis(settingsMeta?.updatedAt);
+        const localUpdatedMs = toMillis(localMeta?.updatedAt);
+
+        const bestMeta = settingsUpdatedMs >= localUpdatedMs ? (settingsMeta || localMeta || {}) : (localMeta || settingsMeta || {});
+        const metaIsStrictlyNewer = Math.max(settingsUpdatedMs, localUpdatedMs) > itemUpdatedMs + 1000;
+
+        const hasDedicatedMf = item.show_in_mf !== undefined && item.show_in_mf !== null;
+        const hasDedicatedFd = item.show_in_fd !== undefined && item.show_in_fd !== null;
+
+        const showInMicrofinance = hasDedicatedMf && !metaIsStrictlyNewer
+          ? Boolean(item.show_in_mf)
+          : Boolean(
+              item.showInMicrofinance ??
+              bestMeta.showInMicrofinance ??
+              (hasDedicatedMf ? item.show_in_mf : undefined) ??
+              item.show_in_mf_fd ??
+              bestMeta.showInMicrofinanceAndFD
+            );
+
+        const showInFD = hasDedicatedFd && !metaIsStrictlyNewer
+          ? Boolean(item.show_in_fd)
+          : Boolean(
+              item.showInFD ??
+              bestMeta.showInFD ??
+              (hasDedicatedFd ? item.show_in_fd : undefined) ??
+              item.show_in_mf_fd ??
+              bestMeta.showInMicrofinanceAndFD
+            );
+
+        return normalizeSavingProduct({
+          id: item.id,
+          name: item.name,
+          nameNp: item.name_np || item.nameNp || bestMeta.nameNp || '',
+          interestRate: Number(item.interest_rate ?? item.interestRate ?? 0),
+          capitalization: item.capitalization || 'Quarterly',
+          minimumBalance: item.minimum_balance !== undefined ? Number(item.minimum_balance) : item.minimumBalance,
+          description: item.description || '',
+          status: item.status || 'Active',
+          showInMicrofinance,
+          showInFD,
+          showInMicrofinanceAndFD: showInMicrofinance || showInFD,
+          createdAt: item.created_at || item.createdAt || Date.now(),
+          updatedAt: item.updated_at || item.updatedAt || Date.now(),
+          createdBy: item.created_by || item.createdBy
+        });
+      });
+      cachedSavingProducts = mapped;
+      setLocal(SAVING_STORAGE_KEY, mapped);
+      return mapped;
+    }
+  } catch (e) {
+    console.debug('Direct saving_products table not available, falling back:', e);
+  }
+
+  // 2. Try settings table container
+  if (settingsArray.length > 0) {
+    cachedSavingProducts = settingsArray;
+    setLocal(SAVING_STORAGE_KEY, settingsArray);
+    return settingsArray;
+  }
+
+  // 3. Fallback to localStorage or seed defaults
+  if (localSaved && localSaved.length > 0) {
+    cachedSavingProducts = localSaved;
+    return localSaved;
+  }
+
+  // Seed defaults
+  const seeded = DEFAULT_SAVING_PRODUCTS.map(normalizeSavingProduct);
+  cachedSavingProducts = seeded;
+  setLocal(SAVING_STORAGE_KEY, seeded);
+  supabase
+    .from('settings')
+    .upsert({
+      id: 'saccos_saving_products',
+      data: seeded,
+      updated_at: new Date().toISOString()
+    })
+    .then(() => {}, () => {});
+
+  return seeded;
+}
+
+async function fetchLoanProductsInternal(): Promise<LoanProduct[]> {
+  const settingsMap = new Map<string, Partial<LoanProduct>>();
+  let settingsArray: LoanProduct[] = [];
+  try {
+    const { data: settingsRow } = await supabase
+      .from('settings')
+      .select('data')
+      .eq('id', 'saccos_loan_products')
+      .maybeSingle();
+    if (Array.isArray(settingsRow?.data)) {
+      settingsArray = (settingsRow.data as LoanProduct[]).map(normalizeLoanProduct);
+      settingsArray.forEach(lp => {
+        if (lp?.id) settingsMap.set(lp.id, lp);
+      });
+    }
+  } catch {
+    // ignore
+  }
+
+  const localSaved = getLocal<LoanProduct[]>(LOAN_STORAGE_KEY, []).map(normalizeLoanProduct);
+  const localMap = new Map<string, Partial<LoanProduct>>();
+  localSaved.forEach(lp => {
+    if (lp?.id) localMap.set(lp.id, lp);
+  });
+
+  // 1. Try dedicated table first
+  try {
+    const { data, error } = await supabase
+      .from('loan_products')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (!error && Array.isArray(data) && data.length > 0) {
+      const mapped: LoanProduct[] = (data as SupabaseLoanRecord[]).map(item => {
+        const settingsMeta = settingsMap.get(item.id);
+        const localMeta = localMap.get(item.id);
+        const itemUpdatedMs = toMillis(item.updated_at ?? item.updatedAt);
+        const settingsUpdatedMs = toMillis(settingsMeta?.updatedAt);
+        const localUpdatedMs = toMillis(localMeta?.updatedAt);
+
+        const bestMeta = settingsUpdatedMs >= localUpdatedMs ? (settingsMeta || localMeta || {}) : (localMeta || settingsMeta || {});
+        const metaIsStrictlyNewer = Math.max(settingsUpdatedMs, localUpdatedMs) > itemUpdatedMs + 1000;
+        const hasDedicatedMf = item.show_in_mf !== undefined && item.show_in_mf !== null;
+
+        const showInMicrofinance = hasDedicatedMf && !metaIsStrictlyNewer
+          ? Boolean(item.show_in_mf)
+          : Boolean(
+              item.showInMicrofinance ??
+              bestMeta.showInMicrofinance ??
+              (hasDedicatedMf ? item.show_in_mf : undefined) ??
+              item.show_in_mf_fd ??
+              bestMeta.showInMicrofinanceAndFD
+            );
+
+        return normalizeLoanProduct({
+          id: item.id,
+          name: item.name,
+          nameNp: item.name_np || item.nameNp || bestMeta.nameNp || '',
+          interestRate: Number(item.interest_rate ?? item.interestRate ?? 0),
+          installment: item.installment || 'Monthly',
+          maxTenureMonths: item.max_tenure_months !== undefined ? Number(item.max_tenure_months) : item.maxTenureMonths,
+          description: item.description || '',
+          status: item.status || 'Active',
+          showInMicrofinance,
+          showInMicrofinanceAndFD: showInMicrofinance,
+          createdAt: item.created_at || item.createdAt || Date.now(),
+          updatedAt: item.updated_at || item.updatedAt || Date.now(),
+          createdBy: item.created_by || item.createdBy
+        });
+      });
+      cachedLoanProducts = mapped;
+      setLocal(LOAN_STORAGE_KEY, mapped);
+      return mapped;
+    }
+  } catch (e) {
+    console.debug('Direct loan_products table not available, falling back:', e);
+  }
+
+  // 2. Try settings table container
+  if (settingsArray.length > 0) {
+    cachedLoanProducts = settingsArray;
+    setLocal(LOAN_STORAGE_KEY, settingsArray);
+    return settingsArray;
+  }
+
+  // 3. Fallback to localStorage or seed defaults
+  if (localSaved && localSaved.length > 0) {
+    cachedLoanProducts = localSaved;
+    return localSaved;
+  }
+
+  // Seed defaults
+  const seeded = DEFAULT_LOAN_PRODUCTS.map(normalizeLoanProduct);
+  cachedLoanProducts = seeded;
+  setLocal(LOAN_STORAGE_KEY, seeded);
+  supabase
+    .from('settings')
+    .upsert({
+      id: 'saccos_loan_products',
+      data: seeded,
+      updated_at: new Date().toISOString()
+    })
+    .then(() => {}, () => {});
+
+  return seeded;
+}
+
+async function upsertSavingProductRow(payload: SavingProduct, nowIso: string): Promise<void> {
+  const showMf = Boolean(payload.showInMicrofinance);
+  const showFd = Boolean(payload.showInFD);
+  const combinedMfFd = showMf || showFd;
+  const createdAtIso = typeof payload.createdAt === 'number' ? new Date(payload.createdAt).toISOString() : payload.createdAt;
+
+  // Attempt 1: Full modern schema with separate show_in_mf & show_in_fd columns + legacy show_in_mf_fd + name_np
+  const { error: err1 } = await supabase.from('saving_products').upsert({
+    id: payload.id,
+    name: payload.name,
+    name_np: payload.nameNp || '',
+    interest_rate: payload.interestRate,
+    capitalization: payload.capitalization,
+    minimum_balance: payload.minimumBalance ?? 0,
+    description: payload.description || '',
+    status: payload.status,
+    show_in_mf: showMf,
+    show_in_fd: showFd,
+    show_in_mf_fd: combinedMfFd,
+    created_at: createdAtIso,
+    updated_at: nowIso,
+    created_by: payload.createdBy || ''
+  });
+  if (!err1) return;
+
+  // Attempt 2: Pre-migration schema with show_in_mf_fd + name_np (before show_in_mf / show_in_fd SQL is run)
+  const { error: err2 } = await supabase.from('saving_products').upsert({
+    id: payload.id,
+    name: payload.name,
+    name_np: payload.nameNp || '',
+    interest_rate: payload.interestRate,
+    capitalization: payload.capitalization,
+    minimum_balance: payload.minimumBalance ?? 0,
+    description: payload.description || '',
+    status: payload.status,
+    show_in_mf_fd: combinedMfFd,
+    created_at: createdAtIso,
+    updated_at: nowIso,
+    created_by: payload.createdBy || ''
+  });
+  if (!err2) return;
+
+  // Attempt 3: Minimal legacy schema without name_np or show_in_mf_fd
+  await supabase.from('saving_products').upsert({
+    id: payload.id,
+    name: payload.name,
+    interest_rate: payload.interestRate,
+    capitalization: payload.capitalization,
+    minimum_balance: payload.minimumBalance ?? 0,
+    description: payload.description || '',
+    status: payload.status,
+    created_at: createdAtIso,
+    updated_at: nowIso,
+    created_by: payload.createdBy || ''
+  });
+}
+
+async function upsertLoanProductRow(payload: LoanProduct, nowIso: string): Promise<void> {
+  const showMf = Boolean(payload.showInMicrofinance ?? payload.showInMicrofinanceAndFD);
+  const createdAtIso = typeof payload.createdAt === 'number' ? new Date(payload.createdAt).toISOString() : payload.createdAt;
+
+  // Attempt 1: Full modern schema with show_in_mf + show_in_mf_fd + name_np
+  const { error: err1 } = await supabase.from('loan_products').upsert({
+    id: payload.id,
+    name: payload.name,
+    name_np: payload.nameNp || '',
+    interest_rate: payload.interestRate,
+    installment: payload.installment,
+    max_tenure_months: payload.maxTenureMonths ?? 36,
+    description: payload.description || '',
+    status: payload.status,
+    show_in_mf: showMf,
+    show_in_mf_fd: showMf,
+    created_at: createdAtIso,
+    updated_at: nowIso,
+    created_by: payload.createdBy || ''
+  });
+  if (!err1) return;
+
+  // Attempt 2: Pre-migration schema with show_in_mf_fd + name_np
+  const { error: err2 } = await supabase.from('loan_products').upsert({
+    id: payload.id,
+    name: payload.name,
+    name_np: payload.nameNp || '',
+    interest_rate: payload.interestRate,
+    installment: payload.installment,
+    max_tenure_months: payload.maxTenureMonths ?? 36,
+    description: payload.description || '',
+    status: payload.status,
+    show_in_mf_fd: showMf,
+    created_at: createdAtIso,
+    updated_at: nowIso,
+    created_by: payload.createdBy || ''
+  });
+  if (!err2) return;
+
+  // Attempt 3: Minimal legacy schema
+  await supabase.from('loan_products').upsert({
+    id: payload.id,
+    name: payload.name,
+    interest_rate: payload.interestRate,
+    installment: payload.installment,
+    max_tenure_months: payload.maxTenureMonths ?? 36,
+    description: payload.description || '',
+    status: payload.status,
+    created_at: createdAtIso,
+    updated_at: nowIso,
+    created_by: payload.createdBy || ''
+  });
+}
+
 export const productService = {
   // ==========================================================================
   // SAVING PRODUCTS
   // ==========================================================================
   async getSavingProducts(): Promise<SavingProduct[]> {
-    // Load settings backup container too so Nepali names/MF flags always merge cleanly
-    const settingsMap = new Map<string, Partial<SavingProduct>>();
-    try {
-      const { data: settingsRow } = await supabase
-        .from('settings')
-        .select('data')
-        .eq('id', 'saccos_saving_products')
-        .maybeSingle();
-      if (Array.isArray(settingsRow?.data)) {
-        (settingsRow.data as SavingProduct[]).forEach(sp => {
-          if (sp?.id) settingsMap.set(sp.id, sp);
-        });
+    // If a save/delete mutation is actively syncing to Supabase, return the latest
+    // in-memory/local snapshot so concurrent listeners never read stale remote rows.
+    if (savingMutationInFlight > 0) {
+      if (cachedSavingProducts && cachedSavingProducts.length > 0) {
+        return cachedSavingProducts;
       }
-    } catch {
-      // ignore
+      const local = getLocal<SavingProduct[]>(SAVING_STORAGE_KEY, []);
+      if (local.length > 0) return local.map(normalizeSavingProduct);
     }
-
-    const localSaved = getLocal<SavingProduct[]>(SAVING_STORAGE_KEY, []);
-    const localMap = new Map<string, Partial<SavingProduct>>();
-    localSaved.forEach(lp => {
-      if (lp?.id) localMap.set(lp.id, lp);
-    });
-
-    // 1. Try dedicated table first
-    try {
-      const { data, error } = await supabase
-        .from('saving_products')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (!error && Array.isArray(data) && data.length > 0) {
-        const mapped: SavingProduct[] = (data as SupabaseSavingRecord[]).map(item => {
-          const fallbackMeta = settingsMap.get(item.id) || localMap.get(item.id) || {};
-          return {
-            id: item.id,
-            name: item.name,
-            nameNp: item.name_np || item.nameNp || fallbackMeta.nameNp || '',
-            interestRate: Number(item.interest_rate ?? item.interestRate ?? 0),
-            capitalization: item.capitalization || 'Quarterly',
-            minimumBalance: item.minimum_balance !== undefined ? Number(item.minimum_balance) : item.minimumBalance,
-            description: item.description || '',
-            status: item.status || 'Active',
-            showInMicrofinanceAndFD: Boolean(item.showInMicrofinanceAndFD ?? item.show_in_mf_fd ?? fallbackMeta.showInMicrofinanceAndFD),
-            createdAt: item.created_at || item.createdAt || Date.now(),
-            updatedAt: item.updated_at || item.updatedAt || Date.now(),
-            createdBy: item.created_by || item.createdBy
-          };
-        });
-        setLocal(SAVING_STORAGE_KEY, mapped);
-        return mapped;
-      }
-    } catch (e) {
-      console.debug('Direct saving_products table not available, falling back:', e);
-    }
-
-    // 2. Try settings table container
-    try {
-      const { data, error } = await supabase
-        .from('settings')
-        .select('*')
-        .eq('id', 'saccos_saving_products')
-        .maybeSingle();
-
-      if (!error && data?.data && Array.isArray(data.data) && data.data.length > 0) {
-        setLocal(SAVING_STORAGE_KEY, data.data);
-        return data.data as SavingProduct[];
-      }
-    } catch {
-      // Proceed to local
-    }
-
-    // 3. Fallback to localStorage or seed defaults
-    const local = getLocal<SavingProduct[]>(SAVING_STORAGE_KEY, []);
-    if (local && local.length > 0) {
-      return local;
-    }
-
-    // Seed defaults
-    setLocal(SAVING_STORAGE_KEY, DEFAULT_SAVING_PRODUCTS);
-    // Background sync to settings
-    supabase
-      .from('settings')
-      .upsert({
-        id: 'saccos_saving_products',
-        data: DEFAULT_SAVING_PRODUCTS,
-        updated_at: new Date().toISOString()
-      })
-      .then(() => {}, () => {});
-
-    return DEFAULT_SAVING_PRODUCTS;
+    return fetchSavingProductsInternal();
   },
 
   async saveSavingProduct(product: SavingProduct): Promise<SavingProduct[]> {
-    const existing = await this.getSavingProducts();
-    const index = existing.findIndex(p => p.id === product.id);
-    let updated: SavingProduct[];
+    return enqueueSavingMutation(async () => {
+      const existing = cachedSavingProducts ?? (await fetchSavingProductsInternal());
+      const now = Date.now();
+      const nowIso = new Date(now).toISOString();
 
-    const now = Date.now();
-    const payload: SavingProduct = {
-      ...product,
-      updatedAt: now,
-      createdAt: product.createdAt || now
-    };
+      const showInMicrofinance = Boolean(product.showInMicrofinance ?? (product.showInFD === undefined ? product.showInMicrofinanceAndFD : false));
+      const showInFD = Boolean(product.showInFD ?? (product.showInMicrofinance === undefined ? product.showInMicrofinanceAndFD : false));
 
-    if (index >= 0) {
-      updated = existing.map(p => (p.id === product.id ? payload : p));
-    } else {
-      updated = [payload, ...existing];
-    }
+      const payload: SavingProduct = {
+        ...product,
+        showInMicrofinance,
+        showInFD,
+        showInMicrofinanceAndFD: showInMicrofinance || showInFD,
+        updatedAt: now,
+        createdAt: product.createdAt || now
+      };
 
-    // 1. Instant local persistence
-    setLocal(SAVING_STORAGE_KEY, updated);
+      const index = existing.findIndex(p => p.id === product.id);
+      const updated = index >= 0
+        ? existing.map(p => (p.id === product.id ? payload : p))
+        : [payload, ...existing];
 
-    // 2. Save to dedicated Supabase table if available
-    try {
-      const { error: saveErr } = await supabase.from('saving_products').upsert({
-        id: payload.id,
-        name: payload.name,
-        name_np: payload.nameNp || '',
-        interest_rate: payload.interestRate,
-        capitalization: payload.capitalization,
-        minimum_balance: payload.minimumBalance ?? 0,
-        description: payload.description || '',
-        status: payload.status,
-        created_at: typeof payload.createdAt === 'number' ? new Date(payload.createdAt).toISOString() : payload.createdAt,
-        updated_at: new Date(now).toISOString(),
-        created_by: payload.createdBy || ''
-      });
-      if (saveErr) {
-        await supabase.from('saving_products').upsert({
-          id: payload.id,
-          name: payload.name,
-          interest_rate: payload.interestRate,
-          capitalization: payload.capitalization,
-          minimum_balance: payload.minimumBalance ?? 0,
-          description: payload.description || '',
-          status: payload.status,
-          created_at: typeof payload.createdAt === 'number' ? new Date(payload.createdAt).toISOString() : payload.createdAt,
-          updated_at: new Date(now).toISOString(),
-          created_by: payload.createdBy || ''
-        });
+      // 1. Instant in-memory & local persistence
+      cachedSavingProducts = updated;
+      setLocal(SAVING_STORAGE_KEY, updated);
+
+      // 2. Save to dedicated Supabase table if available
+      try {
+        await upsertSavingProductRow(payload, nowIso);
+      } catch (e) {
+        console.warn('Dedicated saving_products table upsert notice:', e);
       }
-    } catch (e) {
-      console.warn('Dedicated saving_products table upsert notice:', e);
-    }
 
-    // 3. Dual-save to settings container in Supabase for cloud resilience
-    try {
-      await supabase.from('settings').upsert({
-        id: 'saccos_saving_products',
-        data: updated,
-        updated_at: new Date(now).toISOString()
-      });
-    } catch (e) {
-      console.warn('Settings saving products sync notice:', e);
-    }
+      // 3. Dual-save to settings container in Supabase for cloud resilience
+      try {
+        await supabase.from('settings').upsert({
+          id: 'saccos_saving_products',
+          data: updated,
+          updated_at: nowIso
+        });
+      } catch (e) {
+        console.warn('Settings saving products sync notice:', e);
+      }
 
-    // Notify other components
-    try {
-      window.dispatchEvent(new Event('savingProductsUpdated'));
-      window.dispatchEvent(new Event('storage'));
-    } catch (e) {
-      console.debug('Event dispatch notice:', e);
-    }
+      // Notify other components after persistence finishes
+      try {
+        window.dispatchEvent(new Event('savingProductsUpdated'));
+        window.dispatchEvent(new Event('storage'));
+      } catch (e) {
+        console.debug('Event dispatch notice:', e);
+      }
 
-    return updated;
+      return updated;
+    });
   },
 
   async deleteSavingProduct(id: string): Promise<SavingProduct[]> {
-    const existing = await this.getSavingProducts();
-    const updated = existing.filter(p => p.id !== id);
+    return enqueueSavingMutation(async () => {
+      const existing = cachedSavingProducts ?? (await fetchSavingProductsInternal());
+      const updated = existing.filter(p => p.id !== id);
 
-    // 1. Instant local persistence
-    setLocal(SAVING_STORAGE_KEY, updated);
+      // 1. Instant in-memory & local persistence
+      cachedSavingProducts = updated;
+      setLocal(SAVING_STORAGE_KEY, updated);
 
-    // 2. Delete from Supabase dedicated table
-    try {
-      await supabase.from('saving_products').delete().eq('id', id);
-    } catch (e) {
-      console.warn('Dedicated saving_products table delete notice:', e);
-    }
+      // 2. Delete from Supabase dedicated table
+      try {
+        await supabase.from('saving_products').delete().eq('id', id);
+      } catch (e) {
+        console.warn('Dedicated saving_products table delete notice:', e);
+      }
 
-    // 3. Update Supabase settings container
-    try {
-      await supabase.from('settings').upsert({
-        id: 'saccos_saving_products',
-        data: updated,
-        updated_at: new Date().toISOString()
-      });
-    } catch (e) {
-      console.warn('Settings saving products delete sync notice:', e);
-    }
+      // 3. Update Supabase settings container
+      try {
+        await supabase.from('settings').upsert({
+          id: 'saccos_saving_products',
+          data: updated,
+          updated_at: new Date().toISOString()
+        });
+      } catch (e) {
+        console.warn('Settings saving products delete sync notice:', e);
+      }
 
-    // Notify other components
-    try {
-      window.dispatchEvent(new Event('savingProductsUpdated'));
-      window.dispatchEvent(new Event('storage'));
-    } catch (e) {
-      console.debug('Event dispatch notice:', e);
-    }
+      // Notify other components
+      try {
+        window.dispatchEvent(new Event('savingProductsUpdated'));
+        window.dispatchEvent(new Event('storage'));
+      } catch (e) {
+        console.debug('Event dispatch notice:', e);
+      }
 
-    return updated;
+      return updated;
+    });
   },
 
   // ==========================================================================
   // LOAN PRODUCTS
   // ==========================================================================
   async getLoanProducts(): Promise<LoanProduct[]> {
-    const settingsMap = new Map<string, Partial<LoanProduct>>();
-    try {
-      const { data: settingsRow } = await supabase
-        .from('settings')
-        .select('data')
-        .eq('id', 'saccos_loan_products')
-        .maybeSingle();
-      if (Array.isArray(settingsRow?.data)) {
-        (settingsRow.data as LoanProduct[]).forEach(lp => {
-          if (lp?.id) settingsMap.set(lp.id, lp);
-        });
+    if (loanMutationInFlight > 0) {
+      if (cachedLoanProducts && cachedLoanProducts.length > 0) {
+        return cachedLoanProducts;
       }
-    } catch {
-      // ignore
+      const local = getLocal<LoanProduct[]>(LOAN_STORAGE_KEY, []);
+      if (local.length > 0) return local.map(normalizeLoanProduct);
     }
-
-    const localSaved = getLocal<LoanProduct[]>(LOAN_STORAGE_KEY, []);
-    const localMap = new Map<string, Partial<LoanProduct>>();
-    localSaved.forEach(lp => {
-      if (lp?.id) localMap.set(lp.id, lp);
-    });
-
-    // 1. Try dedicated table first
-    try {
-      const { data, error } = await supabase
-        .from('loan_products')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (!error && Array.isArray(data) && data.length > 0) {
-        const mapped: LoanProduct[] = (data as SupabaseLoanRecord[]).map(item => {
-          const fallbackMeta = settingsMap.get(item.id) || localMap.get(item.id) || {};
-          return {
-            id: item.id,
-            name: item.name,
-            nameNp: item.name_np || item.nameNp || fallbackMeta.nameNp || '',
-            interestRate: Number(item.interest_rate ?? item.interestRate ?? 0),
-            installment: item.installment || 'Monthly',
-            maxTenureMonths: item.max_tenure_months !== undefined ? Number(item.max_tenure_months) : item.maxTenureMonths,
-            description: item.description || '',
-            status: item.status || 'Active',
-            showInMicrofinanceAndFD: Boolean(item.showInMicrofinanceAndFD ?? item.show_in_mf_fd ?? fallbackMeta.showInMicrofinanceAndFD),
-            createdAt: item.created_at || item.createdAt || Date.now(),
-            updatedAt: item.updated_at || item.updatedAt || Date.now(),
-            createdBy: item.created_by || item.createdBy
-          };
-        });
-        setLocal(LOAN_STORAGE_KEY, mapped);
-        return mapped;
-      }
-    } catch (e) {
-      console.debug('Direct loan_products table not available, falling back:', e);
-    }
-
-    // 2. Try settings table container
-    try {
-      const { data, error } = await supabase
-        .from('settings')
-        .select('*')
-        .eq('id', 'saccos_loan_products')
-        .maybeSingle();
-
-      if (!error && data?.data && Array.isArray(data.data) && data.data.length > 0) {
-        setLocal(LOAN_STORAGE_KEY, data.data);
-        return data.data as LoanProduct[];
-      }
-    } catch {
-      // Proceed to local
-    }
-
-    // 3. Fallback to localStorage or seed defaults
-    const local = getLocal<LoanProduct[]>(LOAN_STORAGE_KEY, []);
-    if (local && local.length > 0) {
-      return local;
-    }
-
-    // Seed defaults
-    setLocal(LOAN_STORAGE_KEY, DEFAULT_LOAN_PRODUCTS);
-    // Background sync to settings
-    supabase
-      .from('settings')
-      .upsert({
-        id: 'saccos_loan_products',
-        data: DEFAULT_LOAN_PRODUCTS,
-        updated_at: new Date().toISOString()
-      })
-      .then(() => {}, () => {});
-
-    return DEFAULT_LOAN_PRODUCTS;
+    return fetchLoanProductsInternal();
   },
 
   async saveLoanProduct(product: LoanProduct): Promise<LoanProduct[]> {
-    const existing = await this.getLoanProducts();
-    const index = existing.findIndex(p => p.id === product.id);
-    let updated: LoanProduct[];
+    return enqueueLoanMutation(async () => {
+      const existing = cachedLoanProducts ?? (await fetchLoanProductsInternal());
+      const now = Date.now();
+      const nowIso = new Date(now).toISOString();
 
-    const now = Date.now();
-    const payload: LoanProduct = {
-      ...product,
-      updatedAt: now,
-      createdAt: product.createdAt || now
-    };
+      const showInMicrofinance = Boolean(product.showInMicrofinance ?? product.showInMicrofinanceAndFD);
+      const payload: LoanProduct = {
+        ...product,
+        showInMicrofinance,
+        showInMicrofinanceAndFD: showInMicrofinance,
+        updatedAt: now,
+        createdAt: product.createdAt || now
+      };
 
-    if (index >= 0) {
-      updated = existing.map(p => (p.id === product.id ? payload : p));
-    } else {
-      updated = [payload, ...existing];
-    }
+      const index = existing.findIndex(p => p.id === product.id);
+      const updated = index >= 0
+        ? existing.map(p => (p.id === product.id ? payload : p))
+        : [payload, ...existing];
 
-    // 1. Instant local persistence
-    setLocal(LOAN_STORAGE_KEY, updated);
+      // 1. Instant in-memory & local persistence
+      cachedLoanProducts = updated;
+      setLocal(LOAN_STORAGE_KEY, updated);
 
-    // 2. Save to dedicated Supabase table if available
-    try {
-      const { error: saveErr } = await supabase.from('loan_products').upsert({
-        id: payload.id,
-        name: payload.name,
-        name_np: payload.nameNp || '',
-        interest_rate: payload.interestRate,
-        installment: payload.installment,
-        max_tenure_months: payload.maxTenureMonths ?? 36,
-        description: payload.description || '',
-        status: payload.status,
-        created_at: typeof payload.createdAt === 'number' ? new Date(payload.createdAt).toISOString() : payload.createdAt,
-        updated_at: new Date(now).toISOString(),
-        created_by: payload.createdBy || ''
-      });
-      if (saveErr) {
-        await supabase.from('loan_products').upsert({
-          id: payload.id,
-          name: payload.name,
-          interest_rate: payload.interestRate,
-          installment: payload.installment,
-          max_tenure_months: payload.maxTenureMonths ?? 36,
-          description: payload.description || '',
-          status: payload.status,
-          created_at: typeof payload.createdAt === 'number' ? new Date(payload.createdAt).toISOString() : payload.createdAt,
-          updated_at: new Date(now).toISOString(),
-          created_by: payload.createdBy || ''
-        });
+      // 2. Save to dedicated Supabase table if available
+      try {
+        await upsertLoanProductRow(payload, nowIso);
+      } catch (e) {
+        console.warn('Dedicated loan_products table upsert notice:', e);
       }
-    } catch (e) {
-      console.warn('Dedicated loan_products table upsert notice:', e);
-    }
 
-    // 3. Dual-save to settings container in Supabase
-    try {
-      await supabase.from('settings').upsert({
-        id: 'saccos_loan_products',
-        data: updated,
-        updated_at: new Date(now).toISOString()
-      });
-    } catch (e) {
-      console.warn('Settings loan products sync notice:', e);
-    }
+      // 3. Dual-save to settings container in Supabase
+      try {
+        await supabase.from('settings').upsert({
+          id: 'saccos_loan_products',
+          data: updated,
+          updated_at: nowIso
+        });
+      } catch (e) {
+        console.warn('Settings loan products sync notice:', e);
+      }
 
-    // Notify other components
-    try {
-      window.dispatchEvent(new Event('loanProductsUpdated'));
-      window.dispatchEvent(new Event('storage'));
-    } catch (e) {
-      console.debug('Event dispatch notice:', e);
-    }
+      // Notify other components
+      try {
+        window.dispatchEvent(new Event('loanProductsUpdated'));
+        window.dispatchEvent(new Event('storage'));
+      } catch (e) {
+        console.debug('Event dispatch notice:', e);
+      }
 
-    return updated;
+      return updated;
+    });
   },
 
   async deleteLoanProduct(id: string): Promise<LoanProduct[]> {
-    const existing = await this.getLoanProducts();
-    const updated = existing.filter(p => p.id !== id);
+    return enqueueLoanMutation(async () => {
+      const existing = cachedLoanProducts ?? (await fetchLoanProductsInternal());
+      const updated = existing.filter(p => p.id !== id);
 
-    // 1. Instant local persistence
-    setLocal(LOAN_STORAGE_KEY, updated);
+      // 1. Instant in-memory & local persistence
+      cachedLoanProducts = updated;
+      setLocal(LOAN_STORAGE_KEY, updated);
 
-    // 2. Delete from Supabase dedicated table
-    try {
-      await supabase.from('loan_products').delete().eq('id', id);
-    } catch (e) {
-      console.warn('Dedicated loan_products table delete notice:', e);
-    }
+      // 2. Delete from Supabase dedicated table
+      try {
+        await supabase.from('loan_products').delete().eq('id', id);
+      } catch (e) {
+        console.warn('Dedicated loan_products table delete notice:', e);
+      }
 
-    // 3. Update Supabase settings container
-    try {
-      await supabase.from('settings').upsert({
-        id: 'saccos_loan_products',
-        data: updated,
-        updated_at: new Date().toISOString()
-      });
-    } catch (e) {
-      console.warn('Settings loan products delete sync notice:', e);
-    }
+      // 3. Update Supabase settings container
+      try {
+        await supabase.from('settings').upsert({
+          id: 'saccos_loan_products',
+          data: updated,
+          updated_at: new Date().toISOString()
+        });
+      } catch (e) {
+        console.warn('Settings loan products delete sync notice:', e);
+      }
 
-    // Notify other components
-    try {
-      window.dispatchEvent(new Event('loanProductsUpdated'));
-      window.dispatchEvent(new Event('storage'));
-    } catch (e) {
-      console.debug('Event dispatch notice:', e);
-    }
+      // Notify other components
+      try {
+        window.dispatchEvent(new Event('loanProductsUpdated'));
+        window.dispatchEvent(new Event('storage'));
+      } catch (e) {
+        console.debug('Event dispatch notice:', e);
+      }
 
-    return updated;
+      return updated;
+    });
   }
 };

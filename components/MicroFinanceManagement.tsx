@@ -277,7 +277,9 @@ export const MicroFinanceManagement: React.FC = () => {
   }, []);
 
   const filteredMfSavingProducts = useMemo(() => {
-    const enabled = savingProductsList.filter(p => p.showInMicrofinanceAndFD && p.status !== 'Inactive');
+    const enabled = savingProductsList.filter(
+      p => Boolean(p.showInMicrofinance ?? p.showInMicrofinanceAndFD) && p.status !== 'Inactive'
+    );
     return enabled.length > 0 ? enabled : savingProductsList.filter(p => p.status !== 'Inactive');
   }, [savingProductsList]);
 
@@ -316,7 +318,9 @@ export const MicroFinanceManagement: React.FC = () => {
   }, []);
 
   const filteredMfLoanProducts = useMemo(() => {
-    const enabled = loanProductsList.filter(p => p.showInMicrofinanceAndFD && p.status !== 'Inactive');
+    const enabled = loanProductsList.filter(
+      p => Boolean(p.showInMicrofinance ?? p.showInMicrofinanceAndFD) && p.status !== 'Inactive'
+    );
     return enabled.length > 0 ? enabled : loanProductsList.filter(p => p.status !== 'Inactive');
   }, [loanProductsList]);
 

@@ -60,7 +60,8 @@ export const SavingProductManagement: React.FC<SavingProductManagementProps> = (
     minimumBalance: string;
     description: string;
     status: 'Active' | 'Inactive';
-    showInMicrofinanceAndFD: boolean;
+    showInMicrofinance: boolean;
+    showInFD: boolean;
   }>({
     name: '',
     nameNp: '',
@@ -69,27 +70,32 @@ export const SavingProductManagement: React.FC<SavingProductManagementProps> = (
     minimumBalance: '500',
     description: '',
     status: 'Active',
-    showInMicrofinanceAndFD: false
+    showInMicrofinance: false,
+    showInFD: false
   });
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const toggleEpochRef = React.useRef(0);
 
-  const loadProducts = useCallback(async () => {
+  const loadProducts = useCallback(async (silent = false) => {
+    const startEpoch = toggleEpochRef.current;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const data = await productService.getSavingProducts();
-      setProducts(data);
-      if (onProductCountChange) onProductCountChange(data.length);
+      if (toggleEpochRef.current === startEpoch) {
+        setProducts(data);
+        if (onProductCountChange) onProductCountChange(data.length);
+      }
     } catch (err) {
       console.error('Failed to load saving products:', err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [onProductCountChange]);
 
   useEffect(() => {
     loadProducts();
-    const handleUpdate = () => loadProducts();
+    const handleUpdate = () => loadProducts(true);
     window.addEventListener('savingProductsUpdated', handleUpdate);
     return () => window.removeEventListener('savingProductsUpdated', handleUpdate);
   }, [loadProducts]);
@@ -119,7 +125,8 @@ export const SavingProductManagement: React.FC<SavingProductManagementProps> = (
       minimumBalance: '500',
       description: '',
       status: 'Active',
-      showInMicrofinanceAndFD: false
+      showInMicrofinance: false,
+      showInFD: false
     });
     setFormError(null);
     setSelectedProduct(null);
@@ -129,6 +136,8 @@ export const SavingProductManagement: React.FC<SavingProductManagementProps> = (
   const handleOpenEdit = (product: SavingProduct) => {
     if (!isAdmin) return;
     setSelectedProduct(product);
+    const mfEnabled = Boolean(product.showInMicrofinance ?? product.showInMicrofinanceAndFD);
+    const fdEnabled = Boolean(product.showInFD ?? product.showInMicrofinanceAndFD);
     setFormData({
       id: product.id,
       name: product.name,
@@ -138,28 +147,48 @@ export const SavingProductManagement: React.FC<SavingProductManagementProps> = (
       minimumBalance: product.minimumBalance !== undefined ? product.minimumBalance.toString() : '',
       description: product.description || '',
       status: product.status || 'Active',
-      showInMicrofinanceAndFD: Boolean(product.showInMicrofinanceAndFD)
+      showInMicrofinance: mfEnabled,
+      showInFD: fdEnabled
     });
     setFormError(null);
     setIsFormModalOpen(true);
   };
 
-  const handleToggleMFFD = async (product: SavingProduct) => {
+  const handleToggleProductChannel = async (
+    product: SavingProduct,
+    channel: 'showInMicrofinance' | 'showInFD'
+  ) => {
     if (!isAdmin) return;
     if (isDayEndedForBranch()) {
       alert(getDayEndedBlockMessage());
       return;
     }
+
+    const myEpoch = ++toggleEpochRef.current;
+    const currentMf = Boolean(product.showInMicrofinance ?? product.showInMicrofinanceAndFD);
+    const currentFd = Boolean(product.showInFD ?? product.showInMicrofinanceAndFD);
+    const nextMf = channel === 'showInMicrofinance' ? !currentMf : currentMf;
+    const nextFd = channel === 'showInFD' ? !currentFd : currentFd;
+
+    const updatedProduct: SavingProduct = {
+      ...product,
+      showInMicrofinance: nextMf,
+      showInFD: nextFd,
+      showInMicrofinanceAndFD: nextMf || nextFd,
+      updatedAt: Date.now()
+    };
+
+    // Optimistic immediate UI update so user can check multiple products smoothly
+    setProducts(prev => prev.map(p => (p.id === product.id ? updatedProduct : p)));
+
     try {
-      const updatedProduct: SavingProduct = {
-        ...product,
-        showInMicrofinanceAndFD: !product.showInMicrofinanceAndFD,
-        updatedAt: Date.now()
-      };
       const updated = await productService.saveSavingProduct(updatedProduct);
-      setProducts(updated);
+      if (toggleEpochRef.current === myEpoch) {
+        setProducts(updated);
+      }
     } catch (err) {
-      console.error('Failed to toggle MF/FD:', err);
+      console.error(`Failed to toggle ${channel}:`, err);
+      loadProducts(true);
     }
   };
 
@@ -207,7 +236,9 @@ export const SavingProductManagement: React.FC<SavingProductManagementProps> = (
         minimumBalance: formData.minimumBalance ? parseFloat(formData.minimumBalance) : 0,
         description: formData.description.trim(),
         status: formData.status,
-        showInMicrofinanceAndFD: formData.showInMicrofinanceAndFD,
+        showInMicrofinance: formData.showInMicrofinance,
+        showInFD: formData.showInFD,
+        showInMicrofinanceAndFD: formData.showInMicrofinance || formData.showInFD,
         createdAt: selectedProduct?.createdAt || Date.now(),
         updatedAt: Date.now(),
         createdBy: user?.username || 'admin'
@@ -286,7 +317,8 @@ export const SavingProductManagement: React.FC<SavingProductManagementProps> = (
                 <th className="py-3 px-4 text-center">Interest</th>
                 <th className="py-3 px-4 text-center">Capitalization</th>
                 <th className="py-3 px-4 text-center">Min. Balance</th>
-                <th className="py-3 px-3 text-center">MF & FD</th>
+                <th className="py-3 px-3 text-center">MF</th>
+                <th className="py-3 px-3 text-center">FD</th>
                 <th className="py-3 px-4 text-center">Status</th>
                 <th className="py-3 px-4 text-right w-36">Action</th>
               </tr>
@@ -294,14 +326,14 @@ export const SavingProductManagement: React.FC<SavingProductManagementProps> = (
             <tbody className="divide-y divide-slate-100 text-xs font-medium text-slate-700">
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400">
+                  <td colSpan={9} className="py-12 text-center text-slate-400">
                     <div className="inline-block w-6 h-6 border-2 border-[#006400] border-t-transparent rounded-full animate-spin mb-2" />
                     <div>Loading saving products...</div>
                   </td>
                 </tr>
               ) : paginatedProducts.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400">
+                  <td colSpan={9} className="py-12 text-center text-slate-400">
                     <PiggyBank size={32} className="mx-auto mb-2 text-slate-300" />
                     <div className="font-bold text-slate-600">No saving products found</div>
                     <p className="text-[11px] text-slate-400 mt-1">
@@ -312,6 +344,8 @@ export const SavingProductManagement: React.FC<SavingProductManagementProps> = (
               ) : (
                 paginatedProducts.map((product, idx) => {
                   const serialNumber = (currentPage - 1) * pageSize + idx + 1;
+                  const isMfEnabled = Boolean(product.showInMicrofinance ?? product.showInMicrofinanceAndFD);
+                  const isFdEnabled = Boolean(product.showInFD ?? product.showInMicrofinanceAndFD);
                   return (
                     <tr 
                       key={product.id}
@@ -347,14 +381,29 @@ export const SavingProductManagement: React.FC<SavingProductManagementProps> = (
                         <label className={`inline-flex items-center gap-1.5 ${!isAdmin || isDayEnded ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
                           <input
                             type="checkbox"
-                            checked={Boolean(product.showInMicrofinanceAndFD)}
-                            onChange={() => handleToggleMFFD(product)}
+                            checked={isMfEnabled}
+                            onChange={() => handleToggleProductChannel(product, 'showInMicrofinance')}
                             disabled={!isAdmin || isDayEnded}
                             className="w-4 h-4 rounded border-slate-300 text-[#006400] focus:ring-[#006400] cursor-pointer disabled:cursor-not-allowed"
-                            title={isDayEnded ? getDayEndedBlockMessage() : 'Tick to show in Microfinance & FD Certificate'}
+                            title={isDayEnded ? getDayEndedBlockMessage() : 'Tick to show in Microfinance (MF)'}
                           />
-                          <span className={`text-[10px] font-black uppercase tracking-tight ${product.showInMicrofinanceAndFD ? 'text-emerald-700' : 'text-slate-400'}`}>
-                            {product.showInMicrofinanceAndFD ? 'Yes' : 'No'}
+                          <span className={`text-[10px] font-black uppercase tracking-tight ${isMfEnabled ? 'text-emerald-700' : 'text-slate-400'}`}>
+                            {isMfEnabled ? 'Yes' : 'No'}
+                          </span>
+                        </label>
+                      </td>
+                      <td className="py-3.5 px-3 text-center">
+                        <label className={`inline-flex items-center gap-1.5 ${!isAdmin || isDayEnded ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
+                          <input
+                            type="checkbox"
+                            checked={isFdEnabled}
+                            onChange={() => handleToggleProductChannel(product, 'showInFD')}
+                            disabled={!isAdmin || isDayEnded}
+                            className="w-4 h-4 rounded border-slate-300 text-[#006400] focus:ring-[#006400] cursor-pointer disabled:cursor-not-allowed"
+                            title={isDayEnded ? getDayEndedBlockMessage() : 'Tick to show in Fixed Deposit (FD)'}
+                          />
+                          <span className={`text-[10px] font-black uppercase tracking-tight ${isFdEnabled ? 'text-emerald-700' : 'text-slate-400'}`}>
+                            {isFdEnabled ? 'Yes' : 'No'}
                           </span>
                         </label>
                       </td>
@@ -591,17 +640,40 @@ export const SavingProductManagement: React.FC<SavingProductManagementProps> = (
                 />
               </div>
 
-              {/* Show in Microfinance & FD Certificate Checkbox */}
-              <div className="bg-emerald-50/70 p-3 rounded-xl border border-emerald-200/90 flex items-center gap-2.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  id="showInMicrofinanceAndFD"
-                  checked={formData.showInMicrofinanceAndFD}
-                  onChange={(e) => setFormData({ ...formData, showInMicrofinanceAndFD: e.target.checked })}
-                  className="w-4 h-4 rounded border-slate-300 text-[#006400] focus:ring-[#006400] cursor-pointer"
-                />
-                <label htmlFor="showInMicrofinanceAndFD" className="text-xs font-bold text-slate-800 cursor-pointer select-none">
-                  Show in Microfinance & FD Certificate (खाताको प्रकार / बचत प्रोडक्टमा देखाउने)
+              {/* Separate Microfinance (MF) & Fixed Deposit (FD) Visibility Checkboxes */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label
+                  htmlFor="showInMicrofinance"
+                  className="bg-emerald-50/70 p-3 rounded-xl border border-emerald-200/90 flex items-start gap-2.5 cursor-pointer select-none"
+                >
+                  <input
+                    type="checkbox"
+                    id="showInMicrofinance"
+                    checked={formData.showInMicrofinance}
+                    onChange={(e) => setFormData({ ...formData, showInMicrofinance: e.target.checked })}
+                    className="mt-0.5 w-4 h-4 rounded border-slate-300 text-[#006400] focus:ring-[#006400] cursor-pointer"
+                  />
+                  <div>
+                    <div className="text-xs font-bold text-slate-900">Show in MF (Micro-Finance)</div>
+                    <div className="text-[11px] text-slate-600 mt-0.5">लघुवित्त (MF) बचतमा देखाउने</div>
+                  </div>
+                </label>
+
+                <label
+                  htmlFor="showInFD"
+                  className="bg-emerald-50/70 p-3 rounded-xl border border-emerald-200/90 flex items-start gap-2.5 cursor-pointer select-none"
+                >
+                  <input
+                    type="checkbox"
+                    id="showInFD"
+                    checked={formData.showInFD}
+                    onChange={(e) => setFormData({ ...formData, showInFD: e.target.checked })}
+                    className="mt-0.5 w-4 h-4 rounded border-slate-300 text-[#006400] focus:ring-[#006400] cursor-pointer"
+                  />
+                  <div>
+                    <div className="text-xs font-bold text-slate-900">Show in FD (Fixed Deposit)</div>
+                    <div className="text-[11px] text-slate-600 mt-0.5">मुद्दती (FD) खातामा देखाउने</div>
+                  </div>
                 </label>
               </div>
               </DayEndFieldset>
@@ -697,6 +769,29 @@ export const SavingProductManagement: React.FC<SavingProductManagementProps> = (
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
                   <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Product Code / ID</span>
                   <div className="text-xs font-mono font-bold text-slate-700 mt-0.5">{selectedProduct.id}</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Micro-Finance (MF)</span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                    (selectedProduct.showInMicrofinance ?? selectedProduct.showInMicrofinanceAndFD)
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    {(selectedProduct.showInMicrofinance ?? selectedProduct.showInMicrofinanceAndFD) ? 'Yes' : 'No'}
+                  </span>
+                </div>
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Fixed Deposit (FD)</span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                    (selectedProduct.showInFD ?? selectedProduct.showInMicrofinanceAndFD)
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    {(selectedProduct.showInFD ?? selectedProduct.showInMicrofinanceAndFD) ? 'Yes' : 'No'}
+                  </span>
                 </div>
               </div>
 

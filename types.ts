@@ -1134,7 +1134,9 @@ export interface SavingProduct {
   minimumBalance?: number;
   description?: string;
   status: 'Active' | 'Inactive';
-  showInMicrofinanceAndFD?: boolean; // When checked in Admin Center, visible in Microfinance & FD Certificate
+  showInMicrofinance?: boolean; // When checked in Admin Center, visible in Microfinance
+  showInFD?: boolean; // When checked in Admin Center, visible in FD Certificate
+  showInMicrofinanceAndFD?: boolean; // Legacy combined flag kept for backward compatibility
   createdAt: number | string;
   updatedAt?: number | string;
   createdBy?: string;
@@ -1151,7 +1153,8 @@ export interface LoanProduct {
   maxTenureMonths?: number;
   description?: string;
   status: 'Active' | 'Inactive';
-  showInMicrofinanceAndFD?: boolean; // When checked in Admin Center, visible in Microfinance Loan
+  showInMicrofinance?: boolean; // When checked in Admin Center, visible in Microfinance Loan
+  showInMicrofinanceAndFD?: boolean; // Legacy flag kept for backward compatibility
   createdAt: number | string;
   updatedAt?: number | string;
   createdBy?: string;
