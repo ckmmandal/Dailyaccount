@@ -8,7 +8,7 @@ import {
   Edit2, Trash2, CheckCircle2,
   Calendar, Clock, Building2, UserPlus,
   Printer, CreditCard, X, Camera, User, Eye, FileSpreadsheet,
-  Lock, Loader2
+  Lock, Loader2, AlertCircle
 } from 'lucide-react';
 import { 
   ResponsiveContainer,
@@ -26,7 +26,9 @@ import {
   MFSignatureSheetMember,
   normalizeBsDate,
   buildBsDateFromParts,
-  getTodayBsDate
+  getTodayBsDate,
+  normalizeLoanProductKey,
+  findUnclosedDuplicateLoan
 } from '../services/microFinanceService';
 import { meetingMinutesService, GroupMeetingRecord } from '../services/meetingMinutesService';
 import { useAuth } from '../AuthContext';
@@ -186,6 +188,22 @@ const sortByNameAZ = <T extends { name?: string }>(items: T[]): T[] =>
     (a.name || '').trim().localeCompare((b.name || '').trim(), undefined, { sensitivity: 'base' })
   );
 
+const isEmergencyLoanProduct = (product?: string): boolean => {
+  const p = (product || '').toLowerCase();
+  return p.includes('emergency') || p.includes('family') || p.includes('आकस्मिक');
+};
+
+const splitMemberLoansByCategory = (memLoans: MFLoanRecord[]): { microLoan?: MFLoanRecord; emergencyLoan?: MFLoanRecord } => {
+  const emergencyLoan = memLoans.find(l => isEmergencyLoanProduct(l.loanProduct));
+  const nonEmergencyLoans = memLoans.filter(l => l.id !== emergencyLoan?.id && !isEmergencyLoanProduct(l.loanProduct));
+  const microLoan =
+    nonEmergencyLoans.find(l => {
+      const p = (l.loanProduct || '').toLowerCase();
+      return p.includes('micro') || p.includes('general') || p.includes('group') || p.includes('enterprise');
+    }) || nonEmergencyLoans[0];
+  return { microLoan, emergencyLoan };
+};
+
 type SubMenuTab = 'dashboard' | 'centers' | 'groups' | 'members' | 'saving' | 'loan' | 'reports';
 
 export const MicroFinanceManagement: React.FC = () => {
@@ -254,13 +272,27 @@ export const MicroFinanceManagement: React.FC = () => {
   const [sheets, setSheets] = useState<MFCollectionSheet[]>(() => microFinanceService.getSheets());
   const [meetingMinutes, setMeetingMinutes] = useState<GroupMeetingRecord[]>(() => meetingMinutesService.getMeetings());
 
-  // Search states
+  // Search & Center/Group Filter states
   const [centerSearch, setCenterSearch] = useState('');
   const [groupSearch, setGroupSearch] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
+  const [memberCenterFilterId, setMemberCenterFilterId] = useState('');
+  const [memberGroupFilterId, setMemberGroupFilterId] = useState('');
+  const [appliedMemberCenterId, setAppliedMemberCenterId] = useState('');
+  const [appliedMemberGroupId, setAppliedMemberGroupId] = useState('');
+
   const [savingSearch, setSavingSearch] = useState('');
   const [savingStatusFilter, setSavingStatusFilter] = useState('All');
+  const [savingCenterFilterId, setSavingCenterFilterId] = useState('');
+  const [savingGroupFilterId, setSavingGroupFilterId] = useState('');
+  const [appliedSavingCenterId, setAppliedSavingCenterId] = useState('');
+  const [appliedSavingGroupId, setAppliedSavingGroupId] = useState('');
+
   const [loanSearch, setLoanSearch] = useState('');
+  const [loanCenterFilterId, setLoanCenterFilterId] = useState('');
+  const [loanGroupFilterId, setLoanGroupFilterId] = useState('');
+  const [appliedLoanCenterId, setAppliedLoanCenterId] = useState('');
+  const [appliedLoanGroupId, setAppliedLoanGroupId] = useState('');
   const [loanStatusTab, setLoanStatusTab] = useState<'ACTIVE' | 'MATURED' | 'CLOSED'>('ACTIVE');
   const [closedLoansArchive, setClosedLoansArchive] = useState<MFLoanRecord[]>([]);
   const [isLoadingClosedLoans, setIsLoadingClosedLoans] = useState(false);
@@ -410,6 +442,7 @@ export const MicroFinanceManagement: React.FC = () => {
   const [isLoanModalOpen, setIsLoanModalOpen] = useState(false);
   const [loanMemberSearchInput, setLoanMemberSearchInput] = useState('');
   const [isLoanMemberDropdownOpen, setIsLoanMemberDropdownOpen] = useState(false);
+  const [loanFormError, setLoanFormError] = useState<string | null>(null);
   const [loanForm, setLoanForm] = useState({
     memberId: '',
     accountNo: '',
@@ -1029,16 +1062,24 @@ export const MicroFinanceManagement: React.FC = () => {
           const nameRaw = getExcelCell(row, ['Name', 'Member Name', 'Full Name', 'Customer Name', 'Account Holder', 'नाम', 'सदस्यको नाम']);
           const cleanMemberId = memberIdRaw.toLowerCase().replace(/[^a-z0-9]/g, '');
 
+          const excelGroup = getExcelCell(row, ['Group Name', 'Group', 'Samuh Name']).trim().toLowerCase();
+          const excelCenter = getExcelCell(row, ['Center Name', 'Center']).trim().toLowerCase();
+
           const matchedMember = members.find(m => {
             const mId = (m.memberId || '').toLowerCase();
             const mIdDigits = mId.replace(/[^a-z0-9]/g, '');
+            if (memberIdRaw) {
+              return mId === memberIdRaw.toLowerCase() || (Boolean(cleanMemberId) && mIdDigits.endsWith(cleanMemberId));
+            }
             const mAcc = (m.savingsAccountNo || '').toLowerCase();
+            if (accountNoRaw && mAcc === accountNoRaw.toLowerCase()) return true;
             const mName = (m.name || '').trim().toLowerCase();
-            return (
-              (memberIdRaw && (mId === memberIdRaw.toLowerCase() || (cleanMemberId && mIdDigits.endsWith(cleanMemberId)))) ||
-              (accountNoRaw && mAcc === accountNoRaw.toLowerCase()) ||
-              (nameRaw && mName === nameRaw.toLowerCase())
-            );
+            if (nameRaw && mName === nameRaw.toLowerCase()) {
+              if (excelGroup && (m.samuhName || '').trim().toLowerCase() !== excelGroup) return false;
+              if (excelCenter && (m.centerName || '').trim().toLowerCase() !== excelCenter) return false;
+              return true;
+            }
+            return false;
           });
 
           const name =
@@ -1120,11 +1161,19 @@ export const MicroFinanceManagement: React.FC = () => {
         bulkParsedRows.forEach((row, idx) => {
           const memberIdRaw = getExcelCell(row, ['Member ID', 'MemberId', 'Member Code']);
           const nameRaw = getExcelCell(row, ['Name', 'Member Name', 'Full Name']);
-          const matchedMember = members.find(
-            m =>
-              (memberIdRaw && m.memberId.toLowerCase() === memberIdRaw.toLowerCase()) ||
-              (nameRaw && m.name.trim().toLowerCase() === nameRaw.toLowerCase())
-          );
+          const excelGroup = getExcelCell(row, ['Group Name', 'Group']).trim().toLowerCase();
+          const excelCenter = getExcelCell(row, ['Center Name', 'Center']).trim().toLowerCase();
+          const matchedMember = members.find(m => {
+            if (memberIdRaw) {
+              return m.memberId.toLowerCase() === memberIdRaw.toLowerCase();
+            }
+            if (nameRaw && m.name.trim().toLowerCase() === nameRaw.toLowerCase()) {
+              if (excelGroup && (m.samuhName || '').trim().toLowerCase() !== excelGroup) return false;
+              if (excelCenter && (m.centerName || '').trim().toLowerCase() !== excelCenter) return false;
+              return true;
+            }
+            return false;
+          });
           const name = nameRaw || matchedMember?.name || (memberIdRaw ? `Member ${memberIdRaw}` : '');
           const loanAmount = parseExcelNumber(getExcelCell(row, ['Loan Amount', 'Amount', 'Principal']));
           if (!name || loanAmount <= 0) return;
@@ -1172,10 +1221,31 @@ export const MicroFinanceManagement: React.FC = () => {
           setBulkUploadError('No valid Loan rows found. Ensure "Name" (or Member ID) and "Loan Amount" > 0 are provided.');
           return;
         }
-        const updatedLoans = await microFinanceService.bulkAddLoans(items);
+        const existingActiveLoans = microFinanceService.getLoans();
+        const seenBatchKeys = new Set<string>();
+        const filteredItems = items.filter(item => {
+          if (item.status === 'CLOSED') return true;
+          const key = `${String(item.memberId || '').trim().toLowerCase()}__${normalizeLoanProductKey(item.loanProduct)}`;
+          if (findUnclosedDuplicateLoan(existingActiveLoans, item.memberId, item.loanProduct) || seenBatchKeys.has(key)) {
+            return false;
+          }
+          seenBatchKeys.add(key);
+          return true;
+        });
+        const skippedDuplicates = items.length - filteredItems.length;
+        if (filteredItems.length === 0) {
+          setBulkUploadError('Loan issue failed: Selected member(s) already have unclosed Active/Mature loan(s) under the same Loan Product. Close existing loans before issuing new ones.');
+          return;
+        }
+        const updatedLoans = await microFinanceService.bulkAddLoans(filteredItems);
         setLoans(updatedLoans);
         setMembers(microFinanceService.getMembers());
-        createdCount = items.length;
+        createdCount = filteredItems.length;
+        if (skippedDuplicates > 0) {
+          setIsBulkModalOpen(false);
+          showToast(`Created ${createdCount} loan(s); skipped ${skippedDuplicates} duplicate/unclosed loan row(s).`);
+          return;
+        }
       }
 
       setIsBulkModalOpen(false);
@@ -1360,14 +1430,23 @@ export const MicroFinanceManagement: React.FC = () => {
     'Kartik', 'Mangsir', 'Poush', 'Magh', 'Falgun', 'Chaitra'
   ];
 
+  const sortedCentersByMeetingDay = useMemo(() => {
+    return [...centers].sort((a, b) => {
+      const dayA = extractMeetingDayNumber(a.meetingDay) ?? extractMeetingDayNumber(a.name) ?? Number.MAX_SAFE_INTEGER;
+      const dayB = extractMeetingDayNumber(b.meetingDay) ?? extractMeetingDayNumber(b.name) ?? Number.MAX_SAFE_INTEGER;
+      if (dayA !== dayB) return dayA - dayB;
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+  }, [centers]);
+
   // Filtered Centers
   const filteredCenters = useMemo(() => {
-    return centers.filter(c => 
+    return sortedCentersByMeetingDay.filter(c => 
       c.name.toLowerCase().includes(centerSearch.toLowerCase()) ||
       c.code.toLowerCase().includes(centerSearch.toLowerCase()) ||
       c.location.toLowerCase().includes(centerSearch.toLowerCase())
     );
-  }, [centers, centerSearch]);
+  }, [sortedCentersByMeetingDay, centerSearch]);
 
   // Filtered Groups
   const filteredGroups = useMemo(() => {
@@ -1378,26 +1457,94 @@ export const MicroFinanceManagement: React.FC = () => {
     );
   }, [groups, groupSearch]);
 
+  const memberLookupById = useMemo(() => {
+    const map = new Map<string, MFMember>();
+    members.forEach(m => {
+      const key = String(m.memberId || '').trim().toLowerCase();
+      if (key && !map.has(key)) map.set(key, m);
+    });
+    return map;
+  }, [members]);
+
+  const getGroupsForCenterFilter = (centerId: string) => {
+    if (!centerId) return groups;
+    const selectedCenter = centers.find(c => c.id === centerId);
+    const centerNameNorm = String(selectedCenter?.name || '').trim().toLowerCase();
+    return groups.filter(
+      g => g.centerId === centerId || (centerNameNorm !== '' && String(g.centerName || '').trim().toLowerCase() === centerNameNorm)
+    );
+  };
+
   // Filtered Members
   const filteredMembers = useMemo(() => {
-    return members.filter(m => 
-      m.name.toLowerCase().includes(memberSearch.toLowerCase()) ||
-      m.memberId.toLowerCase().includes(memberSearch.toLowerCase()) ||
-      m.samuhName.toLowerCase().includes(memberSearch.toLowerCase()) ||
-      m.citizenshipNo.toLowerCase().includes(memberSearch.toLowerCase())
-    );
-  }, [members, memberSearch]);
+    const q = memberSearch.toLowerCase();
+    const selCenter = appliedMemberCenterId ? centers.find(c => c.id === appliedMemberCenterId) : undefined;
+    const selGroup = appliedMemberGroupId ? groups.find(g => g.id === appliedMemberGroupId) : undefined;
+    const selCenterNorm = String(selCenter?.name || '').trim().toLowerCase();
+    const selGroupNorm = String(selGroup?.name || '').trim().toLowerCase();
+
+    return members.filter(m => {
+      if (appliedMemberCenterId) {
+        const mCenterNorm = String(m.centerName || '').trim().toLowerCase();
+        const matchCenter =
+          m.centerId === appliedMemberCenterId ||
+          (selCenterNorm !== '' && mCenterNorm === selCenterNorm);
+        if (!matchCenter) return false;
+      }
+      if (appliedMemberGroupId) {
+        const mGroupNorm = String(m.samuhName || '').trim().toLowerCase();
+        const matchGroup =
+          m.samuhId === appliedMemberGroupId ||
+          (selGroupNorm !== '' && mGroupNorm === selGroupNorm);
+        if (!matchGroup) return false;
+      }
+      return (
+        m.name.toLowerCase().includes(q) ||
+        m.memberId.toLowerCase().includes(q) ||
+        m.samuhName.toLowerCase().includes(q) ||
+        m.citizenshipNo.toLowerCase().includes(q)
+      );
+    });
+  }, [members, centers, groups, memberSearch, appliedMemberCenterId, appliedMemberGroupId]);
 
   // Filtered Savings
   const filteredSavings = useMemo(() => {
+    const selCenter = appliedSavingCenterId ? centers.find(c => c.id === appliedSavingCenterId) : undefined;
+    const selGroup = appliedSavingGroupId ? groups.find(g => g.id === appliedSavingGroupId) : undefined;
+    const selCenterNorm = String(selCenter?.name || '').trim().toLowerCase();
+    const selGroupNorm = String(selGroup?.name || '').trim().toLowerCase();
+
     return savings.filter(s => {
+      const linkedMember = memberLookupById.get(String(s.memberId || '').trim().toLowerCase());
+      if (appliedSavingCenterId) {
+        const recCenterNorm = String(s.centerName || '').trim().toLowerCase();
+        const matchCenter = recCenterNorm
+          ? selCenterNorm !== '' && recCenterNorm === selCenterNorm
+          : Boolean(
+              linkedMember &&
+                (linkedMember.centerId === appliedSavingCenterId ||
+                  (selCenterNorm !== '' && String(linkedMember.centerName || '').trim().toLowerCase() === selCenterNorm))
+            );
+        if (!matchCenter) return false;
+      }
+      if (appliedSavingGroupId) {
+        const recGroupNorm = String(s.groupName || '').trim().toLowerCase();
+        const matchGroup = recGroupNorm
+          ? selGroupNorm !== '' && recGroupNorm === selGroupNorm
+          : Boolean(
+              linkedMember &&
+                (linkedMember.samuhId === appliedSavingGroupId ||
+                  (selGroupNorm !== '' && String(linkedMember.samuhName || '').trim().toLowerCase() === selGroupNorm))
+            );
+        if (!matchGroup) return false;
+      }
       const matchSearch = s.name.toLowerCase().includes(savingSearch.toLowerCase()) ||
                           s.memberId.toLowerCase().includes(savingSearch.toLowerCase()) ||
                           s.accountNo.toLowerCase().includes(savingSearch.toLowerCase());
       const matchStatus = savingStatusFilter === 'All' || getEffectiveSavingStatus(s.status) === savingStatusFilter;
       return matchSearch && matchStatus;
     });
-  }, [savings, savingSearch, savingStatusFilter]);
+  }, [savings, centers, groups, memberLookupById, savingSearch, savingStatusFilter, appliedSavingCenterId, appliedSavingGroupId]);
 
   const getEffectiveLoanStatus = (loan: MFLoanRecord): 'ACTIVE' | 'MATURED' | 'CLOSED' => {
     if (loan.status === 'CLOSED') return 'CLOSED';
@@ -1410,20 +1557,52 @@ export const MicroFinanceManagement: React.FC = () => {
     return 'ACTIVE';
   };
 
+  const conflictingUnclosedLoan = useMemo(() => {
+    return findUnclosedDuplicateLoan(loans, loanForm.memberId, loanForm.loanProduct);
+  }, [loans, loanForm.memberId, loanForm.loanProduct]);
+
   // Filtered Loans: Active & Mature read from lightweight active state; Close loads on-demand from Supabase
   const filteredLoans = useMemo(() => {
     const query = loanSearch.toLowerCase();
     const sourceList = loanStatusTab === 'CLOSED' ? closedLoansArchive : loans;
+    const selCenter = appliedLoanCenterId ? centers.find(c => c.id === appliedLoanCenterId) : undefined;
+    const selGroup = appliedLoanGroupId ? groups.find(g => g.id === appliedLoanGroupId) : undefined;
+    const selCenterNorm = String(selCenter?.name || '').trim().toLowerCase();
+    const selGroupNorm = String(selGroup?.name || '').trim().toLowerCase();
+
     return sourceList.filter(l => {
       const effStatus = getEffectiveLoanStatus(l);
       if (effStatus !== loanStatusTab) return false;
+      const linkedMember = memberLookupById.get(String(l.memberId || '').trim().toLowerCase());
+      if (appliedLoanCenterId) {
+        const recCenterNorm = String(l.centerName || '').trim().toLowerCase();
+        const matchCenter = recCenterNorm
+          ? selCenterNorm !== '' && recCenterNorm === selCenterNorm
+          : Boolean(
+              linkedMember &&
+                (linkedMember.centerId === appliedLoanCenterId ||
+                  (selCenterNorm !== '' && String(linkedMember.centerName || '').trim().toLowerCase() === selCenterNorm))
+            );
+        if (!matchCenter) return false;
+      }
+      if (appliedLoanGroupId) {
+        const recGroupNorm = String(l.groupName || '').trim().toLowerCase();
+        const matchGroup = recGroupNorm
+          ? selGroupNorm !== '' && recGroupNorm === selGroupNorm
+          : Boolean(
+              linkedMember &&
+                (linkedMember.samuhId === appliedLoanGroupId ||
+                  (selGroupNorm !== '' && String(linkedMember.samuhName || '').trim().toLowerCase() === selGroupNorm))
+            );
+        if (!matchGroup) return false;
+      }
       return (
         l.name.toLowerCase().includes(query) ||
         l.memberId.toLowerCase().includes(query) ||
         l.accountNo.toLowerCase().includes(query)
       );
     });
-  }, [loans, closedLoansArchive, loanSearch, loanStatusTab]);
+  }, [loans, closedLoansArchive, centers, groups, memberLookupById, loanSearch, loanStatusTab, appliedLoanCenterId, appliedLoanGroupId]);
 
   // Handlers for Center
   const handleOpenAddCenter = () => {
@@ -1958,13 +2137,19 @@ export const MicroFinanceManagement: React.FC = () => {
     const defaultAmount = 50000;
     const defaultInstallment = Math.round((defaultAmount + (defaultAmount * (defaultRate / 100) * (defaultPeriod / 12))) / defaultPeriod);
     const defaultMaturity = calculateBsMaturityDate(todayBs, defaultPeriod);
+    const maxLoanAccNum = [...loans, ...closedLoansArchive].reduce((max, l) => {
+      const m = String(l.accountNo || '').match(/(\d+)$/);
+      const num = m ? parseInt(m[1], 10) : 0;
+      return num > max ? num : max;
+    }, 2000 + loans.length);
 
     setLoanMemberSearchInput('');
     setIsLoanMemberDropdownOpen(false);
+    setLoanFormError(null);
 
     setLoanForm({
       memberId: '',
-      accountNo: `LN-${2000 + loans.length + 1}`,
+      accountNo: `LN-${maxLoanAccNum + 1}`,
       name: '',
       centerName: '',
       groupName: '',
@@ -1986,6 +2171,7 @@ export const MicroFinanceManagement: React.FC = () => {
   const handleSelectLoanMember = (mem: MFMember) => {
     setLoanMemberSearchInput(`${mem.name} (${mem.memberId})`);
     setIsLoanMemberDropdownOpen(false);
+    setLoanFormError(null);
     setLoanForm(prev => ({
       ...prev,
       memberId: mem.memberId,
@@ -1996,6 +2182,7 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleLoanDateBsChange = (newDateBs: string) => {
+    setLoanFormError(null);
     setLoanForm(prev => {
       const maturity = calculateBsMaturityDate(newDateBs, prev.totalInstallments);
       return {
@@ -2007,6 +2194,7 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleLoanProductChange = (prodName: string) => {
+    setLoanFormError(null);
     const matched = filteredMfLoanProducts.find(p => p.name === prodName);
     const rate = matched?.interestRate ?? loanForm.interestRate;
     const period = matched?.maxTenureMonths && matched.maxTenureMonths > 0 ? matched.maxTenureMonths : loanForm.totalInstallments;
@@ -2025,6 +2213,7 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleLoanAmountChange = (amt: number) => {
+    setLoanFormError(null);
     const rate = loanForm.interestRate || 13;
     const period = loanForm.totalInstallments || 12;
     const calculatedInstallment = Math.round((amt + (amt * (rate / 100) * (period / 12))) / period);
@@ -2037,6 +2226,7 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleLoanPeriodChange = (period: number) => {
+    setLoanFormError(null);
     const safePeriod = period > 0 ? period : 1;
     const amt = loanForm.loanAmount;
     const rate = loanForm.interestRate || 13;
@@ -2053,23 +2243,59 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const handleSaveLoan = () => {
     if (isDayEndedForBranch(branch?.id)) {
-      alert(getDayEndedBlockMessage());
+      setLoanFormError(getDayEndedBlockMessage());
       return;
     }
     if (isBackDateBlockedForEntry(loanForm.loanDateBs || loanForm.loanDate, systemSettings || authSettings)) {
-      alert(getBackDateBlockedMessage(loanForm.loanDateBs || loanForm.loanDate));
+      setLoanFormError(getBackDateBlockedMessage(loanForm.loanDateBs || loanForm.loanDate));
       return;
     }
-    if (!loanForm.name || loanForm.loanAmount <= 0) {
-      alert('Please enter valid member and loan amount');
+    if (!loanForm.memberId || !loanForm.name) {
+      setLoanFormError('Loan issue failed: Please select a member before issuing a loan.');
       return;
     }
-    microFinanceService.addLoan({
-      ...loanForm,
-      remainingAmount: loanForm.loanAmount,
-      createdBy: user?.id || user?.username || '',
-      createdByName: user?.fullName || user?.username || ''
-    });
+    if (loanForm.loanAmount <= 0) {
+      setLoanFormError('Loan issue failed: Loan Amount must be greater than NPR 0.');
+      return;
+    }
+
+    const latestLoans = microFinanceService.getLoans();
+    const unclosedConflict =
+      findUnclosedDuplicateLoan(latestLoans, loanForm.memberId, loanForm.loanProduct) ||
+      conflictingUnclosedLoan;
+    if (unclosedConflict) {
+      const conflictStatusLabel = getEffectiveLoanStatus(unclosedConflict) === 'MATURED' ? 'MATURE' : 'ACTIVE';
+      const failMsg = `Loan issue failed: ${loanForm.name} (${loanForm.memberId}) already has an unclosed ${conflictStatusLabel} loan (${unclosedConflict.accountNo}) under "${unclosedConflict.loanProduct}" (Amount: NPR ${Number(unclosedConflict.loanAmount || 0).toLocaleString()}, Date: ${unclosedConflict.loanDateBs || unclosedConflict.loanDate}). Close the existing loan first before issuing a new loan of the same product.`;
+      setLoanFormError(failMsg);
+      showToast(`Failed: Unclosed ${conflictStatusLabel} ${unclosedConflict.loanProduct} loan (${unclosedConflict.accountNo}) exists.`);
+      return;
+    }
+
+    const duplicateAccountLoan = latestLoans.find(
+      l => String(l.accountNo || '').trim().toLowerCase() === String(loanForm.accountNo || '').trim().toLowerCase()
+    );
+    if (duplicateAccountLoan) {
+      const failMsg = `Loan issue failed: Duplicate Loan Account No. (${loanForm.accountNo}) already exists for ${duplicateAccountLoan.name} (${duplicateAccountLoan.memberId}).`;
+      setLoanFormError(failMsg);
+      showToast(failMsg);
+      return;
+    }
+
+    try {
+      microFinanceService.addLoan({
+        ...loanForm,
+        remainingAmount: loanForm.loanAmount,
+        createdBy: user?.id || user?.username || '',
+        createdByName: user?.fullName || user?.username || ''
+      });
+    } catch (err) {
+      const failMsg = err instanceof Error ? err.message : 'Loan issue failed: Could not create loan.';
+      setLoanFormError(failMsg);
+      showToast(failMsg);
+      return;
+    }
+
+    setLoanFormError(null);
     setLoans(microFinanceService.getLoans());
     setMembers(microFinanceService.getMembers());
     setIsLoanModalOpen(false);
@@ -2213,26 +2439,53 @@ export const MicroFinanceManagement: React.FC = () => {
     return true;
   };
 
-  // Helper: sums recurring amounts from ACTIVE saving accounts in Savings Management for a member
-  const getMemberRecurringSavingAmount = (mem: { memberId?: string; name?: string }): number => {
+  // Strict matcher: ensures loans never leak across members sharing the same name or different center/group
+  const doesLoanBelongToMember = (loan: MFLoanRecord, mem: MFMember): boolean => {
+    const loanMemId = (loan.memberId || '').trim().toLowerCase();
+    const memId = (mem.memberId || '').trim().toLowerCase();
+    const loanGroup = (loan.groupName || '').trim().toLowerCase();
+    const memGroup = (mem.samuhName || '').trim().toLowerCase();
+    const loanCenter = (loan.centerName || '').trim().toLowerCase();
+    const memCenter = (mem.centerName || '').trim().toLowerCase();
+
+    if (loanGroup && memGroup && loanGroup !== memGroup) return false;
+    if (loanCenter && memCenter && loanCenter !== memCenter) return false;
+
+    if (loanMemId && memId) {
+      return loanMemId === memId;
+    }
+
+    const loanName = (loan.name || '').trim().toLowerCase();
+    const memName = (mem.name || '').trim().toLowerCase();
+    return Boolean(!loanMemId && loanName && memName && loanName === memName);
+  };
+
+  // Helper: sums recurring amounts from ACTIVE saving accounts in Savings Management for a member (strict ID + center/group match)
+  const getMemberRecurringSavingAmount = (mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string }): number => {
     const memId = (mem.memberId || '').trim().toLowerCase();
     const memName = (mem.name || '').trim().toLowerCase();
-    const activeSavings = savings.filter(s => getEffectiveSavingStatus(s.status) === 'ACTIVE');
+    const memGroup = (mem.samuhName || '').trim().toLowerCase();
+    const memCenter = (mem.centerName || '').trim().toLowerCase();
 
-    const idMatches = memId
-      ? activeSavings.filter(s => (s.memberId || '').trim().toLowerCase() === memId)
-      : [];
-    if (idMatches.length > 0) {
+    const activeSavings = savings.filter(s => {
+      if (getEffectiveSavingStatus(s.status) !== 'ACTIVE') return false;
+      const sGroup = (s.groupName || '').trim().toLowerCase();
+      const sCenter = (s.centerName || '').trim().toLowerCase();
+      if (sGroup && memGroup && sGroup !== memGroup) return false;
+      if (sCenter && memCenter && sCenter !== memCenter) return false;
+      return true;
+    });
+
+    if (memId) {
+      const idMatches = activeSavings.filter(s => (s.memberId || '').trim().toLowerCase() === memId);
       return idMatches.reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
     }
 
     if (memName) {
       const nameMatches = activeSavings.filter(
-        s => (s.name || '').trim().toLowerCase() === memName
+        s => !(s.memberId || '').trim() && (s.name || '').trim().toLowerCase() === memName
       );
-      if (nameMatches.length > 0) {
-        return nameMatches.reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
-      }
+      return nameMatches.reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
     }
 
     return 0;
@@ -2265,7 +2518,7 @@ export const MicroFinanceManagement: React.FC = () => {
     const totalRecurringSaving = groupMembers.reduce((sum, m) => sum + getMemberRecurringSavingAmount(m), 0);
     const totalLoanDue = groupMembers.reduce((sum, m) => {
       const mLoans = dateAwareLoans.filter(l =>
-        (l.memberId === m.memberId || (l.name && m.name && l.name.trim().toLowerCase() === m.name.trim().toLowerCase())) &&
+        doesLoanBelongToMember(l, m) &&
         isLoanActiveOnBsDate(l, targetDateBs)
       );
       return sum + mLoans.reduce((lsum, l) => lsum + (Number(l.installmentAmount) || 0), 0);
@@ -2320,12 +2573,11 @@ export const MicroFinanceManagement: React.FC = () => {
     const membersToUse = sortByNameAZ(groupMembers);
 
     const sigMembers: MFSignatureSheetMember[] = membersToUse.map(m => {
-      const memLoans = loanPool.filter(l => 
-        (l.memberId === m.memberId || (l.name && m.name && l.name.trim().toLowerCase() === m.name.trim().toLowerCase())) && 
+      const memLoans = loanPool.filter(l =>
+        doesLoanBelongToMember(l, m) &&
         isLoanActiveOnBsDate(l, targetDateBs)
       );
-      const microLoan = memLoans.find(l => l.loanProduct.toLowerCase().includes('micro') || l.loanProduct.toLowerCase().includes('general') || l.loanProduct.toLowerCase().includes('group')) || memLoans[0];
-      const emergencyLoan = memLoans.find(l => l.loanProduct.toLowerCase().includes('emergency') || l.loanProduct.toLowerCase().includes('family'));
+      const { microLoan, emergencyLoan } = splitMemberLoansByCategory(memLoans);
       
       const microLoanOpenDate = microLoan ? (microLoan.loanDateBs || microLoan.loanDate) : '-';
       const microLoanKista = microLoan ? calculateBsKistaNumber(microLoanOpenDate, activeSheetToPrint.year, activeSheetToPrint.month) : 0;
@@ -2458,12 +2710,11 @@ export const MicroFinanceManagement: React.FC = () => {
     const membersToUse = sortByNameAZ(groupMembers);
 
     const sigMembers: MFSignatureSheetMember[] = membersToUse.map(m => {
-      const memLoans = dateAwareLoans.filter(l => 
-        (l.memberId === m.memberId || (l.name && m.name && l.name.trim().toLowerCase() === m.name.trim().toLowerCase())) && 
+      const memLoans = dateAwareLoans.filter(l =>
+        doesLoanBelongToMember(l, m) &&
         isLoanActiveOnBsDate(l, targetDateBs)
       );
-      const microLoan = memLoans.find(l => l.loanProduct.toLowerCase().includes('micro') || l.loanProduct.toLowerCase().includes('general') || l.loanProduct.toLowerCase().includes('group')) || memLoans[0];
-      const emergencyLoan = memLoans.find(l => l.loanProduct.toLowerCase().includes('emergency') || l.loanProduct.toLowerCase().includes('family'));
+      const { microLoan, emergencyLoan } = splitMemberLoansByCategory(memLoans);
       const microInstallmentAmt = microLoan ? (microLoan.installmentAmount || 0) : 0;
       const emergencyInstallmentAmt = emergencyLoan ? (emergencyLoan.installmentAmount || 0) : 0;
       const totalLoanAmt = microInstallmentAmt + emergencyInstallmentAmt;
@@ -3430,8 +3681,8 @@ export const MicroFinanceManagement: React.FC = () => {
           </div>
 
           {/* Action Row */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="relative flex-1 max-w-md">
+          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-2.5">
+            <div className="relative w-full xl:w-56 shrink-0">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
@@ -3442,7 +3693,72 @@ export const MicroFinanceManagement: React.FC = () => {
               />
             </div>
 
-            <div className="flex items-center gap-2">
+            {/* Center -> Group -> View Filter */}
+            <div className="flex flex-wrap items-center gap-2 flex-1">
+              <select
+                value={memberCenterFilterId}
+                onChange={e => {
+                  setMemberCenterFilterId(e.target.value);
+                  setMemberGroupFilterId('');
+                }}
+                aria-label="Select Center for Members"
+                className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-blue-600 min-w-[155px] flex-1 sm:flex-initial max-w-[230px]"
+              >
+                <option value="">All Centers</option>
+                {sortedCentersByMeetingDay.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+
+              <select
+                value={memberGroupFilterId}
+                onChange={e => setMemberGroupFilterId(e.target.value)}
+                aria-label="Select Group for Members"
+                className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-blue-600 min-w-[155px] flex-1 sm:flex-initial max-w-[230px]"
+              >
+                <option value="">All Groups</option>
+                {getGroupsForCenterFilter(memberCenterFilterId).map(g => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setAppliedMemberCenterId(memberCenterFilterId);
+                  setAppliedMemberGroupId(memberGroupFilterId);
+                  const cName = centers.find(c => c.id === memberCenterFilterId)?.name || 'All Centers';
+                  const gName = groups.find(g => g.id === memberGroupFilterId)?.name || 'All Groups';
+                  showToast(`Viewing Members: ${cName} / ${gName}`);
+                }}
+                className={`flex items-center gap-1.5 px-3.5 py-2 bg-[#4f7df5] hover:bg-[#3b6ae8] text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer transition-all ${
+                  memberCenterFilterId !== appliedMemberCenterId || memberGroupFilterId !== appliedMemberGroupId
+                    ? 'ring-2 ring-blue-300'
+                    : ''
+                }`}
+              >
+                <Eye className="w-3.5 h-3.5" />
+                <span>View</span>
+              </button>
+
+              {(appliedMemberCenterId || appliedMemberGroupId || memberCenterFilterId || memberGroupFilterId) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMemberCenterFilterId('');
+                    setMemberGroupFilterId('');
+                    setAppliedMemberCenterId('');
+                    setAppliedMemberGroupId('');
+                  }}
+                  title="Reset Center & Group filter"
+                  className="p-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-500 hover:text-slate-700 rounded-xl transition-colors cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 disabled={isDayEnded}
@@ -3620,13 +3936,13 @@ export const MicroFinanceManagement: React.FC = () => {
           {/* Main Card: DEPOSIT HISTORY */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
             {/* Card Header Filter Bar */}
-            <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-slate-800 font-black text-xs uppercase tracking-wider">
+            <div className="p-4 border-b border-slate-100 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-slate-800 font-black text-xs uppercase tracking-wider shrink-0">
                 <Clock className="w-4 h-4 text-blue-600" />
                 <span>DEPOSIT HISTORY</span>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <div className="relative">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
@@ -3634,9 +3950,72 @@ export const MicroFinanceManagement: React.FC = () => {
                     placeholder="Search member or account..."
                     value={savingSearch}
                     onChange={e => setSavingSearch(e.target.value)}
-                    className="pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-blue-600 w-52 sm:w-64"
+                    className="pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-blue-600 w-44 sm:w-48"
                   />
                 </div>
+
+                {/* Center -> Group -> View Filter */}
+                <select
+                  value={savingCenterFilterId}
+                  onChange={e => {
+                    setSavingCenterFilterId(e.target.value);
+                    setSavingGroupFilterId('');
+                  }}
+                  aria-label="Select Center for Saving"
+                  className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-blue-600 max-w-[200px]"
+                >
+                  <option value="">All Centers</option>
+                  {sortedCentersByMeetingDay.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+
+                <select
+                  value={savingGroupFilterId}
+                  onChange={e => setSavingGroupFilterId(e.target.value)}
+                  aria-label="Select Group for Saving"
+                  className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-blue-600 max-w-[200px]"
+                >
+                  <option value="">All Groups</option>
+                  {getGroupsForCenterFilter(savingCenterFilterId).map(g => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAppliedSavingCenterId(savingCenterFilterId);
+                    setAppliedSavingGroupId(savingGroupFilterId);
+                    const cName = centers.find(c => c.id === savingCenterFilterId)?.name || 'All Centers';
+                    const gName = groups.find(g => g.id === savingGroupFilterId)?.name || 'All Groups';
+                    showToast(`Viewing Savings: ${cName} / ${gName}`);
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 bg-[#4f7df5] hover:bg-[#3b6ae8] text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer transition-all ${
+                    savingCenterFilterId !== appliedSavingCenterId || savingGroupFilterId !== appliedSavingGroupId
+                      ? 'ring-2 ring-blue-300'
+                      : ''
+                  }`}
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>View</span>
+                </button>
+
+                {(appliedSavingCenterId || appliedSavingGroupId || savingCenterFilterId || savingGroupFilterId) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSavingCenterFilterId('');
+                      setSavingGroupFilterId('');
+                      setAppliedSavingCenterId('');
+                      setAppliedSavingGroupId('');
+                    }}
+                    title="Reset Center & Group filter"
+                    className="p-1.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-500 hover:text-slate-700 rounded-xl transition-colors cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
 
                 <select
                   value={savingStatusFilter}
@@ -3831,21 +4210,86 @@ export const MicroFinanceManagement: React.FC = () => {
           {/* Main Card: LOAN RECORDS */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
             {/* Card Filter Bar */}
-            <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-slate-800 font-black text-xs uppercase tracking-wider">
+            <div className="p-4 border-b border-slate-100 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-slate-800 font-black text-xs uppercase tracking-wider shrink-0">
                 <Clock className="w-4 h-4 text-orange-600" />
                 <span>LOAN RECORDS</span>
               </div>
 
-              <div className="relative">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder="Search loans..."
-                  value={loanSearch}
-                  onChange={e => setLoanSearch(e.target.value)}
-                  className="pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-orange-500 w-52 sm:w-64"
-                />
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    placeholder="Search loans..."
+                    value={loanSearch}
+                    onChange={e => setLoanSearch(e.target.value)}
+                    className="pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-orange-500 w-44 sm:w-48"
+                  />
+                </div>
+
+                {/* Center -> Group -> View Filter */}
+                <select
+                  value={loanCenterFilterId}
+                  onChange={e => {
+                    setLoanCenterFilterId(e.target.value);
+                    setLoanGroupFilterId('');
+                  }}
+                  aria-label="Select Center for Loans"
+                  className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-orange-500 max-w-[200px]"
+                >
+                  <option value="">All Centers</option>
+                  {sortedCentersByMeetingDay.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+
+                <select
+                  value={loanGroupFilterId}
+                  onChange={e => setLoanGroupFilterId(e.target.value)}
+                  aria-label="Select Group for Loans"
+                  className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-orange-500 max-w-[200px]"
+                >
+                  <option value="">All Groups</option>
+                  {getGroupsForCenterFilter(loanCenterFilterId).map(g => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAppliedLoanCenterId(loanCenterFilterId);
+                    setAppliedLoanGroupId(loanGroupFilterId);
+                    const cName = centers.find(c => c.id === loanCenterFilterId)?.name || 'All Centers';
+                    const gName = groups.find(g => g.id === loanGroupFilterId)?.name || 'All Groups';
+                    showToast(`Viewing Loans: ${cName} / ${gName}`);
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 bg-[#4f7df5] hover:bg-[#3b6ae8] text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer transition-all ${
+                    loanCenterFilterId !== appliedLoanCenterId || loanGroupFilterId !== appliedLoanGroupId
+                      ? 'ring-2 ring-blue-300'
+                      : ''
+                  }`}
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>View</span>
+                </button>
+
+                {(appliedLoanCenterId || appliedLoanGroupId || loanCenterFilterId || loanGroupFilterId) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoanCenterFilterId('');
+                      setLoanGroupFilterId('');
+                      setAppliedLoanCenterId('');
+                      setAppliedLoanGroupId('');
+                    }}
+                    title="Reset Center & Group filter"
+                    className="p-1.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-500 hover:text-slate-700 rounded-xl transition-colors cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             </div>
 
@@ -3890,6 +4334,7 @@ export const MicroFinanceManagement: React.FC = () => {
                           </td>
                           <td className="py-2 px-3 text-slate-600">
                             <div className="font-medium text-slate-800">{loan.centerName}</div>
+                            {loan.groupName && <div className="text-[10px] text-slate-400 font-semibold">{loan.groupName}</div>}
                           </td>
                           <td className="py-2 px-3 text-slate-500 font-mono">
                             <div>{loan.loanDateBs || loan.loanDate}</div>
@@ -4782,7 +5227,7 @@ export const MicroFinanceManagement: React.FC = () => {
                     onChange={e => setGroupForm({ ...groupForm, centerId: e.target.value })}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
                   >
-                    {centers.map(c => (
+                    {sortedCentersByMeetingDay.map(c => (
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
                   </select>
@@ -4927,7 +5372,7 @@ export const MicroFinanceManagement: React.FC = () => {
                     onChange={e => setMemberForm({ ...memberForm, centerId: e.target.value })}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
                   >
-                    {centers.map(c => (
+                    {sortedCentersByMeetingDay.map(c => (
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
                   </select>
@@ -5339,6 +5784,7 @@ export const MicroFinanceManagement: React.FC = () => {
                       type="button"
                       onClick={() => {
                         setLoanMemberSearchInput('');
+                        setLoanFormError(null);
                         setLoanForm(prev => ({
                           ...prev,
                           memberId: '',
@@ -5513,6 +5959,25 @@ export const MicroFinanceManagement: React.FC = () => {
                   </div>
                 </div>
               </div>
+
+              {/* Failure / Duplicate Unclosed Loan Alert */}
+              {(loanFormError || conflictingUnclosedLoan) && (
+                <div className="p-3 bg-rose-50 border border-rose-300 rounded-xl flex items-start gap-2.5 text-rose-800">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="text-[11px] leading-relaxed">
+                    <div className="font-extrabold uppercase tracking-wide text-rose-700 mb-0.5">
+                      {loanFormError ? 'Loan Issue Failed' : 'Unclosed Loan Exists — Cannot Issue Duplicate'}
+                    </div>
+                    <div className="font-semibold">
+                      {loanFormError || (() => {
+                        const c = conflictingUnclosedLoan!;
+                        const st = getEffectiveLoanStatus(c) === 'MATURED' ? 'MATURE' : 'ACTIVE';
+                        return `${loanForm.name} (${loanForm.memberId}) already has an unclosed ${st} loan (${c.accountNo}) under "${c.loanProduct}" (Amount: NPR ${Number(c.loanAmount || 0).toLocaleString()}, Date: ${c.loanDateBs || c.loanDate}). Close that loan first before issuing a new loan of the same product.`;
+                      })()}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Account Number Preview */}
               <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between text-[11px] text-slate-500">
@@ -6029,12 +6494,11 @@ export const MicroFinanceManagement: React.FC = () => {
         const sheetLoansPool = collectionSheetLoans.length > 0 ? collectionSheetLoans : loans;
 
         const rowsData = membersToRender.map((mem, i) => {
-          const memLoans = sheetLoansPool.filter(l => 
-            (l.memberId === mem.memberId || (l.name && mem.name && l.name.trim().toLowerCase() === mem.name.trim().toLowerCase())) && 
+          const memLoans = sheetLoansPool.filter(l =>
+            doesLoanBelongToMember(l, mem) &&
             isLoanActiveOnBsDate(l, targetReportDateBs)
           );
-          const microLoan = memLoans.find(l => l.loanProduct.toLowerCase().includes('micro') || l.loanProduct.toLowerCase().includes('general') || l.loanProduct.toLowerCase().includes('group')) || memLoans[0];
-          const emergencyLoan = memLoans.find(l => l.loanProduct.toLowerCase().includes('emergency') || l.loanProduct.toLowerCase().includes('family'));
+          const { microLoan, emergencyLoan } = splitMemberLoansByCategory(memLoans);
           
           const savingAmt = getMemberRecurringSavingAmount(mem);
           

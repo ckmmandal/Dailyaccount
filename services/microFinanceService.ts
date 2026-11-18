@@ -230,6 +230,29 @@ export const getTodayBsDate = (): string => {
   }
 };
 
+export const normalizeLoanProductKey = (product?: string): string =>
+  String(product || '')
+    .replace(/\s*\([^)]*\)\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+export const findUnclosedDuplicateLoan = (
+  existingLoans: MFLoanRecord[],
+  memberId: string,
+  loanProduct: string
+): MFLoanRecord | undefined => {
+  const memKey = String(memberId || '').trim().toLowerCase();
+  const prodKey = normalizeLoanProductKey(loanProduct);
+  if (!memKey || !prodKey) return undefined;
+  return existingLoans.find(l => {
+    if (l.status === 'CLOSED') return false;
+    const lMemKey = String(l.memberId || '').trim().toLowerCase();
+    const lProdKey = normalizeLoanProductKey(l.loanProduct);
+    return lMemKey === memKey && lProdKey === prodKey;
+  });
+};
+
 const DEFAULT_CENTERS: MFCenter[] = [
   {
     id: 'cnt-1',
@@ -1398,6 +1421,12 @@ export const microFinanceService = {
   addLoan: (loan: Omit<MFLoanRecord, 'id' | 'createdAt'>): MFLoanRecord => {
     assertDayNotEnded();
     const loans = microFinanceService.getLoans();
+    const conflict = findUnclosedDuplicateLoan(loans, loan.memberId, loan.loanProduct);
+    if (conflict) {
+      throw new Error(
+        `Cannot issue loan: Member (${loan.name} • ${loan.memberId}) already has an unclosed ${conflict.status} loan (${conflict.accountNo}) under "${conflict.loanProduct}". Please close the existing loan first.`
+      );
+    }
     const newLoan: MFLoanRecord = {
       ...loan,
       id: 'ln-' + Date.now(),
@@ -1661,11 +1690,22 @@ export const microFinanceService = {
     const existingActive = microFinanceService.getLoans();
     const today = new Date().toISOString().split('T')[0];
     const stamp = Date.now();
-    const created: MFLoanRecord[] = items.map((item, idx) => ({
-      ...item,
-      id: `ln-${stamp}-${idx}`,
-      createdAt: today
-    }));
+    const created: MFLoanRecord[] = [];
+    const seenBatchKeys = new Set<string>();
+    items.forEach((item, idx) => {
+      if (item.status !== 'CLOSED') {
+        const key = `${String(item.memberId || '').trim().toLowerCase()}__${normalizeLoanProductKey(item.loanProduct)}`;
+        if (findUnclosedDuplicateLoan(existingActive, item.memberId, item.loanProduct) || seenBatchKeys.has(key)) {
+          return;
+        }
+        seenBatchKeys.add(key);
+      }
+      created.push({
+        ...item,
+        id: `ln-${stamp}-${idx}`,
+        createdAt: today
+      });
+    });
 
     const activeCreated = created.filter(l => l.status !== 'CLOSED');
     const closedCreated = created.filter(l => l.status === 'CLOSED');
