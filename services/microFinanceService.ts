@@ -64,7 +64,7 @@ export interface MFSavingsRecord {
   dateBs?: string;
   amount: number;
   savingType: 'Normal Saving' | 'Recurring Saving' | 'Compulsory' | 'Optional' | 'Fixed Deposit' | string;
-  status: 'PAID' | 'DUE' | 'PENDING';
+  status: 'ACTIVE' | 'INACTIVE' | 'PAID' | 'DUE' | 'PENDING';
   collectedBy?: string;
   createdBy?: string;
   createdByName?: string;
@@ -413,7 +413,7 @@ const DEFAULT_SAVINGS: MFSavingsRecord[] = [
     dateBs: '2083-06-29',
     amount: 1500,
     savingType: 'Compulsory',
-    status: 'PAID',
+    status: 'ACTIVE',
     collectedBy: 'Ramesh Sharma',
     receiptNo: 'REC-501',
     createdAt: '2026-10-15'
@@ -429,7 +429,7 @@ const DEFAULT_SAVINGS: MFSavingsRecord[] = [
     dateBs: '2083-06-29',
     amount: 1500,
     savingType: 'Compulsory',
-    status: 'PAID',
+    status: 'ACTIVE',
     collectedBy: 'Ramesh Sharma',
     receiptNo: 'REC-502',
     createdAt: '2026-10-15'
@@ -445,7 +445,7 @@ const DEFAULT_SAVINGS: MFSavingsRecord[] = [
     dateBs: '2083-07-04',
     amount: 2000,
     savingType: 'Compulsory',
-    status: 'PAID',
+    status: 'ACTIVE',
     collectedBy: 'Sita Ram Yadav',
     receiptNo: 'REC-503',
     createdAt: '2026-10-20'
@@ -708,7 +708,7 @@ const mapSavingToRow = (s: MFSavingsRecord) => ({
   date_bs: s.dateBs || '',
   amount: Number(s.amount) || 0,
   saving_type: s.savingType || 'Compulsory',
-  status: s.status || 'PAID',
+  status: s.status || 'ACTIVE',
   collected_by: s.collectedBy || '',
   created_by: s.createdBy || null,
   created_by_name: s.createdByName || null,
@@ -729,7 +729,11 @@ const mapRowToSaving = (r: Record<string, unknown>): MFSavingsRecord => ({
   dateBs: r.date_bs ? String(r.date_bs) : undefined,
   amount: Number(r.amount) || 0,
   savingType: String(r.saving_type || 'Compulsory'),
-  status: (['PAID', 'DUE', 'PENDING'].includes(String(r.status)) ? String(r.status) : 'PAID') as MFSavingsRecord['status'],
+  status: ((): MFSavingsRecord['status'] => {
+    const raw = String(r.status || '').toUpperCase();
+    if (raw === 'INACTIVE' || raw === 'DUE' || raw === 'PENDING') return 'INACTIVE';
+    return 'ACTIVE';
+  })(),
   collectedBy: r.collected_by ? String(r.collected_by) : undefined,
   createdBy: r.created_by ? String(r.created_by) : undefined,
   createdByName: r.created_by_name ? String(r.created_by_name) : undefined,
@@ -761,27 +765,49 @@ const mapSheetToRow = (s: MFCollectionSheet) => ({
   updated_at: new Date().toISOString()
 });
 
-const mapRowToSheet = (r: Record<string, unknown>): MFCollectionSheet => ({
-  id: String(r.id),
-  centerId: String(r.center_id || ''),
-  centerName: String(r.center_name || ''),
-  groupId: String(r.group_id || ''),
-  groupName: String(r.group_name || ''),
-  year: String(r.year || ''),
-  month: String(r.month || ''),
-  day: String(r.day || ''),
-  dateDisplay: String(r.date_display || ''),
-  status: (['GENERATED', 'COLLECTED', 'PENDING'].includes(String(r.status)) ? String(r.status) : 'GENERATED') as MFCollectionSheet['status'],
-  totalCompulsorySaving: Number(r.total_compulsory_saving) || 0,
-  totalOptionalSaving: Number(r.total_optional_saving) || 0,
-  totalLoanPrincipal: Number(r.total_loan_principal) || 0,
-  totalLoanInterest: Number(r.total_loan_interest) || 0,
-  totalExpected: Number(r.total_expected) || 0,
-  totalCollected: Number(r.total_collected) || 0,
-  memberCount: Number(r.member_count) || 0,
-  collectedBy: r.collected_by ? String(r.collected_by) : undefined,
-  createdAt: String(r.created_at || '')
-});
+const parseSigMembers = (val: unknown): MFSignatureSheetMember[] => {
+  if (Array.isArray(val)) return val as MFSignatureSheetMember[];
+  if (typeof val === 'string' && val.trim()) {
+    try {
+      const parsed = JSON.parse(val);
+      return Array.isArray(parsed) ? (parsed as MFSignatureSheetMember[]) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
+const mapRowToSheet = (r: Record<string, unknown>): MFCollectionSheet => {
+  const year = String(r.year || '');
+  const month = String(r.month || '');
+  const day = String(r.day || '');
+  const rawDisplay = String(r.date_display || '').trim();
+  const dateDisplay = rawDisplay || [year, month, day].filter(Boolean).join(' ');
+  const rawStatus = String(r.status || 'GENERATED').toUpperCase();
+  const status = (['GENERATED', 'COLLECTED', 'PENDING'].includes(rawStatus) ? rawStatus : 'GENERATED') as MFCollectionSheet['status'];
+  return {
+    id: String(r.id),
+    centerId: String(r.center_id || ''),
+    centerName: String(r.center_name || ''),
+    groupId: String(r.group_id || ''),
+    groupName: String(r.group_name || ''),
+    year,
+    month,
+    day,
+    dateDisplay,
+    status,
+    totalCompulsorySaving: Number(r.total_compulsory_saving) || 0,
+    totalOptionalSaving: Number(r.total_optional_saving) || 0,
+    totalLoanPrincipal: Number(r.total_loan_principal) || 0,
+    totalLoanInterest: Number(r.total_loan_interest) || 0,
+    totalExpected: Number(r.total_expected) || 0,
+    totalCollected: Number(r.total_collected) || 0,
+    memberCount: Number(r.member_count) || 0,
+    collectedBy: r.collected_by ? String(r.collected_by) : undefined,
+    createdAt: String(r.created_at || '')
+  };
+};
 
 const mapSigSheetToRow = (s: MFSignatureSheet) => ({
   id: s.id,
@@ -815,7 +841,7 @@ const mapRowToSigSheet = (r: Record<string, unknown>): MFSignatureSheet => ({
   location: String(r.location || ''),
   branchName: String(r.branch_name || ''),
   branchAddress: String(r.branch_address || ''),
-  members: Array.isArray(r.members) ? (r.members as MFSignatureSheetMember[]) : [],
+  members: parseSigMembers(r.members),
   totalMembers: Number(r.total_members) || 0,
   totalSavings: Number(r.total_savings) || 0,
   totalLoans: Number(r.total_loans) || 0,
@@ -871,196 +897,9 @@ const mergeClosedLoanArchive = (loan: MFLoanRecord): MFLoanRecord[] => {
   return next;
 };
 
-const DEFAULT_SHEETS: MFCollectionSheet[] = [
-  {
-    id: 'cs-1',
-    centerId: 'cnt-1',
-    centerName: 'Center 01 (Janaki Chowk)',
-    groupId: 'grp-1',
-    groupName: 'Laxmi Mahila Samuh',
-    year: '2082',
-    month: 'Baisakh',
-    day: '1',
-    dateDisplay: '2082 Baisakh 1',
-    status: 'COLLECTED',
-    totalCompulsorySaving: 7500,
-    totalOptionalSaving: 3000,
-    totalLoanPrincipal: 32000,
-    totalLoanInterest: 4200,
-    totalExpected: 46700,
-    totalCollected: 46700,
-    memberCount: 5,
-    collectedBy: 'Ramesh Sharma',
-    createdAt: '2025-04-14'
-  },
-  {
-    id: 'cs-2',
-    centerId: 'cnt-2',
-    centerName: 'Center 02 (Shree Ram Chowk)',
-    groupId: 'grp-2',
-    groupName: 'Saraswati Mahila Samuh',
-    year: '2082',
-    month: 'Baisakh',
-    day: '1',
-    dateDisplay: '2082 Baisakh 1',
-    status: 'GENERATED',
-    totalCompulsorySaving: 8000,
-    totalOptionalSaving: 2500,
-    totalLoanPrincipal: 28000,
-    totalLoanInterest: 3800,
-    totalExpected: 42300,
-    totalCollected: 0,
-    memberCount: 5,
-    collectedBy: 'Sita Ram Yadav',
-    createdAt: '2025-04-14'
-  },
-  {
-    id: 'cs-3',
-    centerId: 'cnt-1',
-    centerName: 'Center 01 (Janaki Chowk)',
-    groupId: 'grp-1',
-    groupName: 'Laxmi Mahila Samuh',
-    year: '2083',
-    month: 'Kartik',
-    day: '1',
-    dateDisplay: '2083 Kartik 1',
-    status: 'GENERATED',
-    totalCompulsorySaving: 5000,
-    totalOptionalSaving: 2000,
-    totalLoanPrincipal: 25000,
-    totalLoanInterest: 3500,
-    totalExpected: 35500,
-    totalCollected: 0,
-    memberCount: 4,
-    collectedBy: 'Field Officer',
-    createdAt: '2026-11-10'
-  }
-];
-
-const DEFAULT_SIGNATURE_SHEETS: MFSignatureSheet[] = [
-  {
-    id: 'sig-1',
-    sheetNo: 'SS-2082-01',
-    centerId: 'cnt-1',
-    centerName: '१ गते रतौली सेन्टर',
-    groupId: 'grp-1',
-    groupName: 'तपसी महिला बचत समूह',
-    dateBs: '२०८२ बैशाख १',
-    location: 'रतौली',
-    branchName: 'सहोडवा सेवा केन्द्र',
-    branchAddress: 'पिपरा गाँउपालिका-६, महोत्तरी',
-    members: [
-      {
-        memberId: 'M-1001',
-        name: 'Sita Devi Chaudhary',
-        savingsAmount: 1000,
-        loanAmount: 4500,
-        microLoanDate: '2083-01-15',
-        microLoanPrincipal: 4500,
-        microLoanKista: 500,
-        microLoanAmount: 4500,
-        emergencyLoanDate: '-',
-        emergencyLoanPrincipal: 0,
-        emergencyLoanKista: 0,
-        emergencyLoanAmount: 0
-      },
-      {
-        memberId: 'M-1002',
-        name: 'Geeta Kumari Mandal',
-        savingsAmount: 1000,
-        loanAmount: 4500,
-        microLoanDate: '2083-02-10',
-        microLoanPrincipal: 4500,
-        microLoanKista: 500,
-        microLoanAmount: 4500,
-        emergencyLoanDate: '-',
-        emergencyLoanPrincipal: 0,
-        emergencyLoanKista: 0,
-        emergencyLoanAmount: 0
-      },
-      {
-        memberId: 'M-1003',
-        name: 'Sunita Devi Yadav',
-        savingsAmount: 500,
-        loanAmount: 0,
-        microLoanDate: '-',
-        microLoanPrincipal: 0,
-        microLoanKista: 0,
-        microLoanAmount: 0,
-        emergencyLoanDate: '-',
-        emergencyLoanPrincipal: 0,
-        emergencyLoanKista: 0,
-        emergencyLoanAmount: 0
-      },
-      {
-        memberId: 'M-1004',
-        name: 'Anita Kumari Sah',
-        savingsAmount: 800,
-        loanAmount: 3200,
-        microLoanDate: '2083-03-01',
-        microLoanPrincipal: 3200,
-        microLoanKista: 400,
-        microLoanAmount: 3200,
-        emergencyLoanDate: '-',
-        emergencyLoanPrincipal: 0,
-        emergencyLoanKista: 0,
-        emergencyLoanAmount: 0
-      }
-    ],
-    totalMembers: 4,
-    totalSavings: 3300,
-    totalLoans: 12200,
-    officerName: 'Chandan',
-    createdAt: '2026-04-19'
-  },
-  {
-    id: 'sig-2',
-    sheetNo: 'SS-2083-02',
-    centerId: 'cnt-1',
-    centerName: 'Center 01 (Janaki Chowk)',
-    groupId: 'grp-1',
-    groupName: 'Laxmi Mahila Samuh',
-    dateBs: '२०८३ कार्तिक १',
-    location: 'जनकपुर, महोत्तरी',
-    branchName: 'सहोडवा सेवा केन्द्र',
-    branchAddress: 'पिपरा गाँउपालिका-६, महोत्तरी',
-    members: [
-      {
-        memberId: 'M-1001',
-        name: 'Sita Devi Chaudhary',
-        savingsAmount: 1000,
-        loanAmount: 9500,
-        microLoanDate: '2083-06-20',
-        microLoanPrincipal: 100000,
-        microLoanKista: 1,
-        microLoanAmount: 9500,
-        emergencyLoanDate: '-',
-        emergencyLoanPrincipal: 0,
-        emergencyLoanKista: 0,
-        emergencyLoanAmount: 0
-      },
-      {
-        memberId: 'M-1002',
-        name: 'Geeta Kumari Mandal',
-        savingsAmount: 1000,
-        loanAmount: 10000,
-        microLoanDate: '2083-07-25',
-        microLoanPrincipal: 50000,
-        microLoanKista: 1,
-        microLoanAmount: 10000,
-        emergencyLoanDate: '-',
-        emergencyLoanPrincipal: 0,
-        emergencyLoanKista: 0,
-        emergencyLoanAmount: 0
-      }
-    ],
-    totalMembers: 2,
-    totalSavings: 2000,
-    totalLoans: 19500,
-    officerName: 'ROSHAN KUMAR MANDAL',
-    createdAt: '2026-11-10'
-  }
-];
+// Legacy default sheet IDs removed — reports rely strictly on real user/Supabase data.
+const LEGACY_DEFAULT_SHEET_IDS = new Set(['cs-1', 'cs-2', 'cs-3']);
+const LEGACY_DEFAULT_SIG_SHEET_IDS = new Set(['sig-1', 'sig-2']);
 
 const DEFAULT_SETTINGS: MFSettings = {
   interestRateDefault: 14,
@@ -1277,6 +1116,7 @@ export const microFinanceService = {
         if (Array.isArray(parsed)) {
           return parsed.map((s: MFSavingsRecord, idx: number) => ({
             ...s,
+            status: (String(s.status || '').toUpperCase() === 'INACTIVE' || String(s.status || '').toUpperCase() === 'DUE' || String(s.status || '').toUpperCase() === 'PENDING') ? 'INACTIVE' : 'ACTIVE',
             dateBs: s.dateBs || (s.date && s.date.startsWith('208') ? s.date : (DEFAULT_SAVINGS[idx]?.dateBs || '2083-06-29'))
           }));
         }
@@ -1317,6 +1157,73 @@ export const microFinanceService = {
     localStorage.setItem(STORAGE_KEYS.MEMBERS, JSON.stringify(updatedMembers));
     if (changedMember) void bgUpsert('mf_members', [mapMemberToRow(changedMember)]);
     return newSaving;
+  },
+
+  updateSaving: (id: string, updates: Partial<MFSavingsRecord>): MFSavingsRecord[] => {
+    assertDayNotEnded();
+    const existingList = microFinanceService.getSavings();
+    const oldItem = existingList.find(s => s.id === id) || null;
+    let updatedItem: MFSavingsRecord | null = null;
+
+    const savings = existingList.map(s => {
+      if (s.id === id) {
+        const nextStatusRaw = String(updates.status ?? s.status ?? 'ACTIVE').toUpperCase();
+        const normalizedStatus: 'ACTIVE' | 'INACTIVE' =
+          nextStatusRaw === 'INACTIVE' || nextStatusRaw === 'DUE' || nextStatusRaw === 'PENDING'
+            ? 'INACTIVE'
+            : 'ACTIVE';
+        const nextDateBs = normalizeBsDate(updates.dateBs ?? s.dateBs ?? s.date);
+        updatedItem = {
+          ...s,
+          ...updates,
+          status: normalizedStatus,
+          dateBs: nextDateBs,
+          amount: updates.amount !== undefined ? Number(updates.amount) || 0 : s.amount
+        };
+        return updatedItem;
+      }
+      return s;
+    });
+
+    localStorage.setItem(STORAGE_KEYS.SAVINGS, JSON.stringify(savings));
+    if (updatedItem) {
+      void bgUpsert('mf_savings', [mapSavingToRow(updatedItem)]);
+
+      // Adjust member totalSavings if amount, status, or memberId changed
+      if (oldItem) {
+        const wasActive = String(oldItem.status || '').toUpperCase() !== 'INACTIVE' && String(oldItem.status || '').toUpperCase() !== 'DUE' && String(oldItem.status || '').toUpperCase() !== 'PENDING';
+        const isNowActive = updatedItem.status === 'ACTIVE';
+        const oldDelta = wasActive ? Number(oldItem.amount) || 0 : 0;
+        const newDelta = isNowActive ? Number(updatedItem.amount) || 0 : 0;
+
+        if (oldItem.memberId !== updatedItem.memberId || oldDelta !== newDelta) {
+          const changedMembers: MFMember[] = [];
+          const members = microFinanceService.getMembers().map(m => {
+            let nextTotal = Number(m.totalSavings) || 0;
+            let changed = false;
+            if (m.memberId === oldItem.memberId && oldDelta !== 0) {
+              nextTotal = Math.max(0, nextTotal - oldDelta);
+              changed = true;
+            }
+            if (m.memberId === updatedItem!.memberId && newDelta !== 0) {
+              nextTotal += newDelta;
+              changed = true;
+            }
+            if (changed) {
+              const updatedMember = { ...m, totalSavings: nextTotal };
+              changedMembers.push(updatedMember);
+              return updatedMember;
+            }
+            return m;
+          });
+          if (changedMembers.length > 0) {
+            localStorage.setItem(STORAGE_KEYS.MEMBERS, JSON.stringify(members));
+            void bgUpsert('mf_members', changedMembers.map(mapMemberToRow));
+          }
+        }
+      }
+    }
+    return savings;
   },
 
   deleteSaving: (id: string): MFSavingsRecord[] => {
@@ -1731,10 +1638,10 @@ export const microFinanceService = {
     const updated = [...created, ...existing];
     microFinanceService.saveSavings(updated);
 
-    // Update member totalSavings in batch for PAID savings
+    // Update member totalSavings in batch for ACTIVE (or legacy PAID) savings
     const memberAdds = new Map<string, number>();
     created.forEach(s => {
-      if (s.status === 'PAID' && s.memberId) {
+      if ((s.status === 'ACTIVE' || s.status === 'PAID') && s.memberId) {
         memberAdds.set(s.memberId, (memberAdds.get(s.memberId) || 0) + (Number(s.amount) || 0));
       }
     });
@@ -1814,21 +1721,20 @@ export const microFinanceService = {
     return updatedActive;
   },
 
-  // Sheets (Reports)
+  // Sheets (Reports) - never auto-seed default rows
   getSheets: (): MFCollectionSheet[] => {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.SHEETS);
       if (data !== null) {
         const parsed = JSON.parse(data);
         if (Array.isArray(parsed)) {
-          return parsed;
+          return parsed.filter((s: MFCollectionSheet) => !LEGACY_DEFAULT_SHEET_IDS.has(s.id));
         }
       }
     } catch (e) {
       console.error(e);
     }
-    localStorage.setItem(STORAGE_KEYS.SHEETS, JSON.stringify(DEFAULT_SHEETS));
-    return DEFAULT_SHEETS;
+    return [];
   },
 
   saveSheets: (sheets: MFCollectionSheet[]): void => {
@@ -1858,21 +1764,20 @@ export const microFinanceService = {
     return sheets;
   },
 
-  // Permanent Signature Sheets
+  // Permanent Signature Sheets - never auto-seed default rows
   getSignatureSheets: (): MFSignatureSheet[] => {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.SIGNATURE_SHEETS);
       if (data !== null) {
         const parsed = JSON.parse(data);
         if (Array.isArray(parsed)) {
-          return parsed;
+          return parsed.filter((s: MFSignatureSheet) => !LEGACY_DEFAULT_SIG_SHEET_IDS.has(s.id));
         }
       }
     } catch (e) {
       console.error(e);
     }
-    localStorage.setItem(STORAGE_KEYS.SIGNATURE_SHEETS, JSON.stringify(DEFAULT_SIGNATURE_SHEETS));
-    return DEFAULT_SIGNATURE_SHEETS;
+    return [];
   },
 
   saveSignatureSheets: (sheets: MFSignatureSheet[]): void => {
@@ -1968,6 +1873,14 @@ export const microFinanceService = {
     }
 
     try {
+      const safeSelectAll = async (table: string) => {
+        if (!supabase) return { data: null, error: null };
+        const ordered = await supabase.from(table).select('*').order('created_at', { ascending: false });
+        if (!ordered.error) return ordered;
+        console.warn(`Supabase ${table} ordered select failed, retrying plain select:`, ordered.error.message);
+        return await supabase.from(table).select('*');
+      };
+
       const [
         cRes,
         gRes,
@@ -1982,8 +1895,8 @@ export const microFinanceService = {
         supabase.from('mf_groups').select('*').order('created_at', { ascending: false }),
         supabase.from('mf_members').select('*').order('created_at', { ascending: false }),
         supabase.from('mf_savings').select('*').order('created_at', { ascending: false }),
-        supabase.from('mf_collection_sheets').select('*').order('created_at', { ascending: false }),
-        supabase.from('mf_signature_sheets').select('*').order('created_at', { ascending: false }),
+        safeSelectAll('mf_collection_sheets'),
+        safeSelectAll('mf_signature_sheets'),
         supabase.from('mf_settings').select('data').eq('id', 'mf_general_settings').maybeSingle(),
         microFinanceService.fetchActiveLoansFromSupabase()
       ]);
@@ -2031,30 +1944,18 @@ export const microFinanceService = {
         }
       }
 
+      // Sync mf_collection_sheets directly from Supabase (authoritative, no auto-default seeding)
       let sheets = localSheets;
       if (!shRes.error && Array.isArray(shRes.data)) {
-        if (shRes.data.length > 0) {
-          sheets = (shRes.data as Record<string, unknown>[]).map(mapRowToSheet);
-          localStorage.setItem(STORAGE_KEYS.SHEETS, JSON.stringify(sheets));
-        } else {
-          const nonDefaultSheets = localSheets.filter(s => !['cs-1', 'cs-2', 'cs-3'].includes(s.id));
-          if (nonDefaultSheets.length > 0) {
-            void bgUpsert('mf_collection_sheets', nonDefaultSheets.map(mapSheetToRow));
-          }
-        }
+        sheets = (shRes.data as Record<string, unknown>[]).map(mapRowToSheet);
+        localStorage.setItem(STORAGE_KEYS.SHEETS, JSON.stringify(sheets));
       }
 
+      // Sync mf_signature_sheets directly from Supabase (authoritative, no auto-default seeding)
       let signatureSheets = localSigSheets;
       if (!sigRes.error && Array.isArray(sigRes.data)) {
-        if (sigRes.data.length > 0) {
-          signatureSheets = (sigRes.data as Record<string, unknown>[]).map(mapRowToSigSheet);
-          localStorage.setItem(STORAGE_KEYS.SIGNATURE_SHEETS, JSON.stringify(signatureSheets));
-        } else {
-          const nonDefaultSigSheets = localSigSheets.filter(s => !['sig-1', 'sig-2'].includes(s.id));
-          if (nonDefaultSigSheets.length > 0) {
-            void bgUpsert('mf_signature_sheets', nonDefaultSigSheets.map(mapSigSheetToRow));
-          }
-        }
+        signatureSheets = (sigRes.data as Record<string, unknown>[]).map(mapRowToSigSheet);
+        localStorage.setItem(STORAGE_KEYS.SIGNATURE_SHEETS, JSON.stringify(signatureSheets));
       }
 
       let settings = localSettings;

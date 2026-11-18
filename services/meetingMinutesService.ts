@@ -251,231 +251,23 @@ export const DEFAULT_MEETING_SETTINGS: MeetingMinutesSettings = {
   enabledAgendas: PREDEFINED_AGENDAS.map(a => a.key),
 };
 
-const SAMPLE_INITIAL_MEETINGS: GroupMeetingRecord[] = [
-  {
-    id: 'mtg-101',
-    meetingNo: 'MTG-2083-001',
-    groupId: 'grp-1',
-    groupName: 'Laxmi Mahila Samuh',
-    groupCode: 'G-001',
-    centerId: 'c-1',
-    centerName: 'Center 01 (Janaki Chowk)',
-    branchName: 'Ratauli Central Head Office',
-    groupFormationDate: '2080-01-15',
-    groupChairperson: 'Sita Devi Chaudhary',
-    groupSecretary: 'Geeta Kumari Mandal',
-    totalMembersCount: 4,
-    meetingDateBs: '2083-07-25',
-    meetingDateAd: '2026-11-10',
-    meetingTime: '07:30 AM',
-    meetingLocation: 'जानकी चोक, रतौली',
-    meetingChairman: 'Sita Devi Chaudhary',
-    meetingSecretary: 'Geeta Kumari Mandal',
-    fieldStaffName: 'Chandan',
-    fieldStaffId: 'EMP-01',
-    meetingType: 'REGULAR',
-    attendance: [
-      { memberId: 'M-1001', name: 'Sita Devi Chaudhary', role: 'Leader', status: 'PRESENT', savingsAccountNo: 'SAV-001' },
-      { memberId: 'M-1002', name: 'Geeta Kumari Mandal', role: 'Secretary', status: 'PRESENT', savingsAccountNo: 'SAV-002' },
-      { memberId: 'M-1003', name: 'Sunita Devi Yadav', role: 'Member', status: 'PRESENT', savingsAccountNo: 'SAV-003' },
-      { memberId: 'M-1004', name: 'Anita Kumari Sah', role: 'Member', status: 'LEAVE', remarks: 'स्वास्थ्य समस्या', savingsAccountNo: 'SAV-004' }
-    ],
-    presentCount: 3,
-    absentCount: 0,
-    leaveCount: 1,
-    inactiveCount: 0,
-    selectedAgendas: [
-      {
-        id: 'ag-1',
-        key: 'regular_savings',
-        titleNp: '१. नियमित बचत संकलन',
-        titleEn: '1. Regular Savings Collection',
-        isSelected: true,
-        discussion: 'उपस्थित ३ जना सदस्यहरूबाट जनही रु. १,००० का दरले जम्मा रु. ३,००० नियमित बचत संकलन गरियो ।',
-        decision: 'संकलित रकम संस्थाको सम्बन्धित बचत खातामा आजै दाखिला गर्ने निर्णय गरियो ।',
-        groupRecommendation: 'नियमित बचत समयमै संकलन गर्न सहमति ।'
-      },
-      {
-        id: 'ag-2',
-        key: 'new_loan',
-        titleNp: '६. नयाँ ऋण लगानी',
-        titleEn: '6. New Loan Investment',
-        isSelected: true,
-        discussion: 'सदस्य सीता देवी चौधरीले किराना पसल विस्तारका लागि रु. ६०,००० थप ऋण माग गर्नुभएकोमा छलफल गरियो ।',
-        decision: 'समूहको तर्फबाट सिफारिस गरी संस्थामा ऋण स्वीकृतिका लागि पेश गर्ने निर्णय गरियो ।',
-        groupRecommendation: 'सदस्यको आर्थिक कारोबार नियमित रहेकोले पूर्ण सिफारिस गर्दछौं ।',
-        records: [
-          {
-            memberName: 'Sita Devi Chaudhary',
-            memberNo: 'M-1001',
-            requestedAmount: 60000,
-            purpose: 'किराना पसल विस्तार',
-            repaymentCapacity: 'राम्रो (मासिक आय रु. ३५,०००)',
-            groupRecommendation: 'ऋण सिफारिस स्वीकृत',
-            decision: 'संस्थामा फाइल पठाउने'
-          }
-        ]
-      },
-      {
-        id: 'ag-3',
-        key: 'financial_literacy',
-        titleNp: '१४. वित्तीय साक्षरता छलफल',
-        titleEn: '14. Financial Literacy',
-        isSelected: true,
-        discussion: 'क्षेत्रीय कर्मचारी चन्दनद्वारा डिजिटल कारोबार तथा मासिक पारिवारिक बजेट व्यवस्थापनबारे अभिमुखीकरण प्रदान गरियो ।',
-        decision: 'प्रत्येक सदस्यले अनिवार्य रूपमा आम्दानी र खर्चको विवरण डायरीमा राख्ने ।',
-        groupRecommendation: 'आगामी बैठकमा पनि यस्तै जानकारी निरन्तर गर्ने ।'
-      }
-    ],
-    decisions: [
-      {
-        id: 'dec-1',
-        meetingId: 'mtg-101',
-        meetingNo: 'MTG-2083-001',
-        groupName: 'Laxmi Mahila Samuh',
-        decisionNo: 'निर्णय नं. १',
-        relatedAgenda: 'नियमित बचत संकलन',
-        subject: 'बचत संकलन तथा दाखिला',
-        decisionText: 'संकलित रु. ३,००० बचत रकम संस्थाको खातामा दाखिला गर्ने ।',
-        groupRecommendation: 'सर्वसम्मत पारित',
-        institutionApprovalStatus: 'APPROVED',
-        responsiblePerson: 'Geeta Kumari Mandal (सचिव)',
-        deadlineBs: '2083-07-25',
-        status: 'COMPLETED',
-        remarks: 'दाखिला सम्पन्न'
-      },
-      {
-        id: 'dec-2',
-        meetingId: 'mtg-101',
-        meetingNo: 'MTG-2083-001',
-        groupName: 'Laxmi Mahila Samuh',
-        decisionNo: 'निर्णय नं. २',
-        relatedAgenda: 'नयाँ ऋण लगानी',
-        subject: 'सीता देवी चौधरीको लघुव्यवसाय ऋण सिफारिस',
-        decisionText: 'रु. ६०,००० ऋण लगानीका लागि संस्थाको कर्जा समितिमा सिफारिस गर्ने ।',
-        groupRecommendation: 'शतप्रतिशत सिफारिस',
-        institutionApprovalStatus: 'PENDING',
-        responsiblePerson: 'Chandan (फिल्ड कर्मचारी)',
-        deadlineBs: '2083-07-28',
-        status: 'IN_PROGRESS',
-        remarks: 'शाखामा फाइल पेश'
-      }
-    ],
-    preMeetingSummary: 'बैठक पूर्व प्रस्ताव तयारी सम्पन्न । एजेन्डा: बचत संकलन, ऋण माग र वित्तीय साक्षरता ।',
-    actualOutcomesSummary: '३ जना उपस्थित, १ जना बिदामा । रु. ३,००० बचत संकलन, १ वटा ऋण माग सिफारिस ।',
-    status: 'APPROVED',
-    chairmanSigned: true,
-    secretarySigned: true,
-    fieldStaffVerified: true,
-    branchManagerApproved: true,
-    verifiedAt: '2083-07-25',
-    verifiedBy: 'Chandan / Branch Manager',
-    createdAt: '2083-07-25',
-    updatedAt: '2083-07-25'
-  },
-  {
-    id: 'mtg-102',
-    meetingNo: 'MTG-2083-002',
-    groupId: 'grp-2',
-    groupName: 'Radha Krishna Mahila Samuh',
-    groupCode: 'G-002',
-    centerId: 'c-1',
-    centerName: 'Center 01 (Janaki Chowk)',
-    branchName: 'Ratauli Central Head Office',
-    groupFormationDate: '2080-03-20',
-    groupChairperson: 'Parwati Devi Yadav',
-    groupSecretary: 'Sunita Kumari Sah',
-    totalMembersCount: 4,
-    meetingDateBs: '2083-08-01',
-    meetingDateAd: '2026-11-16',
-    meetingTime: '08:00 AM',
-    meetingLocation: 'राधा कृष्ण मन्दिर प्रांगण, जानकी चोक',
-    meetingChairman: 'Parwati Devi Yadav',
-    meetingSecretary: 'Sunita Kumari Sah',
-    fieldStaffName: 'Chandan',
-    fieldStaffId: 'EMP-01',
-    meetingType: 'REGULAR',
-    attendance: [
-      { memberId: 'M-1005', name: 'Parwati Devi Yadav', role: 'Leader', status: 'PRESENT' },
-      { memberId: 'M-1006', name: 'Sunita Kumari Sah', role: 'Secretary', status: 'PRESENT' },
-      { memberId: 'M-1007', name: 'Manju Devi Mandal', role: 'Member', status: 'PRESENT' },
-      { memberId: 'M-1008', name: 'Kavita Kumari Das', role: 'Member', status: 'PRESENT' }
-    ],
-    presentCount: 4,
-    absentCount: 0,
-    leaveCount: 0,
-    inactiveCount: 0,
-    selectedAgendas: [
-      {
-        id: 'ag-201',
-        key: 'regular_savings',
-        titleNp: '१. नियमित बचत संकलन',
-        titleEn: '1. Regular Savings Collection',
-        isSelected: true,
-        discussion: 'चारै जना सदस्यको नियमित बचत संकलन गर्ने कार्यतालिका बनाइएको छ ।',
-        decision: 'मासिक रु. १,००० का दरले रु. ४,००० संकलन गर्ने ।'
-      },
-      {
-        id: 'ag-202',
-        key: 'new_member',
-        titleNp: '३. नयाँ सदस्य प्रवेश',
-        titleEn: '3. New Member Admission',
-        isSelected: true,
-        discussion: 'स्थानीय रीता देवी दासले समूहमा आबद्ध हुन निवेदन दिनुभएकोले छलफल गरिनेछ ।',
-        decision: 'सहमति भएमा आगामी महिनाबाट बचत सुरू गराउने ।',
-        records: [
-          {
-            memberName: 'Rita Devi Das',
-            address: 'पिपरा-६, महोत्तरी',
-            contactNo: '9812345678',
-            reason: 'नियमित बचत र महिला सशक्तिकरण',
-            groupRecommendation: 'स्वीकार्य',
-            decision: 'आगामी बैठकमा औपचारिकता पूरा गर्ने'
-          }
-        ]
-      }
-    ],
-    decisions: [
-      {
-        id: 'dec-201',
-        meetingId: 'mtg-102',
-        meetingNo: 'MTG-2083-002',
-        groupName: 'Radha Krishna Mahila Samuh',
-        decisionNo: 'निर्णय नं. १',
-        relatedAgenda: 'नयाँ सदस्य प्रवेश',
-        subject: 'रीता देवी दासको सदस्यता आवेदन',
-        decisionText: 'कागजात रुजु गरी समूहमा समावेश गर्ने प्रक्रिया अघि बढाउने ।',
-        groupRecommendation: 'सर्वसम्मत',
-        institutionApprovalStatus: 'PENDING',
-        responsiblePerson: 'Sunita Kumari Sah (सचिव)',
-        deadlineBs: '2083-08-05',
-        status: 'PENDING',
-        remarks: 'कागजात संकलन बाँकी'
-      }
-    ],
-    preMeetingSummary: 'फिल्ड भ्रमण पूर्व माइन्युट ड्राफ्ट तयार । प्रिन्ट गरी बैठकमा लैजान योग्य ।',
-    status: 'READY_TO_PRINT',
-    createdAt: '2083-07-28',
-    updatedAt: '2083-07-28'
-  }
-];
+const LEGACY_DEFAULT_MEETING_IDS = new Set(['mtg-101', 'mtg-102']);
 
 export const meetingMinutesService = {
-  // Meetings CRUD
+  // Meetings CRUD - never auto-seed default rows
   getMeetings: (): GroupMeetingRecord[] => {
     try {
       const data = localStorage.getItem(STORAGE_KEY_MEETINGS);
       if (data !== null) {
         const parsed = JSON.parse(data);
         if (Array.isArray(parsed)) {
-          return parsed;
+          return parsed.filter((m: GroupMeetingRecord) => !LEGACY_DEFAULT_MEETING_IDS.has(m.id));
         }
       }
     } catch (e) {
       console.error('Error loading meetings from storage:', e);
     }
-    localStorage.setItem(STORAGE_KEY_MEETINGS, JSON.stringify(SAMPLE_INITIAL_MEETINGS));
-    return SAMPLE_INITIAL_MEETINGS;
+    return [];
   },
 
   saveMeetings: (meetings: GroupMeetingRecord[]): void => {
@@ -701,38 +493,81 @@ export const meetingMinutesService = {
     const localTemplates = meetingMinutesService.getProposalTemplates();
 
     try {
+      const fetchGroupMeetingsRows = async () => {
+        const ordered = await supabase.from('group_meetings').select('*').order('created_at', { ascending: false });
+        if (!ordered.error) return ordered;
+        console.warn('Supabase group_meetings ordered select failed, retrying plain select:', ordered.error.message);
+        return await supabase.from('group_meetings').select('*');
+      };
+
       const [mtgRes, setRes, tplRes] = await Promise.all([
-        supabase.from('group_meetings').select('payload').order('created_at', { ascending: false }),
+        fetchGroupMeetingsRows(),
         supabase.from('mf_settings').select('data').eq('id', 'mf_meeting_settings').maybeSingle(),
         supabase.from('mf_settings').select('data').eq('id', 'mf_proposal_templates').maybeSingle()
       ]);
 
       let meetings = localMeetings;
       if (!mtgRes.error && Array.isArray(mtgRes.data)) {
-        const remoteList = mtgRes.data
-          .map((r: { payload?: GroupMeetingRecord }) => r.payload)
-          .filter((p): p is GroupMeetingRecord => Boolean(p && p.id));
-        if (remoteList.length > 0) {
-          meetings = remoteList;
-          localStorage.setItem(STORAGE_KEY_MEETINGS, JSON.stringify(meetings));
-        } else {
-          const nonSampleMeetings = localMeetings.filter(m => !['mtg-101', 'mtg-102'].includes(m.id));
-          if (nonSampleMeetings.length > 0) {
-            void supabase.from('group_meetings').upsert(
-              nonSampleMeetings.map(m => ({
-                id: m.id,
-                meeting_no: m.meetingNo,
-                group_id: m.groupId,
-                group_name: m.groupName,
-                meeting_date_bs: m.meetingDateBs,
-                status: m.status,
-                payload: m,
-                updated_at: new Date().toISOString()
-              })),
-              { onConflict: 'id' }
-            );
-          }
-        }
+        const remoteList = (mtgRes.data as Record<string, unknown>[])
+          .map((row): GroupMeetingRecord | null => {
+            let payloadObj: Partial<GroupMeetingRecord> | null = null;
+            if (row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)) {
+              payloadObj = row.payload as Partial<GroupMeetingRecord>;
+            } else if (typeof row.payload === 'string' && row.payload.trim()) {
+              try {
+                payloadObj = JSON.parse(row.payload) as Partial<GroupMeetingRecord>;
+              } catch {
+                payloadObj = null;
+              }
+            }
+            const id = payloadObj?.id || (row.id ? String(row.id) : '');
+            if (!id) return null;
+            return {
+              id,
+              meetingNo: payloadObj?.meetingNo || String(row.meeting_no || ''),
+              groupId: payloadObj?.groupId || String(row.group_id || ''),
+              groupName: payloadObj?.groupName || String(row.group_name || ''),
+              groupCode: payloadObj?.groupCode || '',
+              centerId: payloadObj?.centerId || '',
+              centerName: payloadObj?.centerName || '',
+              branchName: payloadObj?.branchName || '',
+              groupFormationDate: payloadObj?.groupFormationDate || '',
+              groupChairperson: payloadObj?.groupChairperson || '',
+              groupSecretary: payloadObj?.groupSecretary || '',
+              totalMembersCount: Number(payloadObj?.totalMembersCount) || 0,
+              meetingDateBs: payloadObj?.meetingDateBs || String(row.meeting_date_bs || ''),
+              meetingDateAd: payloadObj?.meetingDateAd || '',
+              meetingTime: payloadObj?.meetingTime || '',
+              meetingLocation: payloadObj?.meetingLocation || '',
+              meetingChairman: payloadObj?.meetingChairman || '',
+              meetingSecretary: payloadObj?.meetingSecretary || '',
+              fieldStaffName: payloadObj?.fieldStaffName || '',
+              fieldStaffId: payloadObj?.fieldStaffId,
+              meetingType: payloadObj?.meetingType || 'REGULAR',
+              attendance: Array.isArray(payloadObj?.attendance) ? payloadObj.attendance : [],
+              presentCount: Number(payloadObj?.presentCount) || 0,
+              absentCount: Number(payloadObj?.absentCount) || 0,
+              leaveCount: Number(payloadObj?.leaveCount) || 0,
+              inactiveCount: Number(payloadObj?.inactiveCount) || 0,
+              selectedAgendas: Array.isArray(payloadObj?.selectedAgendas) ? payloadObj.selectedAgendas : [],
+              decisions: Array.isArray(payloadObj?.decisions) ? payloadObj.decisions : [],
+              preMeetingSummary: payloadObj?.preMeetingSummary,
+              actualOutcomesSummary: payloadObj?.actualOutcomesSummary,
+              status: (payloadObj?.status || String(row.status || 'DRAFT')) as MeetingWorkflowStatus,
+              chairmanSigned: payloadObj?.chairmanSigned,
+              secretarySigned: payloadObj?.secretarySigned,
+              fieldStaffVerified: payloadObj?.fieldStaffVerified,
+              branchManagerApproved: payloadObj?.branchManagerApproved,
+              verifiedAt: payloadObj?.verifiedAt,
+              verifiedBy: payloadObj?.verifiedBy,
+              createdAt: payloadObj?.createdAt || String(row.created_at || ''),
+              updatedAt: payloadObj?.updatedAt || String(row.updated_at || '')
+            };
+          })
+          .filter((rec): rec is GroupMeetingRecord => rec !== null);
+
+        meetings = remoteList;
+        localStorage.setItem(STORAGE_KEY_MEETINGS, JSON.stringify(meetings));
       }
 
       let settings = localSettings;

@@ -1,5 +1,6 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import NepaliDate from 'nepali-date-converter';
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react';
 import { getTodayBsDateStr, isBackDateEntryAllowed } from '../utils/backDateControl';
@@ -12,6 +13,8 @@ interface NepaliDatePickerProps {
   align?: 'left' | 'right';
   disallowBackDateIfDisabled?: boolean;
   disabled?: boolean;
+  dropUp?: boolean;
+  iconOnly?: boolean;
 }
 
 const NEPALI_MONTHS = [
@@ -44,16 +47,21 @@ const getSafeNepaliDate = (dateStr: string): NepaliDate => {
 export const NepaliDatePicker: React.FC<NepaliDatePickerProps> = ({
   value,
   onChange,
-  className,
+  className = '',
   label,
   align = 'left',
   disallowBackDateIfDisabled = false,
-  disabled = false
+  disabled = false,
+  dropUp = false,
+  iconOnly = false
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [viewDate, setViewDate] = useState(() => getSafeNepaliDate(value));
   const [backDateAllowed, setBackDateAllowed] = useState(() => isBackDateEntryAllowed());
+  const [popoverStyle, setPopoverStyle] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const syncPolicy = () => {
@@ -82,17 +90,76 @@ export const NepaliDatePicker: React.FC<NepaliDatePickerProps> = ({
     }
   }, [value]);
 
+  const updatePosition = useCallback(() => {
+    const triggerEl = triggerRef.current;
+    if (!triggerEl) return;
+
+    const rect = triggerEl.getBoundingClientRect();
+    const popoverW = popoverRef.current?.offsetWidth || 248;
+    const popoverH = popoverRef.current?.offsetHeight || 320;
+    const gap = 8;
+    const margin = 8;
+
+    const spaceBelow = window.innerHeight - rect.bottom - margin;
+    const spaceAbove = rect.top - margin;
+
+    let top: number;
+    if (dropUp) {
+      if (spaceAbove >= popoverH + gap) {
+        top = rect.top - popoverH - gap;
+      } else if (spaceBelow >= popoverH + gap) {
+        top = rect.bottom + gap;
+      } else if (spaceBelow >= spaceAbove) {
+        top = Math.min(rect.bottom + gap, window.innerHeight - popoverH - margin);
+      } else {
+        top = Math.max(margin, rect.top - popoverH - gap);
+      }
+    } else {
+      if (spaceBelow >= popoverH + gap) {
+        top = rect.bottom + gap;
+      } else if (spaceAbove >= popoverH + gap) {
+        top = rect.top - popoverH - gap;
+      } else if (spaceBelow >= spaceAbove) {
+        top = Math.min(rect.bottom + gap, window.innerHeight - popoverH - margin);
+      } else {
+        top = Math.max(margin, rect.top - popoverH - gap);
+      }
+    }
+
+    top = Math.max(margin, Math.min(top, window.innerHeight - popoverH - margin));
+
+    let left = align === 'left' ? rect.left : rect.right - popoverW;
+    left = Math.max(margin, Math.min(left, window.innerWidth - popoverW - margin));
+
+    setPopoverStyle({ top, left });
+  }, [align, dropUp]);
+
+  useLayoutEffect(() => {
+    if (!isOpen || disabled) return;
+    updatePosition();
+  }, [isOpen, disabled, viewDate, updatePosition]);
+
   useEffect(() => {
+    if (!isOpen) return;
     const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      const inTrigger = containerRef.current?.contains(target);
+      const inPopover = popoverRef.current?.contains(target);
+      if (!inTrigger && !inPopover) {
         setIsOpen(false);
       }
     };
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isOpen]);
+    const handleReposition = () => updatePosition();
+
+    document.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('resize', handleReposition);
+    window.addEventListener('scroll', handleReposition, true);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('resize', handleReposition);
+      window.removeEventListener('scroll', handleReposition, true);
+    };
+  }, [isOpen, updatePosition]);
 
   const getBsDisplayString = () => {
     try {
@@ -195,54 +262,72 @@ export const NepaliDatePicker: React.FC<NepaliDatePickerProps> = ({
     return days;
   };
 
+  const calendarPopover = isOpen && !disabled ? (
+    <div
+      ref={popoverRef}
+      style={{ top: `${popoverStyle.top}px`, left: `${popoverStyle.left}px` }}
+      className="fixed bg-white border-2 border-slate-950 rounded-[2rem] shadow-2xl p-4 w-[248px] max-h-[calc(100vh-16px)] overflow-y-auto z-[10050] animate-in zoom-in-95 duration-200 font-black italic"
+    >
+      <div className="flex items-center justify-between mb-3 border-b border-slate-50 pb-2">
+        <button type="button" onClick={(e) => changeMonth(e, -1)} className="p-1.5 hover:bg-slate-50 rounded-lg"><ChevronLeft size={16}/></button>
+        <div className="text-center">
+          <div className="text-[12px] uppercase leading-none">{NEPALI_MONTHS[viewDate.getMonth()]}</div>
+          <div className="text-[9px] text-emerald-600 mt-0.5">{viewDate.getYear()}</div>
+        </div>
+        <button type="button" onClick={(e) => changeMonth(e, 1)} className="p-1.5 hover:bg-slate-50 rounded-lg"><ChevronRight size={16}/></button>
+      </div>
+      <div className="grid grid-cols-7 gap-0.5 mb-1">
+        {NEPALI_DAYS.map(d => <div key={d} className="text-[7px] text-slate-300 text-center uppercase">{d[0]}</div>)}
+      </div>
+      <div className="grid grid-cols-7 gap-0.5">{renderCalendar()}</div>
+      <button 
+        type="button"
+        onClick={() => {
+          onChange(getTodayBsDateStr());
+          setIsOpen(false);
+        }}
+        className="mt-3 w-full py-2 bg-slate-950 text-white rounded-xl text-[9px] font-black uppercase tracking-widest"
+      >
+        Today
+      </button>
+    </div>
+  ) : null;
+
   return (
     <div className={`relative ${isOpen ? 'z-[100]' : 'z-auto'} ${className}`} ref={containerRef}>
       {label && <label className="block text-[8px] font-black text-slate-400 uppercase mb-1 tracking-widest">{label}</label>}
       <div 
+        ref={triggerRef}
         onClick={() => {
           if (disabled) return;
           setBackDateAllowed(isBackDateEntryAllowed());
           setIsOpen(!isOpen);
         }}
         aria-disabled={disabled}
-        className={`flex items-center space-x-2 border-2 px-3 py-2 rounded-xl transition-all shadow-sm ${
-          disabled
-            ? 'bg-slate-100 border-slate-200 cursor-not-allowed opacity-70 pointer-events-none select-none'
-            : 'bg-white border-slate-200 cursor-pointer hover:border-emerald-600 active:scale-95'
-        }`}
+        title={iconOnly ? 'Select BS Date from Nepali Calendar' : undefined}
+        className={
+          iconOnly
+            ? `flex items-center justify-center p-1.5 rounded-lg transition-all ${
+                disabled
+                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed opacity-70 pointer-events-none select-none'
+                  : 'bg-emerald-50 hover:bg-emerald-100 text-[#00593B] border border-emerald-200 cursor-pointer active:scale-95'
+              }`
+            : `flex items-center space-x-2 border-2 px-3 py-2 rounded-xl transition-all shadow-sm ${
+                disabled
+                  ? 'bg-slate-100 border-slate-200 cursor-not-allowed opacity-70 pointer-events-none select-none'
+                  : 'bg-white border-slate-200 cursor-pointer hover:border-emerald-600 active:scale-95'
+              }`
+        }
       >
-        <CalendarIcon size={14} className={disabled ? 'text-slate-400' : 'text-emerald-500'} />
-        <span className={`font-black text-[11px] leading-none whitespace-nowrap ${disabled ? 'text-slate-500' : 'text-slate-900'}`}>
-          {getBsDisplayString()} <span className="text-[8px] text-slate-400 ml-0.5">BS</span>
-        </span>
+        <CalendarIcon size={iconOnly ? 16 : 14} className={disabled ? 'text-slate-400' : iconOnly ? 'text-[#00593B]' : 'text-emerald-500'} />
+        {!iconOnly && (
+          <span className={`font-black text-[11px] leading-none whitespace-nowrap ${disabled ? 'text-slate-500' : 'text-slate-900'}`}>
+            {getBsDisplayString()} <span className="text-[8px] text-slate-400 ml-0.5">BS</span>
+          </span>
+        )}
       </div>
 
-      {isOpen && !disabled && (
-        <div className={`absolute top-full mt-2 ${align === 'left' ? 'left-0' : 'right-0'} bg-white border-2 border-slate-950 rounded-[2rem] shadow-2xl p-4 w-[248px] z-[9999] animate-in zoom-in-95 duration-200 font-black italic`}>
-          <div className="flex items-center justify-between mb-3 border-b border-slate-50 pb-2">
-            <button type="button" onClick={(e) => changeMonth(e, -1)} className="p-1.5 hover:bg-slate-50 rounded-lg"><ChevronLeft size={16}/></button>
-            <div className="text-center">
-              <div className="text-[12px] uppercase leading-none">{NEPALI_MONTHS[viewDate.getMonth()]}</div>
-              <div className="text-[9px] text-emerald-600 mt-0.5">{viewDate.getYear()}</div>
-            </div>
-            <button type="button" onClick={(e) => changeMonth(e, 1)} className="p-1.5 hover:bg-slate-50 rounded-lg"><ChevronRight size={16}/></button>
-          </div>
-          <div className="grid grid-cols-7 gap-0.5 mb-1">
-            {NEPALI_DAYS.map(d => <div key={d} className="text-[7px] text-slate-300 text-center uppercase">{d[0]}</div>)}
-          </div>
-          <div className="grid grid-cols-7 gap-0.5">{renderCalendar()}</div>
-          <button 
-            type="button"
-            onClick={() => {
-              onChange(getTodayBsDateStr());
-              setIsOpen(false);
-            }}
-            className="mt-3 w-full py-2 bg-slate-950 text-white rounded-xl text-[9px] font-black uppercase tracking-widest"
-          >
-            Today
-          </button>
-        </div>
-      )}
+      {calendarPopover && (typeof document !== 'undefined' ? createPortal(calendarPopover, document.body) : calendarPopover)}
     </div>
   );
 };

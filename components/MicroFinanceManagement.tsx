@@ -38,6 +38,7 @@ import { GroupMeetingMinutesModule } from './microfinance/GroupMeetingMinutesMod
 import { isBackDateBlockedForEntry, getBackDateBlockedMessage } from '../utils/backDateControl';
 import { isDayEndedForBranch, getDayEndedBlockMessage, useDayEndLock } from '../utils/dayEndLock';
 import { DayEndFieldset } from './DayEndFieldset';
+import { NepaliDatePicker } from './NepaliDatePicker';
 
 // Helper to calculate BS Maturity Date based on BS Open Date (YYYY-MM-DD) and Period in months
 const calculateBsMaturityDate = (openBs: string, periodMonths: number): string => {
@@ -63,6 +64,22 @@ const calculateBsMaturityDate = (openBs: string, periodMonths: number): string =
   } catch (e) {
     return openBs;
   }
+};
+
+const getEffectiveSavingStatus = (status?: string): 'ACTIVE' | 'INACTIVE' => {
+  const raw = String(status || '').toUpperCase();
+  if (raw === 'INACTIVE' || raw === 'DUE' || raw === 'PENDING') return 'INACTIVE';
+  return 'ACTIVE';
+};
+
+const extractMeetingDayNumber = (meetingDay?: string): number | null => {
+  if (!meetingDay) return null;
+  const np = ['०', '१', '२', '३', '४', '५', '६', '७', '८', '९'];
+  const normalized = String(meetingDay).replace(/[०-९]/g, d => String(np.indexOf(d)));
+  const match = normalized.match(/\d+/);
+  if (!match) return null;
+  const num = parseInt(match[0], 10);
+  return isNaN(num) ? null : num;
 };
 
 const nepaliMonthsEnglishList = [
@@ -109,6 +126,65 @@ const toNepaliDigits = (num: string | number): string => {
   const nepaliDigits = ['०', '१', '२', '३', '४', '५', '६', '७', '८', '९'];
   return String(num).replace(/[0-9]/g, (w) => nepaliDigits[+w]);
 };
+
+const fromNepaliDigits = (str: string): string => {
+  const np = ['०', '१', '२', '३', '४', '५', '६', '७', '८', '९'];
+  return String(str || '').replace(/[०-९]/g, d => String(np.indexOf(d)));
+};
+
+const matchesBsDateFilter = (
+  dateText: string,
+  selectedYear: string,
+  selectedMonth: string,
+  explicitYear?: string,
+  explicitMonth?: string
+): boolean => {
+  const raw = dateText || '';
+  const ascii = fromNepaliDigits(raw);
+
+  if (selectedYear !== 'ALL' && selectedYear !== 'All') {
+    const nepYear = toNepaliDigits(selectedYear);
+    const expYearAscii = explicitYear ? fromNepaliDigits(explicitYear) : '';
+    if (
+      expYearAscii !== selectedYear &&
+      !raw.includes(selectedYear) &&
+      !raw.includes(nepYear) &&
+      !ascii.includes(selectedYear)
+    ) {
+      return false;
+    }
+  }
+
+  if (selectedMonth !== 'ALL' && selectedMonth !== 'All') {
+    const nepMonth = nepaliMonthMapNp[selectedMonth] || selectedMonth;
+    const monthIdx = nepaliMonthsEnglishList.indexOf(selectedMonth) + 1;
+    const expMonthLower = (explicitMonth || '').trim().toLowerCase();
+    const selMonthLower = selectedMonth.toLowerCase();
+    const numericMatch = monthIdx > 0
+      ? new RegExp(`[-/]0?${monthIdx}(?:[-/]|$)`).test(ascii)
+      : false;
+    const explicitMatch =
+      expMonthLower === selMonthLower ||
+      (explicitMonth || '').trim() === nepMonth ||
+      (monthIdx > 0 && Number(fromNepaliDigits(explicitMonth || '')) === monthIdx);
+
+    if (
+      !explicitMatch &&
+      !raw.toLowerCase().includes(selMonthLower) &&
+      !raw.includes(nepMonth) &&
+      !numericMatch
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
+const sortByNameAZ = <T extends { name?: string }>(items: T[]): T[] =>
+  [...items].sort((a, b) =>
+    (a.name || '').trim().localeCompare((b.name || '').trim(), undefined, { sensitivity: 'base' })
+  );
 
 type SubMenuTab = 'dashboard' | 'centers' | 'groups' | 'members' | 'saving' | 'loan' | 'reports';
 
@@ -210,6 +286,12 @@ export const MicroFinanceManagement: React.FC = () => {
   const [reportCenterId, setReportCenterId] = useState('');
   const [reportGroupId, setReportGroupId] = useState('');
 
+  const filteredReportCenters = useMemo(() => {
+    const targetDay = parseInt(reportDay, 10);
+    if (isNaN(targetDay)) return centers;
+    return centers.filter(c => extractMeetingDayNumber(c.meetingDay) === targetDay);
+  }, [centers, reportDay]);
+
   // Modals
   const [isCenterModalOpen, setIsCenterModalOpen] = useState(false);
   const [editingCenter, setEditingCenter] = useState<MFCenter | null>(null);
@@ -288,7 +370,7 @@ export const MicroFinanceManagement: React.FC = () => {
   const [memberSearchInput, setMemberSearchInput] = useState('');
   const [isMemberDropdownOpen, setIsMemberDropdownOpen] = useState(false);
   const [selectedSavingMemberId, setSelectedSavingMemberId] = useState('');
-  const [savingDate, setSavingDate] = useState(new Date().toISOString().split('T')[0]);
+  const [savingDate, setSavingDate] = useState(() => getTodayBsDate());
   const [savingAccounts, setSavingAccounts] = useState<Array<{
     id: string;
     accountNo: string;
@@ -377,6 +459,12 @@ export const MicroFinanceManagement: React.FC = () => {
   const [selectedSignatureSheetToDelete, setSelectedSignatureSheetToDelete] = useState<MFSignatureSheet | null>(null);
   const [isDeleteSignatureModalOpen, setIsDeleteSignatureModalOpen] = useState(false);
 
+  const [selectedSavingToView, setSelectedSavingToView] = useState<MFSavingsRecord | null>(null);
+  const [isViewSavingModalOpen, setIsViewSavingModalOpen] = useState(false);
+
+  const [isEditSavingModalOpen, setIsEditSavingModalOpen] = useState(false);
+  const [editSavingForm, setEditSavingForm] = useState<MFSavingsRecord | null>(null);
+
   const [selectedSavingToDelete, setSelectedSavingToDelete] = useState<MFSavingsRecord | null>(null);
   const [isDeleteSavingModalOpen, setIsDeleteSavingModalOpen] = useState(false);
 
@@ -395,9 +483,9 @@ export const MicroFinanceManagement: React.FC = () => {
   // Manual Dues per member in Collection Sheet
   const [manualDues, setManualDues] = useState<Record<string, number>>({});
 
-  // History filter on right side of Collection Sheet Records table
-  const [sheetHistoryYear, setSheetHistoryYear] = useState(currentBsDate.year);
-  const [sheetHistoryMonth, setSheetHistoryMonth] = useState(currentBsDate.month);
+  // History filter on right side of Collection Sheet Records table (default ALL so all Supabase rows show)
+  const [sheetHistoryYear, setSheetHistoryYear] = useState('ALL');
+  const [sheetHistoryMonth, setSheetHistoryMonth] = useState('ALL');
 
   // Signature Sheet Tab Filter Card state (defaults to current BS date)
   const [sigFilterYear, setSigFilterYear] = useState(currentBsDate.year);
@@ -407,9 +495,9 @@ export const MicroFinanceManagement: React.FC = () => {
   const [sigFilterGroupId, setSigFilterGroupId] = useState('');
   const [sigFilterEmployeeId, setSigFilterEmployeeId] = useState('ALL');
 
-  // History filter on right side of Signature Sheets records table (defaults to current BS date)
-  const [sigHistoryYear, setSigHistoryYear] = useState(currentBsDate.year);
-  const [sigHistoryMonth, setSigHistoryMonth] = useState(currentBsDate.month);
+  // History filter on right side of Signature Sheets records table (default ALL so all Supabase rows show)
+  const [sigHistoryYear, setSigHistoryYear] = useState('ALL');
+  const [sigHistoryMonth, setSigHistoryMonth] = useState('ALL');
 
   // HR Management Employees
   const [hrEmployees, setHrEmployees] = useState<Employee[]>([]);
@@ -507,20 +595,60 @@ export const MicroFinanceManagement: React.FC = () => {
     }
   }, [isBulkModalOpen, bulkType]);
 
+  const normalizeExcelHeader = (header: string): string =>
+    header
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_\-().:/,%]+/g, '');
+
   const getExcelCell = (row: Record<string, unknown>, keys: string[]): string => {
-    const normalizedEntries = Object.entries(row).map(([k, v]) => [k.trim().toLowerCase().replace(/[^a-z0-9]/g, ''), v] as const);
-    for (const candidate of keys) {
-      const targetKey = candidate.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-      const found = normalizedEntries.find(([k]) => k === targetKey);
-      if (found && found[1] !== undefined && found[1] !== null && String(found[1]).trim() !== '') {
-        const val = found[1];
+    const entries = Object.entries(row).map(([k, v]) => ({
+      norm: normalizeExcelHeader(k),
+      val: v
+    }));
+    const targets = keys.map(normalizeExcelHeader).filter(Boolean);
+
+    // 1. Exact normalized match
+    for (const targetKey of targets) {
+      const found = entries.find(e => e.norm === targetKey);
+      if (found && found.val !== undefined && found.val !== null && String(found.val).trim() !== '') {
+        const val = found.val;
         if (val instanceof Date && !isNaN(val.getTime())) {
           return val.toISOString().split('T')[0];
         }
         return String(val).trim();
       }
     }
+
+    // 2. Safe prefix match for headers with units/notes like "Amount (NPR)" or "Member Name (Full)"
+    for (const targetKey of targets) {
+      if (targetKey.length < 5) continue;
+      const found = entries.find(e => e.norm.startsWith(targetKey));
+      if (found && found.val !== undefined && found.val !== null && String(found.val).trim() !== '') {
+        const val = found.val;
+        if (val instanceof Date && !isNaN(val.getTime())) {
+          return val.toISOString().split('T')[0];
+        }
+        return String(val).trim();
+      }
+    }
+
     return '';
+  };
+
+  const parseExcelNumber = (raw: string | number | undefined | null): number => {
+    if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
+    const str = String(raw ?? '').trim();
+    if (!str) return 0;
+    const nepaliMap: Record<string, string> = {
+      '०': '0', '१': '1', '२': '2', '३': '3', '४': '4',
+      '५': '5', '६': '6', '७': '7', '८': '8', '९': '9'
+    };
+    const ascii = str.replace(/[०-९]/g, d => nepaliMap[d] || d);
+    // Strip currency labels, commas, and spaces while keeping digits, decimal point, and leading minus
+    const cleaned = ascii.replace(/,/g, '').replace(/[^0-9.-]/g, '');
+    const num = parseFloat(cleaned);
+    return Number.isFinite(num) ? num : 0;
   };
 
   const handleDownloadBulkSampleExcel = () => {
@@ -621,13 +749,10 @@ export const MicroFinanceManagement: React.FC = () => {
           'Name': m1?.name || 'Sita Devi Chaudhary',
           'Group Name': m1?.samuhName || defaultGroup,
           'Center Name': m1?.centerName || defaultCenter,
-          'Date (BS)': todayBs,
-          'Amount': 1000,
+          'Open Date': todayBs,
+          'Recurring Amount': 1000,
           'Saving Type': filteredMfSavingProducts[0]?.name || 'Normal Saving',
-          'Status': 'PAID',
-          'Collected By': 'Ramesh Sharma',
-          'Receipt No': `REC-${601 + savings.length}`,
-          'Remarks': 'Monthly compulsory saving'
+          'Status': 'ACTIVE'
         },
         {
           'Member ID': m2?.memberId || 'M-1002',
@@ -635,13 +760,10 @@ export const MicroFinanceManagement: React.FC = () => {
           'Name': m2?.name || 'Geeta Kumari Mandal',
           'Group Name': m2?.samuhName || defaultGroup,
           'Center Name': m2?.centerName || defaultCenter,
-          'Date (BS)': todayBs,
-          'Amount': 1000,
+          'Open Date': todayBs,
+          'Recurring Amount': 1000,
           'Saving Type': filteredMfSavingProducts[0]?.name || 'Normal Saving',
-          'Status': 'PAID',
-          'Collected By': 'Ramesh Sharma',
-          'Receipt No': `REC-${602 + savings.length}`,
-          'Remarks': 'Monthly compulsory saving'
+          'Status': 'ACTIVE'
         }
       ];
     } else if (bulkType === 'Loans') {
@@ -709,10 +831,45 @@ export const MicroFinanceManagement: React.FC = () => {
         return;
       }
       const worksheet = workbook.Sheets[firstSheetName];
-      const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, { defval: '' });
-      const validRows = rawRows.filter(row =>
-        Object.values(row).some(v => v !== undefined && v !== null && String(v).trim() !== '')
-      );
+      // Detect the actual header row even if the Excel sheet has title/banner rows at the top
+      const matrix = XLSX.utils.sheet_to_json<unknown[]>(worksheet, { header: 1, defval: '' });
+      const knownHeaderTokens = new Set([
+        'memberid', 'accountno', 'savingsaccountno', 'name', 'membername', 'fullname',
+        'amount', 'recurringamount', 'openamount', 'savingamount', 'deposit', 'depositamount', 'totalsavings', 'saving', 'savings',
+        'centername', 'groupname', 'samuhname', 'loanamount', 'loanproduct', 'savingtype', 'opendate', 'datebs', 'status'
+      ]);
+      let headerRowIndex = 0;
+      let bestMatchScore = -1;
+      for (let r = 0; r < Math.min(matrix.length, 15); r++) {
+        const cells = Array.isArray(matrix[r]) ? matrix[r] : [];
+        let score = 0;
+        for (const cell of cells) {
+          const norm = normalizeExcelHeader(String(cell ?? ''));
+          if (norm && knownHeaderTokens.has(norm)) score += 1;
+        }
+        if (score > bestMatchScore && score >= 2) {
+          bestMatchScore = score;
+          headerRowIndex = r;
+        }
+      }
+
+      const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, {
+        defval: '',
+        range: headerRowIndex
+      });
+      const validRows = rawRows.filter(row => {
+        const values = Object.values(row);
+        if (!values.some(v => v !== undefined && v !== null && String(v).trim() !== '')) return false;
+        // Skip trailing summary/total rows if present
+        const firstNonEmpty = String(values.find(v => v !== undefined && v !== null && String(v).trim() !== '') ?? '')
+          .trim()
+          .toLowerCase();
+        if (firstNonEmpty === 'total' || firstNonEmpty === 'grand total' || firstNonEmpty === 'जम्मा') {
+          const idVal = getExcelCell(row, ['Member ID', 'Account No']);
+          if (!idVal) return false;
+        }
+        return true;
+      });
       if (validRows.length === 0) {
         setBulkUploadError('The uploaded Excel/CSV file contains no data rows.');
         setBulkFileName('');
@@ -849,8 +1006,8 @@ export const MicroFinanceManagement: React.FC = () => {
             address: getExcelCell(row, ['Address', 'Location']) || '',
             joinedDate: getExcelCell(row, ['Joined Date', 'Join Date', 'Date']) || todayBs,
             status: statusRaw === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
-            totalSavings: parseFloat(getExcelCell(row, ['Total Savings', 'Savings', 'Balance'])) || 0,
-            activeLoanAmount: parseFloat(getExcelCell(row, ['Active Loan Amount', 'Loan Balance'])) || 0
+            totalSavings: parseExcelNumber(getExcelCell(row, ['Total Savings', 'Savings', 'Balance'])) || 0,
+            activeLoanAmount: parseExcelNumber(getExcelCell(row, ['Active Loan Amount', 'Loan Balance'])) || 0
           });
         });
         if (items.length === 0) {
@@ -863,44 +1020,95 @@ export const MicroFinanceManagement: React.FC = () => {
         createdCount = items.length;
       } else if (bulkType === 'Savings') {
         const items: Omit<MFSavingsRecord, 'id' | 'createdAt'>[] = [];
-        bulkParsedRows.forEach((row, idx) => {
-          const memberIdRaw = getExcelCell(row, ['Member ID', 'MemberId']);
-          const nameRaw = getExcelCell(row, ['Name', 'Member Name']);
-          const matchedMember = members.find(
-            m =>
-              (memberIdRaw && m.memberId.toLowerCase() === memberIdRaw.toLowerCase()) ||
-              (nameRaw && m.name.trim().toLowerCase() === nameRaw.toLowerCase())
-          );
-          const name = nameRaw || matchedMember?.name || '';
-          const amount = parseFloat(getExcelCell(row, ['Amount', 'Saving Amount', 'Deposit'])) || 0;
-          if (!name || amount <= 0) return;
+        let missingIdentityCount = 0;
+        let invalidAmountCount = 0;
 
-          const dateRaw = getExcelCell(row, ['Date (BS)', 'Date BS', 'Date']);
+        bulkParsedRows.forEach((row, idx) => {
+          const memberIdRaw = getExcelCell(row, ['Member ID', 'MemberId', 'Member Code', 'ID', 'सदस्य नं']);
+          const accountNoRaw = getExcelCell(row, ['Account No', 'Savings Account No', 'Saving Account', 'Saving Account No', 'A/C No', 'खाता नं']);
+          const nameRaw = getExcelCell(row, ['Name', 'Member Name', 'Full Name', 'Customer Name', 'Account Holder', 'नाम', 'सदस्यको नाम']);
+          const cleanMemberId = memberIdRaw.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+          const matchedMember = members.find(m => {
+            const mId = (m.memberId || '').toLowerCase();
+            const mIdDigits = mId.replace(/[^a-z0-9]/g, '');
+            const mAcc = (m.savingsAccountNo || '').toLowerCase();
+            const mName = (m.name || '').trim().toLowerCase();
+            return (
+              (memberIdRaw && (mId === memberIdRaw.toLowerCase() || (cleanMemberId && mIdDigits.endsWith(cleanMemberId)))) ||
+              (accountNoRaw && mAcc === accountNoRaw.toLowerCase()) ||
+              (nameRaw && mName === nameRaw.toLowerCase())
+            );
+          });
+
+          const name =
+            nameRaw ||
+            matchedMember?.name ||
+            (memberIdRaw ? `Member ${memberIdRaw}` : accountNoRaw ? `Account ${accountNoRaw}` : '');
+
+          const amount = parseExcelNumber(
+            getExcelCell(row, [
+              'Recurring Amount',
+              'Open Amount',
+              'Amount',
+              'Saving Amount',
+              'Savings Amount',
+              'Deposit',
+              'Deposit Amount',
+              'Total Savings',
+              'Total Saving',
+              'Monthly Saving',
+              'Savings',
+              'Balance',
+              'Amt',
+              'रकम',
+              'बचत रकम'
+            ])
+          );
+
+          if (!name) {
+            missingIdentityCount += 1;
+            return;
+          }
+          if (amount <= 0) {
+            invalidAmountCount += 1;
+            return;
+          }
+
+          const dateRaw = getExcelCell(row, ['Open Date', 'Date (BS)', 'Date BS', 'Date']);
           const normalizedBs = normalizeBsDate(dateRaw || todayBs);
           const statusRaw = getExcelCell(row, ['Status']).toUpperCase();
-          const status: 'PAID' | 'DUE' | 'PENDING' =
-            statusRaw === 'DUE' ? 'DUE' : statusRaw === 'PENDING' ? 'PENDING' : 'PAID';
+          const status: 'ACTIVE' | 'INACTIVE' =
+            statusRaw === 'INACTIVE' || statusRaw === 'DUE' || statusRaw === 'PENDING' ? 'INACTIVE' : 'ACTIVE';
 
           items.push({
             memberId: memberIdRaw || matchedMember?.memberId || `M-${1001 + idx}`,
-            accountNo: getExcelCell(row, ['Account No', 'Savings Account No']) || matchedMember?.savingsAccountNo || `SAV-${1001 + idx}`,
+            accountNo: accountNoRaw || matchedMember?.savingsAccountNo || `SAV-${1001 + idx}`,
             name,
-            groupName: getExcelCell(row, ['Group Name', 'Group']) || matchedMember?.samuhName || '',
+            groupName: getExcelCell(row, ['Group Name', 'Group', 'Samuh Name']) || matchedMember?.samuhName || '',
             centerName: getExcelCell(row, ['Center Name', 'Center']) || matchedMember?.centerName || '',
             date: todayAd,
             dateBs: normalizedBs || todayBs,
             amount,
             savingType: getExcelCell(row, ['Saving Type', 'Product', 'Type']) || filteredMfSavingProducts[0]?.name || 'Normal Saving',
             status,
-            collectedBy: getExcelCell(row, ['Collected By', 'Staff', 'Officer']) || user?.fullName || 'Field Officer',
-            receiptNo: getExcelCell(row, ['Receipt No', 'Receipt']) || `REC-${Date.now().toString().slice(-3)}${idx}`,
-            remarks: getExcelCell(row, ['Remarks', 'Note']) || 'Bulk Excel Import',
+            collectedBy: user?.fullName || '',
+            receiptNo: '',
+            remarks: '',
             createdBy: user?.id || user?.username || '',
             createdByName: user?.fullName || user?.username || ''
           });
         });
+
         if (items.length === 0) {
-          setBulkUploadError('No valid Saving rows found. Ensure "Name" (or Member ID) and "Amount" > 0 are provided.');
+          const detectedCols = Object.keys(bulkParsedRows[0] || {}).filter(k => !k.startsWith('__EMPTY'));
+          const reasons: string[] = [];
+          if (missingIdentityCount > 0) reasons.push(`${missingIdentityCount} row(s) missing Name / Member ID`);
+          if (invalidAmountCount > 0) reasons.push(`${invalidAmountCount} row(s) had Amount <= 0 or unreadable`);
+          const colsHint = detectedCols.length > 0 ? ` Detected columns: [${detectedCols.join(', ')}].` : '';
+          setBulkUploadError(
+            `No valid Saving rows found (${reasons.join(', ') || 'check column headers'}). Ensure "Name" (or "Member ID") and "Amount" > 0 are provided.${colsHint}`
+          );
           return;
         }
         const updatedSavings = microFinanceService.bulkAddSavings(items);
@@ -910,28 +1118,29 @@ export const MicroFinanceManagement: React.FC = () => {
       } else if (bulkType === 'Loans') {
         const items: Omit<MFLoanRecord, 'id' | 'createdAt'>[] = [];
         bulkParsedRows.forEach((row, idx) => {
-          const memberIdRaw = getExcelCell(row, ['Member ID', 'MemberId']);
-          const nameRaw = getExcelCell(row, ['Name', 'Member Name']);
+          const memberIdRaw = getExcelCell(row, ['Member ID', 'MemberId', 'Member Code']);
+          const nameRaw = getExcelCell(row, ['Name', 'Member Name', 'Full Name']);
           const matchedMember = members.find(
             m =>
               (memberIdRaw && m.memberId.toLowerCase() === memberIdRaw.toLowerCase()) ||
               (nameRaw && m.name.trim().toLowerCase() === nameRaw.toLowerCase())
           );
-          const name = nameRaw || matchedMember?.name || '';
-          const loanAmount = parseFloat(getExcelCell(row, ['Loan Amount', 'Amount', 'Principal'])) || 0;
+          const name = nameRaw || matchedMember?.name || (memberIdRaw ? `Member ${memberIdRaw}` : '');
+          const loanAmount = parseExcelNumber(getExcelCell(row, ['Loan Amount', 'Amount', 'Principal']));
           if (!name || loanAmount <= 0) return;
 
           const periodMonths = parseInt(getExcelCell(row, ['Period (Months)', 'Total Installments', 'Period', 'Months']), 10) || 12;
-          const interestRate = parseFloat(getExcelCell(row, ['Interest Rate (%)', 'Interest Rate', 'Rate'])) || 14;
+          const interestRate = parseExcelNumber(getExcelCell(row, ['Interest Rate (%)', 'Interest Rate', 'Rate'])) || 14;
           const loanDateRaw = getExcelCell(row, ['Loan Date (BS)', 'Open Date (BS)', 'Loan Date', 'Date']);
           const loanDateBs = normalizeBsDate(loanDateRaw || todayBs);
           const maturityDateRaw = getExcelCell(row, ['Maturity Date (BS)', 'Maturity Date']);
           const maturityDate = maturityDateRaw ? normalizeBsDate(maturityDateRaw) : calculateBsMaturityDate(loanDateBs, periodMonths);
-          const installmentRaw = parseFloat(getExcelCell(row, ['Installment Amount', 'Installment', 'EMI']));
+          const installmentRaw = parseExcelNumber(getExcelCell(row, ['Installment Amount', 'Installment', 'EMI']));
           const installmentAmount = installmentRaw > 0
             ? installmentRaw
             : Math.round((loanAmount + (loanAmount * interestRate * (periodMonths / 12)) / 100) / periodMonths);
-          const remainingRaw = parseFloat(getExcelCell(row, ['Remaining Amount', 'Remaining', 'Balance']));
+          const remainingRaw = parseExcelNumber(getExcelCell(row, ['Remaining Amount', 'Remaining', 'Balance']));
+          const remainingText = getExcelCell(row, ['Remaining Amount', 'Remaining', 'Balance']);
           const statusRaw = getExcelCell(row, ['Status']).toUpperCase();
           const status: 'ACTIVE' | 'MATURED' | 'CLOSED' =
             statusRaw === 'CLOSED' ? 'CLOSED' : statusRaw === 'MATURED' ? 'MATURED' : 'ACTIVE';
@@ -945,7 +1154,7 @@ export const MicroFinanceManagement: React.FC = () => {
             loanDate: todayAd,
             loanDateBs,
             loanAmount,
-            remainingAmount: status === 'CLOSED' ? 0 : (!isNaN(remainingRaw) && remainingRaw >= 0 ? remainingRaw : loanAmount),
+            remainingAmount: status === 'CLOSED' ? 0 : (remainingText !== '' && remainingRaw >= 0 ? remainingRaw : loanAmount),
             installmentAmount,
             totalInstallments: periodMonths,
             paidInstallments: parseInt(getExcelCell(row, ['Paid Installments', 'Paid']), 10) || 0,
@@ -1026,8 +1235,21 @@ export const MicroFinanceManagement: React.FC = () => {
   useEffect(() => {
     if (activeTab === 'dashboard') {
       setMeetingMinutes(meetingMinutesService.getMeetings());
+    } else if (activeTab === 'reports') {
+      void microFinanceService.fetchAllFromSupabase().then(res => {
+        setCenters(res.centers);
+        setGroups(res.groups);
+        setMembers(res.members);
+        setSavings(res.savings);
+        setLoans(res.loans);
+        setSheets(res.sheets);
+        setSignatureSheets(res.signatureSheets);
+      });
+      void meetingMinutesService.fetchAllFromSupabase().then(res => {
+        setMeetingMinutes(res.meetings);
+      });
     }
-  }, [activeTab]);
+  }, [activeTab, reportTab]);
 
   // All-Menu Live Dashboard Aggregates (100% English)
   const dashboardStats = useMemo(() => {
@@ -1039,8 +1261,8 @@ export const MicroFinanceManagement: React.FC = () => {
     const activeMembers = members.filter(m => m.status === 'ACTIVE').length;
     const femaleMembers = members.filter(m => m.gender === 'Female').length;
 
-    const paidSavingsList = savings.filter(s => s.status === 'PAID');
-    const dueSavingsList = savings.filter(s => s.status === 'DUE' || s.status === 'PENDING');
+    const paidSavingsList = savings.filter(s => getEffectiveSavingStatus(s.status) === 'ACTIVE');
+    const dueSavingsList = savings.filter(s => getEffectiveSavingStatus(s.status) === 'INACTIVE');
     const savingBalance = paidSavingsList.reduce((acc, s) => acc + s.amount, 0) +
                           members.reduce((acc, m) => acc + (m.totalSavings || 0), 0);
     const dueSavingsAmount = dueSavingsList.reduce((acc, s) => acc + s.amount, 0);
@@ -1094,7 +1316,7 @@ export const MicroFinanceManagement: React.FC = () => {
       const centerGroups = groups.filter(g => g.centerId === c.id || g.centerName === c.name);
       const centerMembers = members.filter(m => m.centerId === c.id || m.centerName === c.name);
       const centerSavings = savings
-        .filter(s => s.centerName === c.name && s.status === 'PAID')
+        .filter(s => s.centerName === c.name && getEffectiveSavingStatus(s.status) === 'ACTIVE')
         .reduce((sum, s) => sum + s.amount, 0) +
         centerMembers.reduce((sum, m) => sum + (m.totalSavings || 0), 0);
       const centerLoans = loans.filter(l => l.centerName === c.name);
@@ -1172,7 +1394,7 @@ export const MicroFinanceManagement: React.FC = () => {
       const matchSearch = s.name.toLowerCase().includes(savingSearch.toLowerCase()) ||
                           s.memberId.toLowerCase().includes(savingSearch.toLowerCase()) ||
                           s.accountNo.toLowerCase().includes(savingSearch.toLowerCase());
-      const matchStatus = savingStatusFilter === 'All' || s.status === savingStatusFilter;
+      const matchStatus = savingStatusFilter === 'All' || getEffectiveSavingStatus(s.status) === savingStatusFilter;
       return matchSearch && matchStatus;
     });
   }, [savings, savingSearch, savingStatusFilter]);
@@ -1500,6 +1722,59 @@ export const MicroFinanceManagement: React.FC = () => {
     showToast('Member deleted');
   };
 
+  const handleOpenViewSaving = (item: MFSavingsRecord) => {
+    setSelectedSavingToView(item);
+    setIsViewSavingModalOpen(true);
+  };
+
+  const handleOpenEditSaving = (item: MFSavingsRecord) => {
+    if (isDayEndedForBranch(branch?.id)) {
+      alert(getDayEndedBlockMessage());
+      return;
+    }
+    setEditSavingForm({
+      ...item,
+      dateBs: item.dateBs || (item.date && item.date.startsWith('208') ? item.date : getTodayBsDate()),
+      status: getEffectiveSavingStatus(item.status)
+    });
+    setIsEditSavingModalOpen(true);
+  };
+
+  const handleSaveEditSaving = () => {
+    if (!editSavingForm) return;
+    if (isDayEndedForBranch(branch?.id)) {
+      alert(getDayEndedBlockMessage());
+      return;
+    }
+    const targetBs = normalizeBsDate(editSavingForm.dateBs || editSavingForm.date || getTodayBsDate());
+    if (isBackDateBlockedForEntry(targetBs, systemSettings || authSettings)) {
+      alert(getBackDateBlockedMessage(targetBs));
+      return;
+    }
+    if (!editSavingForm.accountNo || !editSavingForm.accountNo.trim()) {
+      alert('Please enter a valid account number.');
+      return;
+    }
+    if (Number(editSavingForm.amount) < 0 || isNaN(Number(editSavingForm.amount))) {
+      alert('Please enter a valid recurring amount.');
+      return;
+    }
+
+    const updated = microFinanceService.updateSaving(editSavingForm.id, {
+      ...editSavingForm,
+      accountNo: editSavingForm.accountNo.trim(),
+      name: editSavingForm.name.trim(),
+      dateBs: targetBs,
+      amount: Number(editSavingForm.amount) || 0,
+      status: getEffectiveSavingStatus(editSavingForm.status)
+    });
+    setSavings(updated);
+    setMembers(microFinanceService.getMembers());
+    setIsEditSavingModalOpen(false);
+    setEditSavingForm(null);
+    showToast('Saving record updated successfully');
+  };
+
   const handleOpenDeleteSaving = (item: MFSavingsRecord) => {
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
@@ -1546,20 +1821,17 @@ export const MicroFinanceManagement: React.FC = () => {
 
   // Handlers for Savings (Supports search directly in input and multiple accounts)
   const handleOpenAddSaving = () => {
-    const firstMember = members[0];
-    const initialMemId = firstMember?.memberId || 'M-1001';
-    const baseAccount = firstMember?.savingsAccountNo || `SAV-${initialMemId.replace('M-', '')}`;
     const defaultProduct = filteredMfSavingProducts[0]?.name || 'General Saving';
 
-    setSelectedSavingMemberId(initialMemId);
-    setMemberSearchInput(firstMember ? `${firstMember.name} (${firstMember.memberId})` : '');
+    setSelectedSavingMemberId('');
+    setMemberSearchInput('');
     setIsMemberDropdownOpen(false);
-    setSavingDate(new Date().toISOString().split('T')[0]);
-    // Start with 1 account (Normal Saving), "+ Add Account" adds 2nd account (Recurring Saving)
+    setSavingDate(getTodayBsDate());
+    // Start with 1 blank account row; accountNo auto-fills once a member is selected
     setSavingAccounts([
       {
         id: 'acc-' + Date.now() + '-1',
-        accountNo: baseAccount,
+        accountNo: '',
         savingType: 'Normal Saving',
         product: defaultProduct,
         amount: 1000
@@ -1640,14 +1912,8 @@ export const MicroFinanceManagement: React.FC = () => {
       }
     }
 
-    const dynamicBsDate = (() => {
-      try {
-        if (savingDate && savingDate.startsWith('208')) return savingDate;
-        return new NepaliDate(new Date(savingDate)).format('YYYY-MM-DD');
-      } catch {
-        return new NepaliDate().format('YYYY-MM-DD');
-      }
-    })();
+    const dynamicBsDate = normalizeBsDate(savingDate || getTodayBsDate());
+    const todayAd = new Date().toISOString().split('T')[0];
 
     // Save all accounts in a single batch
     savingAccounts.forEach(acc => {
@@ -1658,13 +1924,13 @@ export const MicroFinanceManagement: React.FC = () => {
         name: mem.name,
         groupName: mem.samuhName,
         centerName: mem.centerName,
-        date: savingDate,
+        date: todayAd,
         dateBs: dynamicBsDate,
         amount: Number(acc.amount) || 0,
         savingType: typeLabel,
-        status: 'PAID',
-        collectedBy: user?.fullName || 'Field Officer',
-        receiptNo: `REC-${Math.floor(100 + Math.random() * 900)}`,
+        status: 'ACTIVE',
+        collectedBy: user?.fullName || '',
+        receiptNo: '',
         createdBy: user?.id || user?.username || '',
         createdByName: user?.fullName || user?.username || ''
       });
@@ -1678,8 +1944,6 @@ export const MicroFinanceManagement: React.FC = () => {
 
   // Handlers for Loan
   const handleOpenIssueLoan = () => {
-    const firstMember = members[0];
-    const initialMemId = firstMember?.memberId || 'M-1001';
     let todayBs = '2083-07-25';
     try {
       todayBs = new NepaliDate().format('YYYY-MM-DD');
@@ -1695,15 +1959,15 @@ export const MicroFinanceManagement: React.FC = () => {
     const defaultInstallment = Math.round((defaultAmount + (defaultAmount * (defaultRate / 100) * (defaultPeriod / 12))) / defaultPeriod);
     const defaultMaturity = calculateBsMaturityDate(todayBs, defaultPeriod);
 
-    setLoanMemberSearchInput(firstMember ? `${firstMember.name} (${firstMember.memberId})` : '');
+    setLoanMemberSearchInput('');
     setIsLoanMemberDropdownOpen(false);
 
     setLoanForm({
-      memberId: initialMemId,
+      memberId: '',
       accountNo: `LN-${2000 + loans.length + 1}`,
-      name: firstMember?.name || '',
-      centerName: firstMember?.centerName || '',
-      groupName: firstMember?.samuhName || '',
+      name: '',
+      centerName: '',
+      groupName: '',
       loanDate: new Date().toISOString().split('T')[0],
       loanDateBs: todayBs,
       loanAmount: defaultAmount,
@@ -1949,6 +2213,31 @@ export const MicroFinanceManagement: React.FC = () => {
     return true;
   };
 
+  // Helper: sums recurring amounts from ACTIVE saving accounts in Savings Management for a member
+  const getMemberRecurringSavingAmount = (mem: { memberId?: string; name?: string }): number => {
+    const memId = (mem.memberId || '').trim().toLowerCase();
+    const memName = (mem.name || '').trim().toLowerCase();
+    const activeSavings = savings.filter(s => getEffectiveSavingStatus(s.status) === 'ACTIVE');
+
+    const idMatches = memId
+      ? activeSavings.filter(s => (s.memberId || '').trim().toLowerCase() === memId)
+      : [];
+    if (idMatches.length > 0) {
+      return idMatches.reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+    }
+
+    if (memName) {
+      const nameMatches = activeSavings.filter(
+        s => (s.name || '').trim().toLowerCase() === memName
+      );
+      if (nameMatches.length > 0) {
+        return nameMatches.reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+      }
+    }
+
+    return 0;
+  };
+
   // Handler for "View" button in Collection Sheet filter card (on-demand date-aware query)
   const handleViewCollectionSheet = async () => {
     const center = centers.find(c => c.id === reportCenterId) || centers[0];
@@ -1960,14 +2249,27 @@ export const MicroFinanceManagement: React.FC = () => {
     }
 
     const targetDateBs = buildBsDateFromParts(reportYear, reportMonth, reportDay);
+    let dateAwareLoans: MFLoanRecord[] = loans;
     setIsLoadingCollectionSheet(true);
     try {
-      const dateAwareLoans = await microFinanceService.fetchLoansForReportDate(targetDateBs);
+      dateAwareLoans = await microFinanceService.fetchLoansForReportDate(targetDateBs);
       setCollectionSheetLoans(dateAwareLoans);
       setCollectionSheetTargetBs(targetDateBs);
     } finally {
       setIsLoadingCollectionSheet(false);
     }
+
+    const groupMembers = members.filter(m => (!group || group.id === 'all')
+      ? (m.centerId === center.id || m.centerName === center.name)
+      : m.samuhId === group.id);
+    const totalRecurringSaving = groupMembers.reduce((sum, m) => sum + getMemberRecurringSavingAmount(m), 0);
+    const totalLoanDue = groupMembers.reduce((sum, m) => {
+      const mLoans = dateAwareLoans.filter(l =>
+        (l.memberId === m.memberId || (l.name && m.name && l.name.trim().toLowerCase() === m.name.trim().toLowerCase())) &&
+        isLoanActiveOnBsDate(l, targetDateBs)
+      );
+      return sum + mLoans.reduce((lsum, l) => lsum + (Number(l.installmentAmount) || 0), 0);
+    }, 0);
 
     const newSheet: MFCollectionSheet = {
       id: 'cs-' + Date.now(),
@@ -1980,13 +2282,13 @@ export const MicroFinanceManagement: React.FC = () => {
       day: reportDay,
       dateDisplay: `${reportYear} ${reportMonth} ${reportDay}`,
       status: 'GENERATED',
-      totalCompulsorySaving: 5000,
-      totalOptionalSaving: 2000,
-      totalLoanPrincipal: 25000,
-      totalLoanInterest: 3500,
-      totalExpected: 35500,
+      totalCompulsorySaving: totalRecurringSaving,
+      totalOptionalSaving: 0,
+      totalLoanPrincipal: totalLoanDue,
+      totalLoanInterest: 0,
+      totalExpected: totalRecurringSaving + totalLoanDue,
       totalCollected: 0,
-      memberCount: group ? group.membersCount || 5 : 15,
+      memberCount: groupMembers.length,
       collectedBy: user?.fullName || 'Field Officer',
       createdAt: new Date().toISOString().split('T')[0]
     };
@@ -2015,7 +2317,7 @@ export const MicroFinanceManagement: React.FC = () => {
     const targetDateBs = collectionSheetTargetBs || buildBsDateFromParts(activeSheetToPrint.year, activeSheetToPrint.month, activeSheetToPrint.day);
     const loanPool = collectionSheetLoans.length > 0 ? collectionSheetLoans : loans;
 
-    const membersToUse = groupMembers.length > 0 ? groupMembers : (members.length > 0 ? members.slice(0, 4) : []);
+    const membersToUse = sortByNameAZ(groupMembers);
 
     const sigMembers: MFSignatureSheetMember[] = membersToUse.map(m => {
       const memLoans = loanPool.filter(l => 
@@ -2034,7 +2336,7 @@ export const MicroFinanceManagement: React.FC = () => {
       const emergencyInstallmentAmt = emergencyLoan ? (emergencyLoan.installmentAmount || 0) : 0;
 
       const dueAmt = manualDues[m.memberId] || 0;
-      const savingAmt = m.totalSavings > 0 ? (m.totalSavings >= 2000 ? 1000 : 500) : 500;
+      const savingAmt = getMemberRecurringSavingAmount(m);
       const totalLoanAmt = microInstallmentAmt + emergencyInstallmentAmt;
 
       return {
@@ -2097,19 +2399,23 @@ export const MicroFinanceManagement: React.FC = () => {
   const handleViewSignatureSheetFromFilter = async () => {
     // 1. Resolve Center
     const targetCenter = centers.find(c => c.id === sigFilterCenterId) || centers[0];
-    const targetCenterId = targetCenter?.id || '';
-    const targetCenterName = targetCenter?.name || 'Center 01 (Janaki Chowk)';
+    if (!targetCenter) {
+      showToast('Please select a center first.');
+      return;
+    }
+    const targetCenterId = targetCenter.id;
+    const targetCenterName = targetCenter.name;
 
     // 2. Resolve Group
-    const availableGroupsForCenter = groups.filter(g => !targetCenterId || g.centerId === targetCenterId);
-    const targetGroup = availableGroupsForCenter.find(g => g.id === sigFilterGroupId) || availableGroupsForCenter[0] || groups[0];
-    const targetGroupId = targetGroup?.id || '';
-    const targetGroupName = targetGroup?.name || 'Laxmi Mahila Samuh';
+    const availableGroupsForCenter = groups.filter(g => g.centerId === targetCenterId);
+    const targetGroup = availableGroupsForCenter.find(g => g.id === sigFilterGroupId) || availableGroupsForCenter[0];
+    const targetGroupId = targetGroup?.id || 'all';
+    const targetGroupName = targetGroup?.name || 'All Groups in Center';
 
     // 3. Resolve Date
-    const yr = sigFilterYear && sigFilterYear !== 'ALL' ? sigFilterYear : '2083';
-    const mo = sigFilterMonth && sigFilterMonth !== 'ALL' ? sigFilterMonth : 'Kartik';
-    const dy = sigFilterDay && sigFilterDay !== 'ALL' ? sigFilterDay : '1';
+    const yr = sigFilterYear && sigFilterYear !== 'ALL' ? sigFilterYear : currentBsDate.year;
+    const mo = sigFilterMonth && sigFilterMonth !== 'ALL' ? sigFilterMonth : currentBsDate.month;
+    const dy = sigFilterDay && sigFilterDay !== 'ALL' ? sigFilterDay : currentBsDate.day;
     const nepMonth = nepaliMonthMapNp[mo] || mo;
     const nepYear = toNepaliDigits(yr);
     const nepDay = toNepaliDigits(dy);
@@ -2121,10 +2427,9 @@ export const MicroFinanceManagement: React.FC = () => {
     const officerName = selectedHrEmp?.fullName || (sigFilterEmployeeId && sigFilterEmployeeId !== 'ALL' ? sigFilterEmployeeId : user?.fullName || 'Chandan');
 
     // 5. Check if already saved in signatureSheets
-    const existing = signatureSheets.find(s => 
+    const existing = signatureSheets.find(s =>
       (s.groupId === targetGroupId || s.groupName === targetGroupName) &&
-      (s.dateBs.includes(yr) || s.dateBs.includes(nepYear)) &&
-      (s.dateBs.includes(mo) || s.dateBs.includes(nepMonth))
+      matchesBsDateFilter(s.dateBs, yr, mo)
     );
 
     if (existing) {
@@ -2145,12 +2450,12 @@ export const MicroFinanceManagement: React.FC = () => {
       setIsLoadingSignatureSheet(false);
     }
 
-    const groupMembers = members.filter(m => (!targetGroupId || targetGroupId === 'all') 
-      ? (m.centerId === targetCenterId || m.centerName === targetCenterName) 
+    const groupMembers = members.filter(m => (!targetGroupId || targetGroupId === 'all')
+      ? (m.centerId === targetCenterId || m.centerName === targetCenterName)
       : (m.samuhId === targetGroupId || m.samuhName === targetGroupName));
     const branchInfo = adminBranches.find(b => b.name === targetCenter?.branch) || availableBranches[0];
 
-    const membersToUse = groupMembers.length > 0 ? groupMembers : (members.length > 0 ? members.slice(0, 4) : []);
+    const membersToUse = sortByNameAZ(groupMembers);
 
     const sigMembers: MFSignatureSheetMember[] = membersToUse.map(m => {
       const memLoans = dateAwareLoans.filter(l => 
@@ -2162,7 +2467,7 @@ export const MicroFinanceManagement: React.FC = () => {
       const microInstallmentAmt = microLoan ? (microLoan.installmentAmount || 0) : 0;
       const emergencyInstallmentAmt = emergencyLoan ? (emergencyLoan.installmentAmount || 0) : 0;
       const totalLoanAmt = microInstallmentAmt + emergencyInstallmentAmt;
-      const savingAmt = m.totalSavings > 0 ? (m.totalSavings >= 2000 ? 1000 : 500) : 500;
+      const savingAmt = getMemberRecurringSavingAmount(m);
 
       return {
         memberId: m.memberId,
@@ -2287,7 +2592,7 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2.5">
       {/* Toast */}
       {toastMessage && (
         <div className="fixed top-5 right-5 z-[10000] bg-emerald-800 text-white px-4 py-2.5 rounded-xl shadow-xl flex items-center gap-2 text-xs font-bold animate-in fade-in slide-in-from-top-3">
@@ -2297,14 +2602,14 @@ export const MicroFinanceManagement: React.FC = () => {
       )}
 
       {/* Top Bar Header with Sub-Menus */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-2.5 shadow-2xs">
-        <div className="flex items-center justify-between gap-3 overflow-x-auto scrollbar-hide pb-1 md:pb-0">
-          <div className="flex items-center gap-1.5 shrink-0">
+      <div className="bg-white border border-slate-200 rounded-2xl p-1.5 shadow-2xs">
+        <div className="flex items-center justify-between gap-2 overflow-x-auto scrollbar-hide pb-0.5 md:pb-0">
+          <div className="flex items-center gap-1 shrink-0">
             {/* 1. Dashboard */}
             <button
               type="button"
               onClick={() => setActiveTab('dashboard')}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                 activeTab === 'dashboard'
                   ? 'bg-[#00593B] text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -2318,7 +2623,7 @@ export const MicroFinanceManagement: React.FC = () => {
             <button
               type="button"
               onClick={() => setActiveTab('centers')}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                 activeTab === 'centers'
                   ? 'bg-[#00593B] text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -2332,7 +2637,7 @@ export const MicroFinanceManagement: React.FC = () => {
             <button
               type="button"
               onClick={() => setActiveTab('groups')}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                 activeTab === 'groups'
                   ? 'bg-[#00593B] text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -2346,7 +2651,7 @@ export const MicroFinanceManagement: React.FC = () => {
             <button
               type="button"
               onClick={() => setActiveTab('members')}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                 activeTab === 'members'
                   ? 'bg-[#00593B] text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -2360,7 +2665,7 @@ export const MicroFinanceManagement: React.FC = () => {
             <button
               type="button"
               onClick={() => setActiveTab('saving')}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                 activeTab === 'saving'
                   ? 'bg-[#00593B] text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -2374,7 +2679,7 @@ export const MicroFinanceManagement: React.FC = () => {
             <button
               type="button"
               onClick={() => setActiveTab('loan')}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                 activeTab === 'loan'
                   ? 'bg-[#00593B] text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -2388,7 +2693,7 @@ export const MicroFinanceManagement: React.FC = () => {
             <button
               type="button"
               onClick={() => setActiveTab('reports')}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                 activeTab === 'reports'
                   ? 'bg-[#00593B] text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -2403,7 +2708,7 @@ export const MicroFinanceManagement: React.FC = () => {
             <button
               type="button"
               onClick={reloadData}
-              className="p-2 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl transition-colors cursor-pointer"
+              className="p-1.5 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl transition-colors cursor-pointer"
               title="Refresh Data"
             >
               <RefreshCw className="w-4 h-4" />
@@ -3339,9 +3644,8 @@ export const MicroFinanceManagement: React.FC = () => {
                   className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-hidden"
                 >
                   <option value="All">All Status</option>
-                  <option value="PAID">Paid</option>
-                  <option value="DUE">Due</option>
-                  <option value="PENDING">Pending</option>
+                  <option value="ACTIVE">Active</option>
+                  <option value="INACTIVE">Inactive</option>
                 </select>
               </div>
             </div>
@@ -3356,14 +3660,16 @@ export const MicroFinanceManagement: React.FC = () => {
                     <th className="py-2 px-3">ACCOUNT NO.</th>
                     <th className="py-2 px-3">NAME</th>
                     <th className="py-2 px-3">GROUP</th>
-                    <th className="py-2 px-3">DATE (BS)</th>
-                    <th className="py-2 px-3 text-right">AMOUNT</th>
+                    <th className="py-2 px-3">OPEN DATE</th>
+                    <th className="py-2 px-3 text-right">RECURRING AMOUNT</th>
                     <th className="py-2 px-3 text-center">STATUS</th>
                     <th className="py-2 px-3 text-right">ACTION</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-                  {filteredSavings.map((item, idx) => (
+                  {filteredSavings.map((item, idx) => {
+                    const effectiveStatus = getEffectiveSavingStatus(item.status);
+                    return (
                     <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-2 px-3 text-center text-slate-400 font-bold">{idx + 1}</td>
                       <td className="py-2 px-3 font-mono font-bold text-blue-700">{item.memberId}</td>
@@ -3384,26 +3690,46 @@ export const MicroFinanceManagement: React.FC = () => {
                       </td>
                       <td className="py-2 px-3 text-center">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
-                          item.status === 'PAID'
+                          effectiveStatus === 'ACTIVE'
                             ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                             : 'bg-red-50 text-red-700 border border-red-200'
                         }`}>
-                          {item.status}
+                          {effectiveStatus}
                         </span>
                       </td>
                       <td className="py-2 px-3 text-right">
-                        <button
-                          type="button"
-                          disabled={isDayEnded}
-                          onClick={() => handleOpenDeleteSaving(item)}
-                          className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                          title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete'}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenViewSaving(item)}
+                            className="p-1 text-slate-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                            title="View Saving Details"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isDayEnded}
+                            onClick={() => handleOpenEditSaving(item)}
+                            className="p-1 text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Saving'}
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isDayEnded}
+                            onClick={() => handleOpenDeleteSaving(item)}
+                            className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete'}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
 
                   {filteredSavings.length === 0 && (
                     <tr>
@@ -3535,6 +3861,7 @@ export const MicroFinanceManagement: React.FC = () => {
                     <th className="py-2 px-3">CENTER / GROUP</th>
                     <th className="py-2 px-3">LOAN DATE</th>
                     <th className="py-2 px-3 text-right">LOAN</th>
+                    <th className="py-2 px-3 text-center">PERIOD</th>
                     <th className="py-2 px-3 text-right">INSTALLMENT</th>
                     <th className="py-2 px-3 text-center">STATUS</th>
                     <th className="py-2 px-3 text-right">ACTION</th>
@@ -3543,7 +3870,7 @@ export const MicroFinanceManagement: React.FC = () => {
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                   {loanStatusTab === 'CLOSED' && isLoadingClosedLoans ? (
                     <tr>
-                      <td colSpan={10} className="py-12 text-center text-slate-500">
+                      <td colSpan={11} className="py-12 text-center text-slate-500">
                         <div className="inline-flex items-center gap-2 font-bold text-xs">
                           <Loader2 className="w-4 h-4 animate-spin text-orange-600" />
                           <span>Loading archived closed loans from Supabase...</span>
@@ -3575,6 +3902,9 @@ export const MicroFinanceManagement: React.FC = () => {
                           <td className="py-2 px-3 text-right font-black font-mono text-slate-900">
                             NPR {loan.loanAmount.toLocaleString()}
                           </td>
+                          <td className="py-2 px-3 text-center font-mono font-bold text-slate-700 whitespace-nowrap">
+                            {loan.totalInstallments || 12} Months
+                          </td>
                           <td className="py-2 px-3 text-right font-mono text-slate-700">
                             NPR {loan.installmentAmount.toLocaleString()}
                           </td>
@@ -3591,21 +3921,21 @@ export const MicroFinanceManagement: React.FC = () => {
                           </td>
                           <td className="py-2 px-3 text-right">
                             <div className="flex items-center justify-end gap-1.5">
-                              {/* Close Loan Action (Shown on Active & Mature loans to close & archive to Supabase) */}
+                              {/* Close Loan Action: 'Close Loan' on Mature loans, 'LC' on Active loans */}
                               {effStatus !== 'CLOSED' && (
                                 <button
                                   type="button"
                                   disabled={isDayEnded}
                                   onClick={() => handleOpenCloseLoan(loan)}
-                                  className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wide transition-colors cursor-pointer flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed ${
+                                  className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase tracking-wide transition-colors cursor-pointer flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed ${
                                     effStatus === 'MATURED'
-                                      ? 'bg-amber-500 text-white hover:bg-amber-600 shadow-2xs'
+                                      ? 'px-2.5 bg-amber-500 text-white hover:bg-amber-600 shadow-2xs'
                                       : 'bg-slate-100 text-slate-700 hover:bg-emerald-600 hover:text-white border border-slate-200'
                                   }`}
-                                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Close Loan & Archive to Supabase'}
+                                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Loan Close & Archive to Supabase'}
                                 >
                                   <Lock className="w-3 h-3" />
-                                  <span>Close Loan</span>
+                                  <span>{effStatus === 'MATURED' ? 'Close Loan' : 'LC'}</span>
                                 </button>
                               )}
                               {/* View Action */}
@@ -3646,7 +3976,7 @@ export const MicroFinanceManagement: React.FC = () => {
 
                   {!(loanStatusTab === 'CLOSED' && isLoadingClosedLoans) && filteredLoans.length === 0 && (
                     <tr>
-                      <td colSpan={10} className="py-16 text-center">
+                      <td colSpan={11} className="py-16 text-center">
                         <div className="flex flex-col items-center justify-center space-y-2">
                           <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center">
                             <Search className="w-6 h-6" />
@@ -3676,13 +4006,13 @@ export const MicroFinanceManagement: React.FC = () => {
       {/* 7. REPORTS (Matching image_ff5945f2.png) */}
       {/* ============================================================== */}
       {activeTab === 'reports' && (
-        <div className="space-y-4">
-          {/* Top Switcher Tabs: Collection Sheet vs Signature Sheet */}
+        <div className="space-y-2.5">
+          {/* Top Switcher Tabs: Collection Sheet vs Signature Sheet vs Meeting Minute */}
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => setReportTab('collection')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
                 reportTab === 'collection'
                   ? 'bg-white text-blue-700 shadow-sm border border-slate-200'
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -3695,7 +4025,7 @@ export const MicroFinanceManagement: React.FC = () => {
             <button
               type="button"
               onClick={() => setReportTab('signature')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
                 reportTab === 'signature'
                   ? 'bg-white text-blue-700 shadow-sm border border-slate-200'
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -3708,7 +4038,7 @@ export const MicroFinanceManagement: React.FC = () => {
             <button
               type="button"
               onClick={() => setReportTab('meeting-minutes')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
                 reportTab === 'meeting-minutes'
                   ? 'bg-white text-emerald-800 shadow-sm border border-slate-200'
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -3723,15 +4053,15 @@ export const MicroFinanceManagement: React.FC = () => {
           {reportTab === 'collection' && (
             <>
               {/* Filter Card with Year, Month, Day, Center, Group, View */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs space-y-3">
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
+              <div className="bg-white rounded-2xl border border-slate-200 px-3 py-2.5 shadow-2xs">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 items-end">
                   {/* YEAR */}
                   <div>
-                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">YEAR</label>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5">YEAR</label>
                     <select
                       value={reportYear}
                       onChange={e => setReportYear(e.target.value)}
-                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                      className="w-full px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
                     >
                       <option value="2081">2081</option>
                       <option value="2082">2082</option>
@@ -3742,11 +4072,11 @@ export const MicroFinanceManagement: React.FC = () => {
 
                   {/* MONTH */}
                   <div>
-                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">MONTH</label>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5">MONTH</label>
                     <select
                       value={reportMonth}
                       onChange={e => setReportMonth(e.target.value)}
-                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                      className="w-full px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
                     >
                       {nepaliMonthsEnglish.map(m => (
                         <option key={m} value={m}>{m}</option>
@@ -3756,11 +4086,22 @@ export const MicroFinanceManagement: React.FC = () => {
 
                   {/* DAY */}
                   <div>
-                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">DAY</label>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5">DAY</label>
                     <select
                       value={reportDay}
-                      onChange={e => setReportDay(e.target.value)}
-                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                      onChange={e => {
+                        const nextDay = e.target.value;
+                        setReportDay(nextDay);
+                        const dayNum = parseInt(nextDay, 10);
+                        const validForDay = centers.some(
+                          c => c.id === reportCenterId && extractMeetingDayNumber(c.meetingDay) === dayNum
+                        );
+                        if (!validForDay) {
+                          setReportCenterId('');
+                          setReportGroupId('');
+                        }
+                      }}
+                      className="w-full px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
                     >
                       {Array.from({ length: 32 }, (_, i) => i + 1).map(d => (
                         <option key={d} value={d.toString()}>{d}</option>
@@ -3768,32 +4109,41 @@ export const MicroFinanceManagement: React.FC = () => {
                     </select>
                   </div>
 
-                  {/* SELECT CENTER (Red-circled REFRESH removed) */}
+                  {/* Center (Filtered strictly by selected DAY's meetingDay) */}
                   <div>
-                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">SELECT CENTER</label>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5">Center</label>
                     <select
                       value={reportCenterId}
-                      onChange={e => setReportCenterId(e.target.value)}
-                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                      onChange={e => {
+                        setReportCenterId(e.target.value);
+                        setReportGroupId('');
+                      }}
+                      className="w-full px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
                     >
-                      <option value="">Choose a center...</option>
-                      {centers.map(c => (
+                      <option value="">
+                        {filteredReportCenters.length > 0 ? 'Choose a center...' : `No center on Day ${reportDay}`}
+                      </option>
+                      {filteredReportCenters.map(c => (
                         <option key={c.id} value={c.id}>{c.name}</option>
                       ))}
                     </select>
                   </div>
 
-                  {/* SELECT GROUP */}
+                  {/* Group */}
                   <div>
-                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">SELECT GROUP</label>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5">Group</label>
                     <select
                       value={reportGroupId}
                       onChange={e => setReportGroupId(e.target.value)}
-                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                      className="w-full px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
                     >
                       <option value="">All Groups...</option>
                       {groups
-                        .filter(g => !reportCenterId || g.centerId === reportCenterId)
+                        .filter(g =>
+                          reportCenterId
+                            ? g.centerId === reportCenterId
+                            : filteredReportCenters.some(c => c.id === g.centerId)
+                        )
                         .map(g => (
                           <option key={g.id} value={g.id}>{g.name}</option>
                         ))}
@@ -3806,9 +4156,9 @@ export const MicroFinanceManagement: React.FC = () => {
                       type="button"
                       onClick={() => void handleViewCollectionSheet()}
                       disabled={isLoadingCollectionSheet}
-                      className="w-full py-2 bg-[#4f7df5] hover:bg-[#3b6ae8] disabled:opacity-60 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer flex items-center justify-center gap-1.5 transition-all"
+                      className="w-full py-1.5 bg-[#4f7df5] hover:bg-[#3b6ae8] disabled:opacity-60 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer flex items-center justify-center gap-1.5 transition-all"
                     >
-                      {isLoadingCollectionSheet ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />}
+                      {isLoadingCollectionSheet ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
                       <span>{isLoadingCollectionSheet ? 'Loading...' : 'View'}</span>
                     </button>
                   </div>
@@ -3817,7 +4167,7 @@ export const MicroFinanceManagement: React.FC = () => {
 
               {/* Results Card: Collection Sheet Records with Right-side Year & Month Dropdowns */}
               <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
-                <div className="p-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+                <div className="px-3.5 py-2 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
                       <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
@@ -3832,7 +4182,7 @@ export const MicroFinanceManagement: React.FC = () => {
                       <select
                         value={sheetHistoryYear}
                         onChange={e => setSheetHistoryYear(e.target.value)}
-                        className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                        className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
                       >
                         <option value="ALL">All Years</option>
                         <option value="2081">2081</option>
@@ -3847,7 +4197,7 @@ export const MicroFinanceManagement: React.FC = () => {
                       <select
                         value={sheetHistoryMonth}
                         onChange={e => setSheetHistoryMonth(e.target.value)}
-                        className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                        className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
                       >
                         <option value="ALL">All Months</option>
                         {nepaliMonthsEnglish.map(m => (
@@ -3859,7 +4209,7 @@ export const MicroFinanceManagement: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => showToast(`Showing collection sheets for Year: ${sheetHistoryYear}, Month: ${sheetHistoryMonth}`)}
-                      className="flex items-center gap-1 px-3 py-1.5 bg-[#4f7df5] hover:bg-[#3b6ae8] text-white rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-xs"
+                      className="flex items-center gap-1 px-3 py-1 bg-[#4f7df5] hover:bg-[#3b6ae8] text-white rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-xs"
                     >
                       <Eye className="w-3.5 h-3.5" />
                       <span>View</span>
@@ -3871,35 +4221,27 @@ export const MicroFinanceManagement: React.FC = () => {
                   <table className="w-full text-left text-xs">
                     <thead>
                       <tr className="bg-[#0b1329] text-white font-black uppercase text-[10px] tracking-wider">
-                        <th className="py-3 px-4 w-14 text-center">S.N.</th>
-                        <th className="py-3 px-4">CENTER NAME</th>
-                        <th className="py-3 px-4">GROUP NAME</th>
-                        <th className="py-3 px-4">DATE</th>
-                        <th className="py-3 px-4 text-center">STATUS</th>
-                        <th className="py-3 px-4 text-right">ACTION</th>
+                        <th className="py-2 px-3 w-12 text-center whitespace-nowrap">S.N.</th>
+                        <th className="py-2 px-3 whitespace-nowrap">CENTER NAME</th>
+                        <th className="py-2 px-3 whitespace-nowrap">GROUP NAME</th>
+                        <th className="py-2 px-3 whitespace-nowrap">DATE</th>
+                        <th className="py-2 px-3 text-center whitespace-nowrap">STATUS</th>
+                        <th className="py-2 px-3 text-right whitespace-nowrap">ACTION</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                       {(() => {
-                        const filteredCollectionSheets = sheets.filter(sheet => {
-                          if (sheetHistoryYear !== 'ALL' && sheetHistoryYear !== 'All') {
-                            const nepYear = toNepaliDigits(sheetHistoryYear);
-                            if (!sheet.dateDisplay.includes(sheetHistoryYear) && !sheet.dateDisplay.includes(nepYear) && sheet.year !== sheetHistoryYear) return false;
-                          }
-                          if (sheetHistoryMonth !== 'ALL' && sheetHistoryMonth !== 'All') {
-                            const nepMonth = nepaliMonthMapNp[sheetHistoryMonth] || sheetHistoryMonth;
-                            if (!sheet.dateDisplay.includes(sheetHistoryMonth) && !sheet.dateDisplay.includes(nepMonth) && sheet.month !== sheetHistoryMonth) return false;
-                          }
-                          return true;
-                        });
+                        const filteredCollectionSheets = sheets.filter(sheet =>
+                          matchesBsDateFilter(sheet.dateDisplay, sheetHistoryYear, sheetHistoryMonth, sheet.year, sheet.month)
+                        );
 
                         if (filteredCollectionSheets.length === 0) {
                           return (
                             <tr>
-                              <td colSpan={6} className="py-16 text-center">
-                                <div className="flex flex-col items-center justify-center space-y-2">
-                                  <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center">
-                                    <MapPin className="w-6 h-6 text-blue-400" />
+                              <td colSpan={6} className="py-8 text-center">
+                                <div className="flex flex-col items-center justify-center space-y-1.5">
+                                  <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center">
+                                    <MapPin className="w-5 h-5 text-blue-400" />
                                   </div>
                                   <p className="text-sm font-extrabold text-slate-800">No collection sheets found for selected period.</p>
                                   <p className="text-xs text-slate-400">Click &quot;View&quot; above to view and generate a new collection sheet.</p>
@@ -3911,12 +4253,12 @@ export const MicroFinanceManagement: React.FC = () => {
 
                         return filteredCollectionSheets.map((sheet, idx) => (
                           <tr key={sheet.id} className="hover:bg-slate-50/80 transition-colors">
-                            <td className="py-3 px-4 text-center text-slate-400 font-bold">{idx + 1}</td>
-                            <td className="py-3 px-4 font-bold text-slate-900">{sheet.centerName}</td>
-                            <td className="py-3 px-4 text-slate-600">{sheet.groupName}</td>
-                            <td className="py-3 px-4 font-mono text-slate-600">{sheet.dateDisplay}</td>
-                            <td className="py-3 px-4 text-center">
-                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                            <td className="py-1.5 px-3 text-center text-slate-400 font-bold">{idx + 1}</td>
+                            <td className="py-1.5 px-3 font-bold text-slate-900">{sheet.centerName}</td>
+                            <td className="py-1.5 px-3 text-slate-600">{sheet.groupName}</td>
+                            <td className="py-1.5 px-3 font-mono text-slate-600 whitespace-nowrap">{sheet.dateDisplay}</td>
+                            <td className="py-1.5 px-3 text-center whitespace-nowrap">
+                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider inline-block ${
                                 sheet.status === 'COLLECTED'
                                   ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                                   : 'bg-blue-50 text-blue-700 border border-blue-200'
@@ -3924,12 +4266,12 @@ export const MicroFinanceManagement: React.FC = () => {
                                 {sheet.status}
                               </span>
                             </td>
-                            <td className="py-3 px-4 text-right">
+                            <td className="py-1.5 px-3 text-right whitespace-nowrap">
                               <div className="flex items-center justify-end gap-2">
                                 <button
                                   type="button"
                                   onClick={() => { setActiveSheetToPrint(sheet); setIsPrintSheetModalOpen(true); }}
-                                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-[11px] transition-colors cursor-pointer"
+                                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-[11px] transition-colors cursor-pointer whitespace-nowrap"
                                 >
                                   <Eye className="w-3.5 h-3.5" />
                                   <span>View / Print</span>
@@ -3957,17 +4299,17 @@ export const MicroFinanceManagement: React.FC = () => {
 
           {/* TAB 2: SIGNATURE SHEET (Permanent Table with Filters) */}
           {reportTab === 'signature' && (
-            <div className="space-y-4">
+            <div className="space-y-2.5">
               {/* Signature Sheet Filter Card: Compact Year, Month, Day, Center, Group, Employee, and small View button */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs space-y-3">
-                <div className="flex flex-wrap items-end gap-2.5">
-                  {/* YEAR (Compact - No extra space per image_0a190e6f.png) */}
+              <div className="bg-white rounded-2xl border border-slate-200 px-3 py-2.5 shadow-2xs">
+                <div className="flex flex-wrap items-end gap-2">
+                  {/* YEAR */}
                   <div className="w-24 shrink-0">
-                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">YEAR</label>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5">YEAR</label>
                     <select
                       value={sigFilterYear}
                       onChange={e => setSigFilterYear(e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                      className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
                     >
                       <option value="ALL">All</option>
                       <option value="2081">2081</option>
@@ -3977,13 +4319,13 @@ export const MicroFinanceManagement: React.FC = () => {
                     </select>
                   </div>
 
-                  {/* MONTH (Compact - No extra space per image_0a190e6f.png) */}
+                  {/* MONTH */}
                   <div className="w-28 shrink-0">
-                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">MONTH</label>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5">MONTH</label>
                     <select
                       value={sigFilterMonth}
                       onChange={e => setSigFilterMonth(e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                      className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
                     >
                       <option value="ALL">All</option>
                       {nepaliMonthsEnglish.map(m => (
@@ -3992,13 +4334,26 @@ export const MicroFinanceManagement: React.FC = () => {
                     </select>
                   </div>
 
-                  {/* DAY (Compact - No extra space per image_0a190e6f.png) */}
+                  {/* DAY */}
                   <div className="w-20 shrink-0">
-                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">DAY</label>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5">DAY</label>
                     <select
                       value={sigFilterDay}
-                      onChange={e => setSigFilterDay(e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                      onChange={e => {
+                        const nextDay = e.target.value;
+                        setSigFilterDay(nextDay);
+                        if (nextDay !== 'ALL') {
+                          const dayNum = parseInt(nextDay, 10);
+                          const valid = centers.some(
+                            c => c.id === sigFilterCenterId && extractMeetingDayNumber(c.meetingDay) === dayNum
+                          );
+                          if (!valid) {
+                            setSigFilterCenterId('ALL');
+                            setSigFilterGroupId('ALL');
+                          }
+                        }
+                      }}
+                      className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
                     >
                       <option value="ALL">All</option>
                       {Array.from({ length: 32 }, (_, i) => i + 1).map(d => (
@@ -4007,32 +4362,42 @@ export const MicroFinanceManagement: React.FC = () => {
                     </select>
                   </div>
 
-                  {/* SELECT CENTER */}
+                  {/* Center */}
                   <div className="flex-1 min-w-[130px]">
-                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1 truncate">SELECT CENTER</label>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5 truncate">Center</label>
                     <select
                       value={sigFilterCenterId}
-                      onChange={e => setSigFilterCenterId(e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                      onChange={e => {
+                        setSigFilterCenterId(e.target.value);
+                        setSigFilterGroupId('ALL');
+                      }}
+                      className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
                     >
                       <option value="ALL">All Centers</option>
-                      {centers.map(c => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
+                      {centers
+                        .filter(c => sigFilterDay === 'ALL' || extractMeetingDayNumber(c.meetingDay) === parseInt(sigFilterDay, 10))
+                        .map(c => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
                     </select>
                   </div>
 
-                  {/* SELECT GROUP */}
+                  {/* Group */}
                   <div className="flex-1 min-w-[130px]">
-                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1 truncate">SELECT GROUP</label>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5 truncate">Group</label>
                     <select
                       value={sigFilterGroupId}
                       onChange={e => setSigFilterGroupId(e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                      className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
                     >
                       <option value="ALL">All Groups</option>
                       {groups
-                        .filter(g => sigFilterCenterId === 'ALL' || !sigFilterCenterId || g.centerId === sigFilterCenterId)
+                        .filter(g => {
+                          if (sigFilterCenterId && sigFilterCenterId !== 'ALL') return g.centerId === sigFilterCenterId;
+                          if (sigFilterDay === 'ALL') return true;
+                          const dayNum = parseInt(sigFilterDay, 10);
+                          return centers.some(c => c.id === g.centerId && extractMeetingDayNumber(c.meetingDay) === dayNum);
+                        })
                         .map(g => (
                           <option key={g.id} value={g.id}>{g.name}</option>
                         ))}
@@ -4041,11 +4406,11 @@ export const MicroFinanceManagement: React.FC = () => {
 
                   {/* EMPLOYEE (Populated from HR Management) */}
                   <div className="flex-1 min-w-[130px]">
-                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-1 truncate">EMPLOYEE</label>
+                    <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5 truncate">EMPLOYEE</label>
                     <select
                       value={sigFilterEmployeeId}
                       onChange={e => setSigFilterEmployeeId(e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                      className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
                     >
                       <option value="ALL">All Employees</option>
                       {activeHrEmployees.map(emp => (
@@ -4073,7 +4438,7 @@ export const MicroFinanceManagement: React.FC = () => {
 
               {/* Table: Signature Sheets records */}
               <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
-                <div className="p-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+                <div className="px-3.5 py-2 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
                       <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
@@ -4088,7 +4453,7 @@ export const MicroFinanceManagement: React.FC = () => {
                       <select
                         value={sigHistoryYear}
                         onChange={e => setSigHistoryYear(e.target.value)}
-                        className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                        className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
                       >
                         <option value="ALL">All Years</option>
                         <option value="2081">2081</option>
@@ -4103,7 +4468,7 @@ export const MicroFinanceManagement: React.FC = () => {
                       <select
                         value={sigHistoryMonth}
                         onChange={e => setSigHistoryMonth(e.target.value)}
-                        className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                        className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
                       >
                         <option value="ALL">All Months</option>
                         {nepaliMonthsEnglish.map(m => (
@@ -4115,7 +4480,7 @@ export const MicroFinanceManagement: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => showToast(`Showing records for Year: ${sigHistoryYear}, Month: ${sigHistoryMonth}`)}
-                      className="flex items-center gap-1 px-3 py-1.5 bg-[#4f7df5] hover:bg-[#3b6ae8] text-white rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-xs"
+                      className="flex items-center gap-1 px-3 py-1 bg-[#4f7df5] hover:bg-[#3b6ae8] text-white rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-xs"
                     >
                       <Eye className="w-3.5 h-3.5" />
                       <span>View</span>
@@ -4127,39 +4492,30 @@ export const MicroFinanceManagement: React.FC = () => {
                   <table className="w-full text-left text-xs">
                     <thead>
                       <tr className="bg-[#0b1329] text-white font-black uppercase text-[10px] tracking-wider">
-                        <th className="py-3 px-4 w-12 text-center">S.N.</th>
-                        <th className="py-3 px-4">SHEET NO</th>
-                        <th className="py-3 px-4">CENTER NAME</th>
-                        <th className="py-3 px-4">GROUP NAME</th>
-                        <th className="py-3 px-4">DATE (BS)</th>
-                        <th className="py-3 px-4 text-center">MEMBERS</th>
-                        <th className="py-3 px-4 text-right">TOTAL SAVINGS</th>
-                        <th className="py-3 px-4 text-right">TOTAL LOANS</th>
-                        <th className="py-3 px-4 text-right">ACTION</th>
+                        <th className="py-2 px-3 w-10 text-center whitespace-nowrap">S.N.</th>
+                        <th className="py-2 px-3 whitespace-nowrap">SHEET NO</th>
+                        <th className="py-2 px-3 whitespace-nowrap">CENTER NAME</th>
+                        <th className="py-2 px-3 whitespace-nowrap">GROUP NAME</th>
+                        <th className="py-2 px-3 whitespace-nowrap">DATE (BS)</th>
+                        <th className="py-2 px-3 text-center whitespace-nowrap">MEMBERS</th>
+                        <th className="py-2 px-3 text-right whitespace-nowrap">TOTAL SAVINGS</th>
+                        <th className="py-2 px-3 text-right whitespace-nowrap">TOTAL LOANS</th>
+                        <th className="py-2 px-3 text-right whitespace-nowrap">ACTION</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                       {(() => {
-                        const filteredSignatureSheets = signatureSheets.filter(sig => {
-                          // Filter strictly by History Year & Month from table's own header
-                          if (sigHistoryYear !== 'ALL' && sigHistoryYear !== 'All') {
-                            const nepYear = toNepaliDigits(sigHistoryYear);
-                            if (!sig.dateBs.includes(sigHistoryYear) && !sig.dateBs.includes(nepYear)) return false;
-                          }
-                          if (sigHistoryMonth !== 'ALL' && sigHistoryMonth !== 'All') {
-                            const nepMonth = nepaliMonthMapNp[sigHistoryMonth] || sigHistoryMonth;
-                            if (!sig.dateBs.includes(sigHistoryMonth) && !sig.dateBs.includes(nepMonth)) return false;
-                          }
-                          return true;
-                        });
+                        const filteredSignatureSheets = signatureSheets.filter(sig =>
+                          matchesBsDateFilter(sig.dateBs, sigHistoryYear, sigHistoryMonth)
+                        );
 
                         if (filteredSignatureSheets.length === 0) {
                           return (
                             <tr>
-                              <td colSpan={9} className="py-16 text-center">
-                                <div className="flex flex-col items-center justify-center space-y-2">
-                                  <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center">
-                                    <FileSpreadsheet className="w-6 h-6 text-emerald-600" />
+                              <td colSpan={9} className="py-8 text-center">
+                                <div className="flex flex-col items-center justify-center space-y-1.5">
+                                  <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center">
+                                    <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
                                   </div>
                                   <p className="text-sm font-extrabold text-slate-800">No signature sheets found matching criteria.</p>
                                   <p className="text-xs text-slate-400">
@@ -4173,31 +4529,31 @@ export const MicroFinanceManagement: React.FC = () => {
 
                         return filteredSignatureSheets.map((sig, idx) => (
                           <tr key={sig.id} className="hover:bg-slate-50/80 transition-colors">
-                            <td className="py-3 px-4 text-center text-slate-400 font-bold">{idx + 1}</td>
-                            <td className="py-3 px-4 font-mono font-bold text-blue-700">{sig.sheetNo}</td>
-                            <td className="py-3 px-4 font-bold text-slate-900">{sig.centerName}</td>
-                            <td className="py-3 px-4 text-slate-700">{sig.groupName}</td>
-                            <td className="py-3 px-4 font-bold text-slate-800">{sig.dateBs}</td>
-                            <td className="py-3 px-4 text-center font-bold">
+                            <td className="py-1.5 px-3 text-center text-slate-400 font-bold">{idx + 1}</td>
+                            <td className="py-1.5 px-3 font-mono font-bold text-blue-700 whitespace-nowrap">{sig.sheetNo}</td>
+                            <td className="py-1.5 px-3 font-bold text-slate-900">{sig.centerName}</td>
+                            <td className="py-1.5 px-3 text-slate-700">{sig.groupName}</td>
+                            <td className="py-1.5 px-3 font-bold text-slate-800 whitespace-nowrap">{sig.dateBs}</td>
+                            <td className="py-1.5 px-3 text-center font-bold whitespace-nowrap">
                               <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-800 font-mono text-[11px]">
                                 {sig.totalMembers || sig.members?.length || 0}
                               </span>
                             </td>
-                            <td className="py-3 px-4 text-right font-mono font-bold text-emerald-700">
+                            <td className="py-1.5 px-3 text-right font-mono font-bold text-emerald-700 whitespace-nowrap">
                               NPR {sig.totalSavings?.toLocaleString() || 0}
                             </td>
-                            <td className="py-3 px-4 text-right font-mono font-bold text-orange-700">
+                            <td className="py-1.5 px-3 text-right font-mono font-bold text-orange-700 whitespace-nowrap">
                               NPR {sig.totalLoans?.toLocaleString() || 0}
                             </td>
-                            <td className="py-3 px-4 text-right">
-                              <div className="flex items-center justify-end gap-2">
+                            <td className="py-1.5 px-3 text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-1.5">
                                 <button
                                   type="button"
                                   onClick={() => {
                                     setSelectedSignatureSheetToPrint(sig);
                                     setIsSignatureModalOpen(true);
                                   }}
-                                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-[11px] transition-colors cursor-pointer shadow-2xs"
+                                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-[11px] transition-colors cursor-pointer shadow-2xs whitespace-nowrap"
                                   title="View & Print Signature Sheet"
                                 >
                                   <Printer className="w-3.5 h-3.5" />
@@ -4210,7 +4566,7 @@ export const MicroFinanceManagement: React.FC = () => {
                                     setSelectedSignatureSheetToDelete(sig);
                                     setIsDeleteSignatureModalOpen(true);
                                   }}
-                                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                  className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                                   title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Signature Sheet'}
                                 >
                                   <Trash2 className="w-4 h-4" />
@@ -4706,14 +5062,16 @@ export const MicroFinanceManagement: React.FC = () => {
                     className="w-full pl-9 pr-9 py-2.5 bg-slate-50 hover:bg-white focus:bg-white border border-slate-200 rounded-xl font-bold text-slate-800 text-xs focus:outline-hidden focus:ring-2 focus:ring-[#00593B]/20 transition-all cursor-text"
                   />
                   <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  {memberSearchInput && (
+                  {(memberSearchInput || selectedSavingMemberId) && (
                     <button
                       type="button"
                       onClick={() => {
                         setMemberSearchInput('');
+                        setSelectedSavingMemberId('');
+                        setSavingAccounts(prev => prev.map(acc => ({ ...acc, accountNo: '' })));
                         setIsMemberDropdownOpen(true);
                       }}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 rounded-full"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 rounded-full cursor-pointer"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -4862,15 +5220,16 @@ export const MicroFinanceManagement: React.FC = () => {
                           </select>
                         </div>
 
-                        {/* Open Amount */}
+                        {/* Recurring Amount (Monthly Saving Deposit) */}
                         <div>
                           <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                            OPEN AMOUNT
+                            RECURRING AMOUNT
                           </label>
                           <input
                             type="number"
                             value={acc.amount}
                             onChange={e => handleUpdateSavingAccount(acc.id, 'amount', parseFloat(e.target.value) || 0)}
+                            placeholder="Monthly deposit amount"
                             className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-xl font-black font-mono text-sm text-emerald-800 focus:outline-hidden focus:ring-1 focus:ring-[#00593B]"
                           />
                         </div>
@@ -4880,22 +5239,27 @@ export const MicroFinanceManagement: React.FC = () => {
                 </div>
               </div>
 
-              {/* Date & Total Summary Row */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">DATE (BS / AD)</label>
+              {/* Date (BS) Row with compact manual YYYY-MM-DD input & Nepali Calendar icon right beside the date */}
+              <div className="pt-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                  DATE (BS)
+                </label>
+                <div className="inline-flex items-center bg-slate-50 focus-within:bg-white border border-slate-200 focus-within:ring-1 focus-within:ring-[#00593B] rounded-xl pr-1.5">
                   <input
-                    type="date"
+                    type="text"
                     value={savingDate}
                     onChange={e => setSavingDate(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-semibold focus:outline-hidden focus:ring-1 focus:ring-[#00593B]"
+                    placeholder="YYYY-MM-DD"
+                    maxLength={10}
+                    className="w-32 px-3 py-2 bg-transparent font-mono text-slate-800 font-bold focus:outline-hidden"
                   />
-                </div>
-                <div className="bg-emerald-50/70 p-2.5 rounded-xl border border-emerald-200/80 flex flex-col justify-center">
-                  <div className="text-[10px] font-bold uppercase text-emerald-800">TOTAL OPENING DEPOSIT</div>
-                  <div className="font-mono font-black text-base text-[#00593B]">
-                    NPR {savingAccounts.reduce((sum, a) => sum + (Number(a.amount) || 0), 0).toLocaleString()}
-                  </div>
+                  <NepaliDatePicker
+                    value={savingDate}
+                    onChange={val => setSavingDate(val)}
+                    align="left"
+                    iconOnly
+                    disallowBackDateIfDisabled
+                  />
                 </div>
               </div>
               </DayEndFieldset>
@@ -4955,7 +5319,7 @@ export const MicroFinanceManagement: React.FC = () => {
               {/* Member Search (Identical to Saving modal search UX) */}
               <div className="relative">
                 <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                  SELECT MEMBER (SEARCH BY ID OR NAME) <span className="text-rose-500">*</span>
+                  SELECT MEMBER
                 </label>
                 <div className="relative">
                   <input
@@ -4970,14 +5334,21 @@ export const MicroFinanceManagement: React.FC = () => {
                     className="w-full pl-9 pr-9 py-2.5 bg-slate-50 hover:bg-white focus:bg-white border border-slate-200 rounded-xl font-bold text-slate-800 text-xs focus:outline-hidden focus:ring-2 focus:ring-[#ea580c]/20 transition-all cursor-text"
                   />
                   <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  {loanMemberSearchInput && (
+                  {(loanMemberSearchInput || loanForm.memberId) && (
                     <button
                       type="button"
                       onClick={() => {
                         setLoanMemberSearchInput('');
+                        setLoanForm(prev => ({
+                          ...prev,
+                          memberId: '',
+                          name: '',
+                          centerName: '',
+                          groupName: ''
+                        }));
                         setIsLoanMemberDropdownOpen(true);
                       }}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 rounded-full"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 rounded-full cursor-pointer"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -5044,11 +5415,11 @@ export const MicroFinanceManagement: React.FC = () => {
                 )}
               </div>
 
-              {/* Row 2: Open Date (BS: YYYY-MM-DD) & Product */}
+              {/* Row 2: Open Date (BS) & Product */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                    OPEN DATE (BS: YYYY-MM-DD) <span className="text-rose-500">*</span>
+                    OPEN DATE (BS)
                   </label>
                   <div className="relative">
                     <input
@@ -5084,7 +5455,7 @@ export const MicroFinanceManagement: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                    AMOUNT (NPR) <span className="text-rose-500">*</span>
+                    LOAN AMOUNT
                   </label>
                   <input
                     type="number"
@@ -5111,11 +5482,11 @@ export const MicroFinanceManagement: React.FC = () => {
                 </div>
               </div>
 
-              {/* Row 4: Installment (Manually Editable) & Maturity Date (Auto-calculated from period) */}
+              {/* Row 4: Installment Amount (Manually Editable) & Maturity Date (Auto-calculated from period) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                    INSTALLMENT (NPR) <span className="text-slate-400 font-normal">(Manual Edit)</span>
+                    INSTALLMENT AMOUNT
                   </label>
                   <input
                     type="number"
@@ -5273,7 +5644,7 @@ export const MicroFinanceManagement: React.FC = () => {
             </div>
 
             <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
-              {selectedLoanToView.status !== 'CLOSED' && (
+              {getEffectiveLoanStatus(selectedLoanToView) !== 'CLOSED' && (
                 <button
                   type="button"
                   disabled={isDayEnded}
@@ -5281,11 +5652,11 @@ export const MicroFinanceManagement: React.FC = () => {
                     setIsViewLoanModalOpen(false);
                     handleOpenCloseLoan(selectedLoanToView);
                   }}
-                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Close Loan'}
+                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Loan Close'}
                   className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold cursor-pointer transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Lock className="w-3.5 h-3.5" />
-                  <span>Close Loan</span>
+                  <span>{getEffectiveLoanStatus(selectedLoanToView) === 'MATURED' ? 'Close Loan' : 'LC'}</span>
                 </button>
               )}
               <button
@@ -5652,49 +6023,7 @@ export const MicroFinanceManagement: React.FC = () => {
         let totalDue = 0;
         let grandTotal = 0;
 
-        // If groupMembers is empty, fall back to members or realistic sample members so user sees table filled
-        const membersToRender = groupMembers.length > 0 ? groupMembers : (members.length > 0 ? members.slice(0, 4) : [
-          {
-            id: 'mem-1',
-            memberId: 'M-1001',
-            name: 'Sita Devi Chaudhary',
-            citizenshipNo: '18-01-75-01234',
-            mobile: '9801234567',
-            gender: 'Female',
-            branch: 'Ratauli Central Head Office',
-            centerId: activeSheetToPrint.centerId,
-            centerName: activeSheetToPrint.centerName,
-            samuhId: activeSheetToPrint.groupId,
-            samuhName: activeSheetToPrint.groupName,
-            role: 'Member',
-            savingsAccountNo: 'SAV-1001',
-            address: 'Pipra-6, Mahottari',
-            joinedDate: '2080-01-15',
-            status: 'ACTIVE',
-            totalSavings: 2000,
-            activeLoanAmount: 60000
-          },
-          {
-            id: 'mem-2',
-            memberId: 'M-1002',
-            name: 'Geeta Kumari Mandal',
-            citizenshipNo: '18-02-76-08912',
-            mobile: '9812345678',
-            gender: 'Female',
-            branch: 'Ratauli Central Head Office',
-            centerId: activeSheetToPrint.centerId,
-            centerName: activeSheetToPrint.centerName,
-            samuhId: activeSheetToPrint.groupId,
-            samuhName: activeSheetToPrint.groupName,
-            role: 'Member',
-            savingsAccountNo: 'SAV-1002',
-            address: 'Pipra-6, Mahottari',
-            joinedDate: '2081-03-20',
-            status: 'ACTIVE',
-            totalSavings: 18200,
-            activeLoanAmount: 40000
-          }
-        ] as MFMember[]);
+        const membersToRender = sortByNameAZ(groupMembers);
 
         const targetReportDateBs = collectionSheetTargetBs || buildBsDateFromParts(activeSheetToPrint.year, activeSheetToPrint.month, activeSheetToPrint.day);
         const sheetLoansPool = collectionSheetLoans.length > 0 ? collectionSheetLoans : loans;
@@ -5707,7 +6036,7 @@ export const MicroFinanceManagement: React.FC = () => {
           const microLoan = memLoans.find(l => l.loanProduct.toLowerCase().includes('micro') || l.loanProduct.toLowerCase().includes('general') || l.loanProduct.toLowerCase().includes('group')) || memLoans[0];
           const emergencyLoan = memLoans.find(l => l.loanProduct.toLowerCase().includes('emergency') || l.loanProduct.toLowerCase().includes('family'));
           
-          const savingAmt = mem.totalSavings > 0 ? (mem.totalSavings >= 2000 ? 1000 : 500) : 500;
+          const savingAmt = getMemberRecurringSavingAmount(mem);
           
           // Micro Loan:
           // Date: Loan Open Date
@@ -6101,7 +6430,7 @@ export const MicroFinanceManagement: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {selectedSignatureSheetToPrint.members?.map((mem, idx) => (
+                      {sortByNameAZ(selectedSignatureSheetToPrint.members || []).map((mem, idx) => (
                         <tr key={mem.memberId || idx} className="border-b border-slate-800">
                           <td className="p-3 border border-slate-900 text-center font-bold text-slate-700 whitespace-nowrap">
                             {toNepaliDigits(idx + 1)}
@@ -6215,6 +6544,235 @@ export const MicroFinanceManagement: React.FC = () => {
                 className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Yes, Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL: VIEW SAVING DETAILS */}
+      {/* ============================================================== */}
+      {isViewSavingModalOpen && selectedSavingToView && (
+        <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-xs flex justify-center items-center p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="bg-slate-900 px-6 py-4 flex justify-between items-center text-white">
+              <div className="flex items-center gap-2">
+                <Eye className="w-5 h-5 text-blue-400" />
+                <div>
+                  <h3 className="text-sm font-extrabold tracking-wide uppercase">Saving Account Details</h3>
+                  <p className="text-[10px] text-slate-400 font-mono">{selectedSavingToView.accountNo}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsViewSavingModalOpen(false)}
+                className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 text-xs">
+              <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-black text-slate-900">{selectedSavingToView.name}</div>
+                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                    getEffectiveSavingStatus(selectedSavingToView.status) === 'ACTIVE'
+                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                      : 'bg-rose-100 text-rose-800 border border-rose-200'
+                  }`}>
+                    {getEffectiveSavingStatus(selectedSavingToView.status)}
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-500 font-medium">
+                  Member ID: <span className="font-mono font-bold text-slate-700">{selectedSavingToView.memberId}</span> • Center: <span className="font-bold text-slate-700">{selectedSavingToView.centerName || 'N/A'}</span>
+                </div>
+                {selectedSavingToView.groupName && (
+                  <div className="text-[11px] text-slate-500">
+                    Group: <span className="font-bold text-slate-700">{selectedSavingToView.groupName}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <div className="text-[10px] text-slate-400 uppercase font-bold">Account No.</div>
+                  <div className="font-extrabold font-mono text-slate-900 mt-0.5">{selectedSavingToView.accountNo}</div>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <div className="text-[10px] text-slate-400 uppercase font-bold">Recurring Amount</div>
+                  <div className="font-black font-mono text-base text-emerald-700 mt-0.5">NPR {selectedSavingToView.amount.toLocaleString()}</div>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <div className="text-[10px] text-slate-400 uppercase font-bold">Open Date (BS)</div>
+                  <div className="font-bold font-mono text-slate-800 mt-0.5">{selectedSavingToView.dateBs || selectedSavingToView.date}</div>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <div className="text-[10px] text-slate-400 uppercase font-bold">Saving Type / Product</div>
+                  <div className="font-bold text-slate-800 mt-0.5">{selectedSavingToView.savingType || 'Normal Saving'}</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={isDayEnded}
+                onClick={() => {
+                  setIsViewSavingModalOpen(false);
+                  handleOpenEditSaving(selectedSavingToView);
+                }}
+                title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Saving'}
+                className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold cursor-pointer transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Edit2 className="w-3.5 h-3.5" />
+                <span>Edit Saving</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsViewSavingModalOpen(false)}
+                className="px-4 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL: EDIT SAVING RECORD */}
+      {/* ============================================================== */}
+      {isEditSavingModalOpen && editSavingForm && (
+        <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-xs flex justify-center items-center p-4">
+          <div className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-slate-200 overflow-hidden max-h-[92vh] flex flex-col animate-in zoom-in-95 duration-200">
+            <div className="bg-emerald-800 px-6 py-4 flex justify-between items-center text-white shrink-0">
+              <div className="flex items-center gap-2">
+                <Edit2 className="w-5 h-5" />
+                <div>
+                  <h3 className="text-sm font-extrabold tracking-wide uppercase">Edit Saving Record</h3>
+                  <p className="text-[10px] text-emerald-200 font-mono">{editSavingForm.accountNo}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditSavingModalOpen(false)}
+                className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 text-xs overflow-y-auto flex-1">
+              <DayEndFieldset branchId={branch?.id} className="space-y-3.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">MEMBER NAME</label>
+                    <input
+                      type="text"
+                      value={editSavingForm.name}
+                      onChange={e => setEditSavingForm({ ...editSavingForm, name: e.target.value })}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">MEMBER ID</label>
+                    <input
+                      type="text"
+                      value={editSavingForm.memberId}
+                      onChange={e => setEditSavingForm({ ...editSavingForm, memberId: e.target.value })}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold text-slate-800"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">ACCOUNT NO.</label>
+                    <input
+                      type="text"
+                      value={editSavingForm.accountNo}
+                      onChange={e => setEditSavingForm({ ...editSavingForm, accountNo: e.target.value })}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-mono font-bold text-slate-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">SAVING TYPE / PRODUCT</label>
+                    <input
+                      type="text"
+                      value={editSavingForm.savingType}
+                      onChange={e => setEditSavingForm({ ...editSavingForm, savingType: e.target.value })}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">RECURRING AMOUNT (NPR)</label>
+                    <input
+                      type="number"
+                      value={editSavingForm.amount}
+                      onChange={e => setEditSavingForm({ ...editSavingForm, amount: parseFloat(e.target.value) || 0 })}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-mono font-bold text-emerald-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">STATUS</label>
+                    <select
+                      value={getEffectiveSavingStatus(editSavingForm.status)}
+                      onChange={e => setEditSavingForm({ ...editSavingForm, status: e.target.value as 'ACTIVE' | 'INACTIVE' })}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 cursor-pointer"
+                    >
+                      <option value="ACTIVE">ACTIVE</option>
+                      <option value="INACTIVE">INACTIVE</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">OPEN DATE (BS)</label>
+                  <div className="inline-flex items-center bg-slate-50 focus-within:bg-white border border-slate-200 focus-within:ring-1 focus-within:ring-[#00593B] rounded-xl pr-1.5">
+                    <input
+                      type="text"
+                      value={editSavingForm.dateBs || ''}
+                      onChange={e => setEditSavingForm({ ...editSavingForm, dateBs: e.target.value })}
+                      placeholder="YYYY-MM-DD"
+                      maxLength={10}
+                      className="w-32 px-3 py-2 bg-transparent font-mono text-slate-800 font-bold focus:outline-hidden"
+                    />
+                    <NepaliDatePicker
+                      value={editSavingForm.dateBs || getTodayBsDate()}
+                      onChange={val => setEditSavingForm({ ...editSavingForm, dateBs: val })}
+                      align="left"
+                      iconOnly
+                      disallowBackDateIfDisabled
+                    />
+                  </div>
+                </div>
+              </DayEndFieldset>
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsEditSavingModalOpen(false)}
+                className="px-4 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDayEnded}
+                onClick={handleSaveEditSaving}
+                className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>Save Changes</span>
               </button>
             </div>
           </div>

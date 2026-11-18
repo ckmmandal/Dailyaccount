@@ -43,9 +43,20 @@ const nepaliMonthsEnglish = [
   'Kartik', 'Mangsir', 'Poush', 'Magh', 'Falgun', 'Chaitra'
 ];
 
+const nepaliMonthMapNp: Record<string, string> = {
+  Baisakh: 'बैशाख', Jestha: 'जेष्ठ', Ashadh: 'असार', Shrawan: 'श्रावण',
+  Bhadra: 'भाद्र', Ashwin: 'आश्विन', Kartik: 'कार्तिक', Mangsir: 'मंसिर',
+  Poush: 'पौष', Magh: 'माघ', Falgun: 'फाल्गुन', Chaitra: 'चैत्र'
+};
+
 const toNepaliDigits = (num: number | string) => {
   const nepaliDigits = ['०', '१', '२', '३', '४', '५', '६', '७', '८', '९'];
   return String(num).replace(/[0-9]/g, (match) => nepaliDigits[parseInt(match, 10)]);
+};
+
+const fromNepaliDigits = (str: string) => {
+  const np = ['०', '१', '२', '३', '४', '५', '६', '७', '८', '९'];
+  return String(str || '').replace(/[०-९]/g, d => String(np.indexOf(d)));
 };
 
 export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps> = ({
@@ -122,6 +133,13 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
   const [modalAttendance, setModalAttendance] = useState<GroupMeetingRecord['attendance']>([]);
   // Checkbox-based selection for proposal templates
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<Record<string, boolean>>({});
+  // Delete Confirmation Modal States (iframe-safe, no native window.confirm)
+  const [selectedMeetingToDelete, setSelectedMeetingToDelete] = useState<GroupMeetingRecord | null>(null);
+  const [isDeletingMeeting, setIsDeletingMeeting] = useState(false);
+  const [pendingTemplateConfirm, setPendingTemplateConfirm] = useState<
+    { type: 'delete'; id: string; title: string } | { type: 'reset' } | null
+  >(null);
+
   // Editable customization of proposals for current meeting
   const [customizedAgendas, setCustomizedAgendas] = useState<Record<string, { discussion: string; decision: string; recommendation?: string }>>({});
 
@@ -192,7 +210,7 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
   // Handle clicking Top "View" button -> Open Minute Generation Modal
   const handleOpenMinuteGenerator = () => {
     if (!activeSelectedGroup) {
-      alert('कृपया पहिले समूह चयन गर्नुहोस् ।');
+      onToast('कृपया पहिले समूह चयन गर्नुहोस् ।');
       return;
     }
 
@@ -261,7 +279,7 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
   // Handle Generate Minute Click
   const handleGenerateAndSaveMinute = async () => {
     if (isDayEndedForBranch(branchId)) {
-      alert(getDayEndedBlockMessage());
+      onToast(getDayEndedBlockMessage());
       return;
     }
     if (!activeSelectedGroup) return;
@@ -269,13 +287,13 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
     // Check at least one proposal is checked
     const checkedTemplates = templates.filter(t => selectedTemplateIds[t.id]);
     if (checkedTemplates.length === 0) {
-      alert('कृपया कम्तीमा एउटा प्रस्ताव तथा निर्णय छनौट (Tick) गर्नुहोस् ।');
+      onToast('कृपया कम्तीमा एउटा प्रस्ताव तथा निर्णय छनौट (Tick) गर्नुहोस् ।');
       return;
     }
 
     const normalizedMeetingBs = buildBsDateFromParts(filterYear, filterMonth, filterDay);
     if (isBackDateBlockedForEntry(normalizedMeetingBs)) {
-      alert(getBackDateBlockedMessage(normalizedMeetingBs));
+      onToast(getBackDateBlockedMessage(normalizedMeetingBs));
       return;
     }
 
@@ -379,7 +397,7 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
       onToast('माइन्युट सफलतापूर्वक सुरक्षित गरियो र Group Meetings record मा थपियो ।');
     } catch (e) {
       console.error(e);
-      alert('माइन्युट सुरक्षित गर्दा त्रुटि भयो ।');
+      onToast('माइन्युट सुरक्षित गर्दा त्रुटि भयो ।');
     }
   };
 
@@ -390,16 +408,36 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
     setIsMinuteModalOpen(true);
   };
 
-  // Delete Meeting Record
-  const handleDeleteMeeting = async (id: string) => {
+  // Open Delete Meeting Confirmation Modal
+  const handleOpenDeleteMeeting = (meeting: GroupMeetingRecord) => {
     if (isDayEndedForBranch(branchId)) {
-      alert(getDayEndedBlockMessage());
+      onToast(getDayEndedBlockMessage());
       return;
     }
-    if (confirm('के तपाईं यो बैठक रेकर्ड हटाउन चाहनुहुन्छ?')) {
-      await meetingMinutesService.deleteMeeting(id);
+    setSelectedMeetingToDelete(meeting);
+  };
+
+  // Confirm Delete Meeting Record
+  const handleConfirmDeleteMeeting = async () => {
+    if (!selectedMeetingToDelete) return;
+    if (isDayEndedForBranch(branchId)) {
+      onToast(getDayEndedBlockMessage());
+      setSelectedMeetingToDelete(null);
+      return;
+    }
+    setIsDeletingMeeting(true);
+    try {
+      const targetId = selectedMeetingToDelete.id;
+      await meetingMinutesService.deleteMeeting(targetId);
+      setMeetings(prev => prev.filter(m => m.id !== targetId));
       refreshMeetings();
+      setSelectedMeetingToDelete(null);
       onToast('बैठक रेकर्ड हटाइयो ।');
+    } catch (e) {
+      console.error('Error deleting meeting record:', e);
+      onToast('बैठक रेकर्ड हटाउन समस्या आयो ।');
+    } finally {
+      setIsDeletingMeeting(false);
     }
   };
 
@@ -484,7 +522,7 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
   // Template CRUD Handlers
   const handleSaveEditedTemplate = () => {
     if (isDayEndedForBranch(branchId)) {
-      alert(getDayEndedBlockMessage());
+      onToast(getDayEndedBlockMessage());
       return;
     }
     if (!editingTemplate) return;
@@ -497,11 +535,11 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
 
   const handleCreateNewTemplate = () => {
     if (isDayEndedForBranch(branchId)) {
-      alert(getDayEndedBlockMessage());
+      onToast(getDayEndedBlockMessage());
       return;
     }
     if (!newTemplateForm.proposalTitleNp.trim()) {
-      alert('कृपया प्रस्ताव शीर्षक प्रविष्ट गर्नुहोस् ।');
+      onToast('कृपया प्रस्ताव शीर्षक प्रविष्ट गर्नुहोस् ।');
       return;
     }
     const newTpl: ProposalDecisionTemplate = {
@@ -523,55 +561,85 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
     onToast('नयाँ प्रस्ताव तथा निर्णय टेम्प्लेट थपियो');
   };
 
-  const handleDeleteTemplate = (id: string) => {
+  const handleDeleteTemplate = (tpl: ProposalDecisionTemplate) => {
     if (isDayEndedForBranch(branchId)) {
-      alert(getDayEndedBlockMessage());
+      onToast(getDayEndedBlockMessage());
       return;
     }
-    if (confirm('के तपाईं यो टेम्प्लेट हटाउन चाहनुहुन्छ?')) {
-      const updated = templates.filter(t => t.id !== id);
-      setTemplates(updated);
-      meetingMinutesService.saveProposalTemplates(updated);
-      onToast('टेम्प्लेट हटाइयो');
-    }
+    setPendingTemplateConfirm({ type: 'delete', id: tpl.id, title: tpl.proposalTitleNp });
   };
 
   const handleResetTemplatesToDefault = () => {
     if (isDayEndedForBranch(branchId)) {
-      alert(getDayEndedBlockMessage());
+      onToast(getDayEndedBlockMessage());
       return;
     }
-    if (confirm('के तपाईं सबै टेम्प्लेट पूर्वनिर्धारित (Default) अवस्थामा फर्काउन चाहनुहुन्छ?')) {
+    setPendingTemplateConfirm({ type: 'reset' });
+  };
+
+  const handleConfirmTemplateAction = () => {
+    if (!pendingTemplateConfirm) return;
+    if (isDayEndedForBranch(branchId)) {
+      onToast(getDayEndedBlockMessage());
+      setPendingTemplateConfirm(null);
+      return;
+    }
+    if (pendingTemplateConfirm.type === 'delete') {
+      const updated = templates.filter(t => t.id !== pendingTemplateConfirm.id);
+      setTemplates(updated);
+      meetingMinutesService.saveProposalTemplates(updated);
+      onToast('टेम्प्लेट हटाइयो');
+    } else {
       setTemplates(DEFAULT_PROPOSAL_TEMPLATES);
       meetingMinutesService.saveProposalTemplates(DEFAULT_PROPOSAL_TEMPLATES);
       onToast('टेम्प्लेट पूर्वनिर्धारितमा रिसेट गरियो');
     }
+    setPendingTemplateConfirm(null);
   };
 
   // Filtered meetings for records table
   const filteredRecords = useMemo(() => {
     return meetings.filter(m => {
-      const matchYear = recordFilterYear === 'ALL' || m.meetingDateBs.startsWith(recordFilterYear);
-      const matchMonth = recordFilterMonth === 'ALL' || m.meetingDateBs.includes(recordFilterMonth);
+      const dateRaw = m.meetingDateBs || '';
+      const dateAscii = fromNepaliDigits(dateRaw);
+      const matchYear =
+        recordFilterYear === 'ALL' ||
+        dateRaw.includes(recordFilterYear) ||
+        dateAscii.includes(recordFilterYear);
+
+      let matchMonth = true;
+      if (recordFilterMonth !== 'ALL') {
+        const monthIdx = nepaliMonthsEnglish.indexOf(recordFilterMonth) + 1;
+        const monthPad = monthIdx > 0 ? String(monthIdx).padStart(2, '0') : '';
+        const nepMonth = nepaliMonthMapNp[recordFilterMonth] || '';
+        const numericMatch = monthPad
+          ? new RegExp(`[-/]0?${monthIdx}(?:[-/]|$)`).test(dateAscii)
+          : false;
+        matchMonth =
+          dateRaw.toLowerCase().includes(recordFilterMonth.toLowerCase()) ||
+          (Boolean(nepMonth) && dateRaw.includes(nepMonth)) ||
+          numericMatch;
+      }
+
       return matchYear && matchMonth;
     });
   }, [meetings, recordFilterYear, recordFilterMonth]);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2.5">
       {/* ============================================================== */}
-      {/* 1. TOP FILTER CARD: Exact Signature Sheet Layout */}
+      {/* 1. TOP FILTER CARD: Compact Layout */}
       {/* YEAR, MONTH, DAY, SELECT CENTER, SELECT GROUP, EMPLOYEE, SETTING, VIEW */}
       {/* ============================================================== */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs space-y-3">
-        <div className="flex flex-wrap items-end gap-2.5">
+      <div className="bg-white rounded-2xl border border-slate-200 px-3 py-2.5 shadow-2xs">
+        <div className="flex flex-wrap items-end gap-2">
           {/* YEAR */}
           <div className="w-24 shrink-0">
-            <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">YEAR</label>
+            <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5">YEAR</label>
             <select
               value={filterYear}
               onChange={e => setFilterYear(e.target.value)}
-              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+              className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
             >
               <option value="2081">2081</option>
               <option value="2082">2082</option>
@@ -582,11 +650,11 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
 
           {/* MONTH */}
           <div className="w-28 shrink-0">
-            <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">MONTH</label>
+            <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5">MONTH</label>
             <select
               value={filterMonth}
               onChange={e => setFilterMonth(e.target.value)}
-              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+              className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
             >
               {nepaliMonthsEnglish.map(m => (
                 <option key={m} value={m}>{m}</option>
@@ -596,11 +664,11 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
 
           {/* DAY */}
           <div className="w-20 shrink-0">
-            <label className="block text-[10px] font-black uppercase text-slate-400 mb-1">DAY</label>
+            <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5">DAY</label>
             <select
               value={filterDay}
               onChange={e => setFilterDay(e.target.value)}
-              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+              className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
             >
               {Array.from({ length: 32 }, (_, i) => i + 1).map(d => (
                 <option key={d} value={d.toString()}>{d}</option>
@@ -610,11 +678,11 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
 
           {/* SELECT CENTER */}
           <div className="flex-1 min-w-[130px]">
-            <label className="block text-[10px] font-black uppercase text-slate-400 mb-1 truncate">SELECT CENTER</label>
+            <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5 truncate">SELECT CENTER</label>
             <select
               value={filterCenterId}
               onChange={e => setFilterCenterId(e.target.value)}
-              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+              className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
             >
               {centers.map(c => (
                 <option key={c.id} value={c.id}>{c.name}</option>
@@ -624,11 +692,11 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
 
           {/* SELECT GROUP */}
           <div className="flex-1 min-w-[130px]">
-            <label className="block text-[10px] font-black uppercase text-slate-400 mb-1 truncate">SELECT GROUP</label>
+            <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5 truncate">SELECT GROUP</label>
             <select
               value={filterGroupId}
               onChange={e => setFilterGroupId(e.target.value)}
-              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+              className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
             >
               {filteredGroupsForTop.map(g => (
                 <option key={g.id} value={g.id}>{g.name}</option>
@@ -638,11 +706,11 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
 
           {/* EMPLOYEE (Populated from HR Management) */}
           <div className="flex-1 min-w-[130px]">
-            <label className="block text-[10px] font-black uppercase text-slate-400 mb-1 truncate">EMPLOYEE</label>
+            <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5 truncate">EMPLOYEE</label>
             <select
               value={filterEmployeeName}
               onChange={e => setFilterEmployeeName(e.target.value)}
-              className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+              className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
             >
               {hrEmployees.length > 0 ? (
                 hrEmployees.map(emp => (
@@ -688,10 +756,10 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
       </div>
 
       {/* ============================================================== */}
-      {/* 2. GROUP MEETINGS RECORD TABLE (Replaces RECENT GROUP MEETINGS) */}
+      {/* 2. GROUP MEETINGS RECORD TABLE (Compact rows) */}
       {/* ============================================================== */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
-        <div className="p-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+        <div className="px-3.5 py-2 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
               <FileText className="w-4 h-4 text-emerald-700" />
@@ -706,7 +774,7 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
               <select
                 value={recordFilterYear}
                 onChange={e => setRecordFilterYear(e.target.value)}
-                className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
               >
                 <option value="ALL">All Years</option>
                 <option value="2081">2081</option>
@@ -721,7 +789,7 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
               <select
                 value={recordFilterMonth}
                 onChange={e => setRecordFilterMonth(e.target.value)}
-                className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
+                className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
               >
                 <option value="ALL">All Months</option>
                 {nepaliMonthsEnglish.map(m => (
@@ -733,7 +801,7 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
             <button
               type="button"
               onClick={() => onToast(`फिल्टर गरिएका बैठक रेकर्डहरू: Year: ${recordFilterYear}, Month: ${recordFilterMonth}`)}
-              className="flex items-center gap-1 px-3 py-1.5 bg-[#4f7df5] hover:bg-[#3b6ae8] text-white rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-xs"
+              className="flex items-center gap-1 px-3 py-1 bg-[#4f7df5] hover:bg-[#3b6ae8] text-white rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-xs"
             >
               <Eye className="w-3.5 h-3.5" />
               <span>View</span>
@@ -745,39 +813,39 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
           <table className="w-full text-left text-xs">
             <thead>
               <tr className="bg-[#0b1329] text-white font-black uppercase text-[10px] tracking-wider">
-                <th className="py-3 px-4 w-12 text-center">S.N.</th>
-                <th className="py-3 px-4">MEETING NO</th>
-                <th className="py-3 px-4">CENTER</th>
-                <th className="py-3 px-4">GROUP NAME</th>
-                <th className="py-3 px-4">DATE (BS)</th>
-                <th className="py-3 px-4">ATTENDANCE</th>
-                <th className="py-3 px-4">AGENDAS</th>
-                <th className="py-3 px-4 text-center">STATUS</th>
-                <th className="py-3 px-4 text-right">ACTION</th>
+                <th className="py-2 px-3 w-10 text-center whitespace-nowrap">S.N.</th>
+                <th className="py-2 px-3 whitespace-nowrap">MEETING NO</th>
+                <th className="py-2 px-3 whitespace-nowrap">CENTER</th>
+                <th className="py-2 px-3 whitespace-nowrap">GROUP NAME</th>
+                <th className="py-2 px-3 whitespace-nowrap">DATE (BS)</th>
+                <th className="py-2 px-3 whitespace-nowrap">ATTENDANCE</th>
+                <th className="py-2 px-3 whitespace-nowrap">AGENDAS</th>
+                <th className="py-2 px-3 text-center whitespace-nowrap">STATUS</th>
+                <th className="py-2 px-3 text-right whitespace-nowrap">ACTION</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
               {filteredRecords.map((m, idx) => (
                 <tr key={m.id} className="hover:bg-slate-50/80 transition-colors">
-                  <td className="py-2.5 px-4 text-center font-bold text-slate-500">{idx + 1}</td>
-                  <td className="py-2.5 px-4 font-mono font-bold text-emerald-800">{m.meetingNo}</td>
-                  <td className="py-2.5 px-4 text-slate-600">{m.centerName || 'Center 01'}</td>
-                  <td className="py-2.5 px-4 font-extrabold text-slate-900">{m.groupName}</td>
-                  <td className="py-2.5 px-4 font-mono text-slate-600">{m.meetingDateBs}</td>
-                  <td className="py-2.5 px-4">
+                  <td className="py-1.5 px-3 text-center font-bold text-slate-500">{idx + 1}</td>
+                  <td className="py-1.5 px-3 font-mono font-bold text-emerald-800 whitespace-nowrap">{m.meetingNo}</td>
+                  <td className="py-1.5 px-3 text-slate-600">{m.centerName || 'Center 01'}</td>
+                  <td className="py-1.5 px-3 font-extrabold text-slate-900">{m.groupName}</td>
+                  <td className="py-1.5 px-3 font-mono text-slate-600 whitespace-nowrap">{m.meetingDateBs}</td>
+                  <td className="py-1.5 px-3 whitespace-nowrap">
                     <span className="font-bold text-slate-800">{m.presentCount}</span>
                     <span className="text-slate-400">/{m.totalMembersCount}</span>
-                    <span className="text-[10px] text-slate-400 ml-1.5">
+                    <span className="text-[10px] text-slate-400 ml-1">
                       ({Math.round((m.presentCount / (m.totalMembersCount || 1)) * 100)}%)
                     </span>
                   </td>
-                  <td className="py-2.5 px-4">
-                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                  <td className="py-1.5 px-3 whitespace-nowrap">
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200 inline-block">
                       {m.selectedAgendas?.length || 0} विषयहरू
                     </span>
                   </td>
-                  <td className="py-2.5 px-4 text-center">
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                  <td className="py-1.5 px-3 text-center whitespace-nowrap">
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider inline-block ${
                       m.status === 'APPROVED'
                         ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                         : 'bg-blue-50 text-blue-700 border border-blue-200'
@@ -785,12 +853,12 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
                       {m.status}
                     </span>
                   </td>
-                  <td className="py-2.5 px-4 text-right">
+                  <td className="py-1.5 px-3 text-right whitespace-nowrap">
                     <div className="flex items-center justify-end gap-1.5">
                       <button
                         type="button"
                         onClick={() => handleViewExistingMeeting(m)}
-                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-[11px] transition-colors cursor-pointer shadow-2xs"
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-[11px] transition-colors cursor-pointer shadow-2xs whitespace-nowrap"
                         title="View & Print Meeting Minute"
                       >
                         <Printer className="w-3.5 h-3.5" />
@@ -799,8 +867,8 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
                       <button
                         type="button"
                         disabled={isDayEnded}
-                        onClick={() => handleDeleteMeeting(m.id)}
-                        className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                        onClick={() => handleOpenDeleteMeeting(m)}
+                        className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                         title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Meeting Record'}
                       >
                         <Trash2 className="w-4 h-4" />
@@ -811,7 +879,7 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
               ))}
               {filteredRecords.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-slate-400">
+                  <td colSpan={9} className="py-6 text-center text-slate-400">
                     कुनै बैठक रेकर्ड फेला परेन । माथिको View बटनमा क्लिक गरी नयाँ माइन्युट तयार गर्नुहोस् ।
                   </td>
                 </tr>
@@ -877,6 +945,32 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
                   </button>
                 </div>
               </div>
+
+              {pendingTemplateConfirm && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="font-bold text-rose-800">
+                    {pendingTemplateConfirm.type === 'delete'
+                      ? `के तपाईं "${pendingTemplateConfirm.title}" टेम्प्लेट हटाउन चाहनुहुन्छ?`
+                      : 'के तपाईं सबै टेम्प्लेट पूर्वनिर्धारित (Default) अवस्थामा फर्काउन चाहनुहुन्छ?'}
+                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setPendingTemplateConfirm(null)}
+                      className="px-3 py-1 bg-white border border-slate-300 rounded-lg font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                    >
+                      रद्द (Cancel)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleConfirmTemplateAction}
+                      className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold cursor-pointer"
+                    >
+                      हो, निश्चित गर्नुहोस्
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Add New Template Form */}
               {isAddingTemplate && (
@@ -1081,7 +1175,7 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
                       <button
                         type="button"
                         disabled={isDayEnded}
-                        onClick={() => handleDeleteTemplate(tpl.id)}
+                        onClick={() => handleDeleteTemplate(tpl)}
                         className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-white transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                         title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Template'}
                       >
@@ -1457,6 +1551,48 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
                   </button>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ============================================================== */}
+      {/* 5. MODAL: DELETE MEETING RECORD CONFIRMATION */}
+      {/* ============================================================== */}
+      {selectedMeetingToDelete && (
+        <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-xs flex justify-center items-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden p-6 text-center space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="w-14 h-14 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto">
+              <Trash2 className="w-7 h-7" />
+            </div>
+
+            <div>
+              <h3 className="text-base font-extrabold text-slate-900">Delete Meeting Record?</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                के तपाईं <strong className="font-mono text-slate-800">{selectedMeetingToDelete.meetingNo}</strong> ({selectedMeetingToDelete.groupName}) को बैठक रेकर्ड हटाउन चाहनुहुन्छ?
+              </p>
+              <div className="mt-2.5 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-[11px] text-rose-700 font-semibold">
+                Center: {selectedMeetingToDelete.centerName || 'Center 01'} • Date: {selectedMeetingToDelete.meetingDateBs}
+              </div>
+            </div>
+
+            <div className="flex justify-center gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isDeletingMeeting}
+                onClick={() => setSelectedMeetingToDelete(null)}
+                className="px-4 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDayEnded || isDeletingMeeting}
+                onClick={() => void handleConfirmDeleteMeeting()}
+                title={isDayEnded ? 'Day Ended - Action Locked' : 'Confirm Delete Meeting Record'}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isDeletingMeeting ? 'Deleting...' : 'Yes, Delete'}
+              </button>
             </div>
           </div>
         </div>
