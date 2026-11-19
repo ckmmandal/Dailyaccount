@@ -109,6 +109,65 @@ const calculateBsKistaNumber = (loanOpenBs: string, sheetYear: string, sheetMont
   }
 };
 
+// Resolve BS Open Date (YYYY-MM-DD) for a saving account (supports 2050-2099 BS dates and AD->BS conversion)
+const resolveSavingOpenDateBs = (saving: { dateBs?: string; date?: string }): string => {
+  const bsNorm = normalizeBsDate(saving.dateBs);
+  if (bsNorm && /^\d{4}-\d{2}-\d{2}$/.test(bsNorm)) return bsNorm;
+
+  const rawNorm = normalizeBsDate(saving.date);
+  if (rawNorm && /^20[5-9]\d-\d{2}-\d{2}$/.test(rawNorm)) return rawNorm;
+
+  if (saving.date) {
+    try {
+      const converted = new NepaliDate(new Date(saving.date)).format('YYYY-MM-DD');
+      return normalizeBsDate(converted);
+    } catch {
+      return rawNorm || '';
+    }
+  }
+  return '';
+};
+
+// Calculate Saving Kista number inclusively from the account creation BS month
+// Example: created 2078-03-01 => 2078-03 (Ashadh) is 1, 2078-04 (Shrawan) is 2, etc.
+const calculateSavingBsKistaNumber = (
+  savingOpenBs: string,
+  sheetYear: string,
+  sheetMonthName: string
+): number | null => {
+  const openNorm = normalizeBsDate(savingOpenBs);
+  if (!openNorm) return null;
+  const match = openNorm.match(/^(\d{4})-(\d{1,2})/);
+  if (!match) return null;
+
+  const openYear = parseInt(match[1], 10);
+  const openMonth = parseInt(match[2], 10);
+  if (isNaN(openYear) || isNaN(openMonth) || openMonth < 1 || openMonth > 12) return null;
+
+  const sheetYearNum = parseInt(fromNepaliDigits(sheetYear), 10);
+  if (isNaN(sheetYearNum)) return null;
+
+  const trimmedMonth = String(sheetMonthName || '').trim();
+  let sheetMonthNum = nepaliMonthsEnglishList.findIndex(
+    m => m.toLowerCase() === trimmedMonth.toLowerCase()
+  ) + 1;
+  if (sheetMonthNum <= 0) {
+    const nepEntry = Object.entries(nepaliMonthMapNp).find(([, npName]) => npName === trimmedMonth);
+    if (nepEntry) {
+      sheetMonthNum = nepaliMonthsEnglishList.indexOf(nepEntry[0]) + 1;
+    } else {
+      const numericMonth = parseInt(fromNepaliDigits(trimmedMonth), 10);
+      if (!isNaN(numericMonth) && numericMonth >= 1 && numericMonth <= 12) {
+        sheetMonthNum = numericMonth;
+      }
+    }
+  }
+  if (sheetMonthNum <= 0) return null;
+
+  const inclusiveMonths = (sheetYearNum - openYear) * 12 + (sheetMonthNum - openMonth) + 1;
+  return inclusiveMonths >= 1 ? inclusiveMonths : null;
+};
+
 const nepaliMonthMapNp: Record<string, string> = {
   'Baisakh': 'बैशाख',
   'Jestha': 'जेष्ठ',
@@ -1913,7 +1972,7 @@ export const MicroFinanceManagement: React.FC = () => {
     }
     setEditSavingForm({
       ...item,
-      dateBs: item.dateBs || (item.date && item.date.startsWith('208') ? item.date : getTodayBsDate()),
+      dateBs: resolveSavingOpenDateBs(item) || getTodayBsDate(),
       status: getEffectiveSavingStatus(item.status)
     });
     setIsEditSavingModalOpen(true);
@@ -2460,8 +2519,8 @@ export const MicroFinanceManagement: React.FC = () => {
     return Boolean(!loanMemId && loanName && memName && loanName === memName);
   };
 
-  // Helper: sums recurring amounts from ACTIVE saving accounts in Savings Management for a member (strict ID + center/group match)
-  const getMemberRecurringSavingAmount = (mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string }): number => {
+  // Helper: returns matching ACTIVE saving accounts in Savings Management for a member (strict ID + center/group match)
+  const getMemberActiveSavings = (mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string }): MFSavingsRecord[] => {
     const memId = (mem.memberId || '').trim().toLowerCase();
     const memName = (mem.name || '').trim().toLowerCase();
     const memGroup = (mem.samuhName || '').trim().toLowerCase();
@@ -2477,18 +2536,44 @@ export const MicroFinanceManagement: React.FC = () => {
     });
 
     if (memId) {
-      const idMatches = activeSavings.filter(s => (s.memberId || '').trim().toLowerCase() === memId);
-      return idMatches.reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+      return activeSavings.filter(s => (s.memberId || '').trim().toLowerCase() === memId);
     }
 
     if (memName) {
-      const nameMatches = activeSavings.filter(
+      return activeSavings.filter(
         s => !(s.memberId || '').trim() && (s.name || '').trim().toLowerCase() === memName
       );
-      return nameMatches.reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
     }
 
-    return 0;
+    return [];
+  };
+
+  // Helper: sums recurring amounts from ACTIVE saving accounts in Savings Management for a member
+  const getMemberRecurringSavingAmount = (mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string }): number => {
+    return getMemberActiveSavings(mem).reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+  };
+
+  // Helper: calculates inclusive saving kista count from the earliest active saving account open date (BS)
+  const getMemberSavingKistaInfo = (
+    mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string },
+    sheetYear: string,
+    sheetMonthName: string
+  ): { kista: number | null; openDateBs: string } => {
+    const memberSavings = getMemberActiveSavings(mem);
+    if (memberSavings.length === 0) return { kista: null, openDateBs: '' };
+
+    const openDates = memberSavings
+      .map(s => resolveSavingOpenDateBs(s))
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
+
+    const earliestOpenDateBs = openDates[0] || '';
+    if (!earliestOpenDateBs) return { kista: null, openDateBs: '' };
+
+    return {
+      kista: calculateSavingBsKistaNumber(earliestOpenDateBs, sheetYear, sheetMonthName),
+      openDateBs: earliestOpenDateBs
+    };
   };
 
   // Handler for "View" button in Collection Sheet filter card (on-demand date-aware query)
@@ -4056,13 +4141,7 @@ export const MicroFinanceManagement: React.FC = () => {
                       <td className="py-2 px-3 font-extrabold text-slate-900">{item.name}</td>
                       <td className="py-2 px-3 text-slate-600">{item.groupName}</td>
                       <td className="py-2 px-3 text-slate-700 font-mono font-bold">
-                        {item.dateBs || (item.date && item.date.startsWith('208') ? item.date : (() => {
-                          try {
-                            return new NepaliDate(new Date(item.date)).format('YYYY-MM-DD');
-                          } catch {
-                            return item.date || '2083-06-29';
-                          }
-                        })())}
+                        {resolveSavingOpenDateBs(item) || item.date || '2083-06-29'}
                       </td>
                       <td className="py-2 px-3 text-right font-black font-mono text-emerald-700">
                         NPR {item.amount.toLocaleString()}
@@ -6480,10 +6559,8 @@ export const MicroFinanceManagement: React.FC = () => {
         // Totals calculations
         let totalSaving = 0;
         let totalMicroPrincipal = 0;
-        let totalMicroKista = 0;
         let totalMicroAmount = 0;
         let totalEmergencyPrincipal = 0;
-        let totalEmergencyKista = 0;
         let totalEmergencyAmount = 0;
         let totalDue = 0;
         let grandTotal = 0;
@@ -6501,6 +6578,9 @@ export const MicroFinanceManagement: React.FC = () => {
           const { microLoan, emergencyLoan } = splitMemberLoansByCategory(memLoans);
           
           const savingAmt = getMemberRecurringSavingAmount(mem);
+          const savingKistaInfo = savingAmt > 0
+            ? getMemberSavingKistaInfo(mem, activeSheetToPrint.year, activeSheetToPrint.month)
+            : { kista: null, openDateBs: '' };
           
           // Micro Loan:
           // Date: Loan Open Date
@@ -6528,10 +6608,8 @@ export const MicroFinanceManagement: React.FC = () => {
 
           totalSaving += savingAmt;
           totalMicroPrincipal += microPrincipal;
-          totalMicroKista += microKista;
           totalMicroAmount += microAmt;
           totalEmergencyPrincipal += emergencyPrincipal;
-          totalEmergencyKista += emergencyKista;
           totalEmergencyAmount += emergencyAmt;
           totalDue += dueAmt;
           grandTotal += rowTotal;
@@ -6541,6 +6619,8 @@ export const MicroFinanceManagement: React.FC = () => {
             memberId: mem.memberId,
             name: mem.name,
             saving: savingAmt,
+            savingKista: savingKistaInfo.kista,
+            savingOpenDateBs: savingKistaInfo.openDateBs,
             microDate,
             microPrincipal,
             microKista,
@@ -6557,12 +6637,8 @@ export const MicroFinanceManagement: React.FC = () => {
         return (
           <div className="fixed inset-0 z-[9999] bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
             <div className="bg-white rounded-2xl w-full max-w-6xl max-h-[92vh] shadow-2xl border border-slate-200 overflow-hidden flex flex-col my-auto">
-              {/* Top Header Bar: Clean title, Print icon button, Close button */}
-              <div className="bg-[#0b1329] px-6 py-3.5 flex justify-between items-center text-white shrink-0">
-                <div className="flex items-center gap-2">
-                  <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
-                  <span className="text-sm font-extrabold tracking-wide">Micro-Finance Collection Sheet</span>
-                </div>
+              {/* Top Header Bar: Print & Close icon buttons only */}
+              <div className="bg-[#0b1329] px-6 py-3 flex justify-end items-center text-white shrink-0">
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
@@ -6635,7 +6711,7 @@ export const MicroFinanceManagement: React.FC = () => {
                         <th rowSpan={2} className="py-1 px-1 border-r border-black text-center w-10 whitespace-nowrap">S.N.</th>
                         <th rowSpan={2} className="py-1 px-1.5 border-r border-black text-center w-20 whitespace-nowrap">Member ID</th>
                         <th rowSpan={2} className="py-1 px-2 border-r border-black text-left min-w-[130px] whitespace-nowrap">Name</th>
-                        <th rowSpan={2} className="py-1 px-1.5 border-r border-black text-right w-16 whitespace-nowrap">Saving</th>
+                        <th rowSpan={2} className="py-1 px-1.5 border-r border-black text-right w-20 whitespace-nowrap">Saving</th>
                         <th colSpan={4} className="py-0.5 px-1.5 border-r border-black text-center bg-slate-100 font-black whitespace-nowrap">
                           Micro-enterprises Loan
                         </th>
@@ -6666,8 +6742,18 @@ export const MicroFinanceManagement: React.FC = () => {
                           <td className="py-1 px-1 text-center font-bold text-black border-r border-black whitespace-nowrap">{row.sn}</td>
                           <td className="py-1 px-1.5 text-center font-mono font-bold text-black border-r border-black whitespace-nowrap">{row.memberId}</td>
                           <td className="py-1 px-2 font-bold text-black border-r border-black whitespace-nowrap">{row.name}</td>
-                          <td className="py-1 px-1.5 text-right font-mono font-bold text-black border-r border-black whitespace-nowrap">
-                            {row.saving.toLocaleString()}
+                          <td className="p-0 font-mono text-black border-r border-black whitespace-nowrap">
+                            <div className="flex items-stretch">
+                              <span
+                                className="w-7 py-1 px-1 flex items-center justify-center text-[9px] font-bold text-slate-600 border-r border-black/40 shrink-0"
+                                title={row.savingKista ? `Saving Kista: ${row.savingKista} (Open: ${row.savingOpenDateBs})` : undefined}
+                              >
+                                {row.savingKista ?? ''}
+                              </span>
+                              <span className="flex-1 py-1 px-1.5 font-bold text-right">
+                                {row.saving.toLocaleString()}
+                              </span>
+                            </div>
                           </td>
                           <td className="py-1 px-1 text-center font-mono text-[11px] text-black border-r border-black whitespace-nowrap">{row.microDate}</td>
                           <td className="py-1 px-1 text-right font-mono font-bold text-black border-r border-black whitespace-nowrap">{row.microPrincipal ? row.microPrincipal.toLocaleString() : '-'}</td>
@@ -6730,7 +6816,7 @@ export const MicroFinanceManagement: React.FC = () => {
                           {totalMicroPrincipal.toFixed(2)}
                         </td>
                         <td className="py-1.5 px-1 text-center font-mono font-black text-black border-r border-black whitespace-nowrap">
-                          {totalMicroKista > 0 ? totalMicroKista : '-'}
+                          -
                         </td>
                         <td className="py-1.5 px-1 text-right font-mono font-black text-black border-r border-black whitespace-nowrap">
                           {totalMicroAmount.toFixed(2)}
@@ -6740,7 +6826,7 @@ export const MicroFinanceManagement: React.FC = () => {
                           {totalEmergencyPrincipal.toFixed(2)}
                         </td>
                         <td className="py-1.5 px-1 text-center font-mono font-black text-black border-r border-black whitespace-nowrap">
-                          {totalEmergencyKista > 0 ? totalEmergencyKista : '-'}
+                          -
                         </td>
                         <td className="py-1.5 px-1 text-right font-mono font-black text-black border-r border-black whitespace-nowrap">
                           {totalEmergencyAmount.toFixed(2)}
@@ -6927,8 +7013,39 @@ export const MicroFinanceManagement: React.FC = () => {
                   </table>
                 </div>
 
+                {/* Meeting Loan Demand Table (2 blank rows for handwritten entry during meeting) */}
+                <div className="overflow-x-auto pt-2">
+                  <div className="text-[11px] font-black text-slate-900 mb-1">
+                    बैठकमा ऋण माग विवरण
+                  </div>
+                  <table className="w-full border-collapse border-2 border-slate-900 text-xs">
+                    <thead>
+                      <tr className="border-b-2 border-slate-900 bg-slate-50 font-black text-slate-900 text-[11px]">
+                        <th className="p-2 border border-slate-900 text-center w-14 whitespace-nowrap">S.N.</th>
+                        <th className="p-2 border border-slate-900 text-left whitespace-nowrap">Name</th>
+                        <th className="p-2 border border-slate-900 text-center w-32 whitespace-nowrap">Loan Amount</th>
+                        <th className="p-2 border border-slate-900 text-center w-20 whitespace-nowrap">Duration</th>
+                        <th className="p-2 border border-slate-900 text-center w-52 whitespace-nowrap">Signature</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[1, 2].map((rowNum) => (
+                        <tr key={rowNum} className="border-b border-slate-800">
+                          <td className="p-2 border border-slate-900 text-center font-bold text-slate-700 h-9 whitespace-nowrap">
+                            {rowNum}
+                          </td>
+                          <td className="p-2 border border-slate-900 h-9"></td>
+                          <td className="p-2 border border-slate-900 h-9"></td>
+                          <td className="p-2 border border-slate-900 h-9"></td>
+                          <td className="p-2 border border-slate-900 h-9"></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
                 {/* Bottom Signatures: समूह अध्यक्ष with Name (Left) and कर्मचारी (Right) */}
-                <div className="flex justify-between items-end pt-12 pb-3 px-6 text-xs font-bold text-slate-900">
+                <div className="flex justify-between items-end pt-8 pb-3 px-6 text-xs font-bold text-slate-900">
                   <div className="text-center space-y-1">
                     <div className="w-56 border-b-2 border-dotted border-slate-800 mx-auto"></div>
                     <div className="text-xs font-bold text-slate-800 pt-0.5">

@@ -1140,7 +1140,7 @@ export const microFinanceService = {
           return parsed.map((s: MFSavingsRecord, idx: number) => ({
             ...s,
             status: (String(s.status || '').toUpperCase() === 'INACTIVE' || String(s.status || '').toUpperCase() === 'DUE' || String(s.status || '').toUpperCase() === 'PENDING') ? 'INACTIVE' : 'ACTIVE',
-            dateBs: s.dateBs || (s.date && s.date.startsWith('208') ? s.date : (DEFAULT_SAVINGS[idx]?.dateBs || '2083-06-29'))
+            dateBs: s.dateBs || (s.date && /^20[5-9]\d-/.test(normalizeBsDate(s.date)) ? normalizeBsDate(s.date) : (DEFAULT_SAVINGS[idx]?.dateBs || '2083-06-29'))
           }));
         }
       }
