@@ -541,6 +541,7 @@ export const MicroFinanceManagement: React.FC = () => {
   const [memberStatusTab, setMemberStatusTab] = useState<'ACTIVE' | 'INACTIVE'>('ACTIVE');
   const [selectedMemberToView, setSelectedMemberToView] = useState<MFMember | null>(null);
   const [isViewMemberModalOpen, setIsViewMemberModalOpen] = useState(false);
+  const [viewMemberDetailTab, setViewMemberDetailTab] = useState<'all' | 'saving' | 'loan'>('all');
   const [selectedMemberToToggleStatus, setSelectedMemberToToggleStatus] = useState<MFMember | null>(null);
   const [isToggleMemberStatusModalOpen, setIsToggleMemberStatusModalOpen] = useState(false);
   const [memberForm, setMemberForm] = useState({
@@ -2501,7 +2502,13 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const handleOpenViewMember = (member: MFMember) => {
     setSelectedMemberToView(member);
+    setViewMemberDetailTab('all');
     setIsViewMemberModalOpen(true);
+    if (closedLoansArchive.length === 0) {
+      void microFinanceService.fetchClosedLoansFromSupabase().then(archived => {
+        if (archived.length > 0) setClosedLoansArchive(archived);
+      }).catch(() => {});
+    }
   };
 
   const handleOpenToggleMemberStatus = (member: MFMember) => {
@@ -3154,6 +3161,43 @@ export const MicroFinanceManagement: React.FC = () => {
     }
 
     return [];
+  };
+
+  // Helper: returns ALL matching saving accounts (Active + Closed) for a member for profile/history view
+  const getMemberAllSavings = (mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string; savingsAccountNo?: string }): MFSavingsRecord[] => {
+    const memId = normalizeMfMemberId(mem.memberId);
+    const memAcc = normalizeMfMemberId(mem.savingsAccountNo);
+    const memName = normalizeMfText(mem.name);
+    const memGroup = normalizeMfText(mem.samuhName);
+    const memCenter = normalizeMfText(mem.centerName);
+
+    let matched: MFSavingsRecord[] = [];
+    if (memId) {
+      matched = savings.filter(s => isSameMfMemberId(s.memberId, memId));
+    }
+    if (matched.length === 0 && memAcc) {
+      matched = savings.filter(s => normalizeMfMemberId(s.accountNo) === memAcc);
+    }
+    if (matched.length === 0 && memName) {
+      matched = savings.filter(s => {
+        if (normalizeMfMemberId(s.memberId)) return false;
+        if (normalizeMfText(s.name) !== memName) return false;
+        const sGroup = normalizeMfText(s.groupName);
+        const sCenter = normalizeMfText(s.centerName);
+        if (sGroup && memGroup && sGroup !== memGroup) return false;
+        if (sCenter && memCenter && sCenter !== memCenter) return false;
+        return true;
+      });
+    }
+
+    return [...matched].sort((a, b) => {
+      const aActive = getEffectiveSavingStatus(a.status) === 'ACTIVE' ? 0 : 1;
+      const bActive = getEffectiveSavingStatus(b.status) === 'ACTIVE' ? 0 : 1;
+      if (aActive !== bActive) return aActive - bActive;
+      const dA = resolveSavingOpenDateBs(a) || a.date || '';
+      const dB = resolveSavingOpenDateBs(b) || b.date || '';
+      return dB.localeCompare(dA);
+    });
   };
 
   // Helper: sums recurring amounts from ACTIVE saving accounts in Savings Management for a member
@@ -8667,130 +8711,433 @@ export const MicroFinanceManagement: React.FC = () => {
       )}
 
       {/* ============================================================== */}
-      {/* MODAL: VIEW MEMBER DETAILS */}
+      {/* MODAL: VIEW MEMBER DETAILS (With Full Saving & Loan Details) */}
       {/* ============================================================== */}
       {isViewMemberModalOpen && selectedMemberToView && (() => {
         const effStatus = getEffectiveMemberStatus(selectedMemberToView.status);
-        const memberActiveSavings = getMemberActiveSavings(selectedMemberToView);
+        const memberAllSavings = getMemberAllSavings(selectedMemberToView);
+        const memberActiveSavings = memberAllSavings.filter(s => getEffectiveSavingStatus(s.status) === 'ACTIVE');
+        const memberClosedSavingsCount = memberAllSavings.length - memberActiveSavings.length;
         const recurringSaving = memberActiveSavings.reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
-        const memberActiveLoans = loans.filter(
-          l => l.status !== 'CLOSED' && doesLoanBelongToMember(l, selectedMemberToView)
-        );
-        const activeLoanTotal = memberActiveLoans.reduce((sum, l) => sum + (Number(l.loanAmount) || 0), 0);
+
+        const loanStatusRank = (st: 'ACTIVE' | 'MATURED' | 'CLOSED') =>
+          st === 'ACTIVE' ? 0 : st === 'MATURED' ? 1 : 2;
+        const memberAllLoans = allLoanAccountsForCounts
+          .filter(l => doesLoanBelongToMember(l, selectedMemberToView))
+          .sort((a, b) => {
+            const rankDiff = loanStatusRank(getEffectiveLoanStatus(a)) - loanStatusRank(getEffectiveLoanStatus(b));
+            if (rankDiff !== 0) return rankDiff;
+            return String(b.loanDateBs || b.loanDate || '').localeCompare(String(a.loanDateBs || a.loanDate || ''));
+          });
+
+        const memberOpenLoans = memberAllLoans.filter(l => getEffectiveLoanStatus(l) !== 'CLOSED');
+        const memberActiveLoansCount = memberAllLoans.filter(l => getEffectiveLoanStatus(l) === 'ACTIVE').length;
+        const memberMaturedLoansCount = memberAllLoans.filter(l => getEffectiveLoanStatus(l) === 'MATURED').length;
+        const memberClosedLoansCount = memberAllLoans.length - memberOpenLoans.length;
+        const openLoanTotal = memberOpenLoans.reduce((sum, l) => sum + (Number(l.loanAmount) || 0), 0);
+        const openLoanInstallmentTotal = memberOpenLoans.reduce((sum, l) => sum + (Number(l.installmentAmount) || 0), 0);
 
         return (
           <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-xs flex justify-center items-center p-4">
-            <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-200">
-              <div className="bg-[#1d4ed8] px-6 py-4 flex justify-between items-center text-white">
-                <div className="flex items-center gap-2">
+            <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-200">
+              {/* Modal Header */}
+              <div className="bg-[#00593B] px-6 py-4 flex justify-between items-center text-white shrink-0">
+                <div className="flex items-center gap-2.5">
                   <User className="w-5 h-5" />
-                  <h3 className="text-sm font-extrabold tracking-wide">Member Details</h3>
+                  <div>
+                    <h3 className="text-sm font-bold tracking-tight">Member Details</h3>
+                    <p className="text-[11px] text-emerald-100/90">
+                      Profile, Saving Accounts &amp; Loan Accounts
+                    </p>
+                  </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => { setIsViewMemberModalOpen(false); setSelectedMemberToView(null); }}
-                  className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer"
+                  className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer transition-colors"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
-              <div className="p-6 space-y-4 text-xs">
-                <div className="flex items-center gap-4 pb-4 border-b border-slate-100">
-                  {selectedMemberToView.photoUrl ? (
-                    <img
-                      src={selectedMemberToView.photoUrl}
-                      alt={selectedMemberToView.name}
-                      className="w-16 h-16 rounded-2xl object-cover border border-slate-200 shadow-xs shrink-0"
-                    />
-                  ) : (
-                    <div className="w-16 h-16 rounded-2xl bg-blue-100 text-blue-800 font-black text-xl flex items-center justify-center border border-blue-200 shrink-0">
-                      {selectedMemberToView.name.charAt(0)}
+              {/* Scrollable Body */}
+              <div className="p-6 space-y-5 text-xs overflow-y-auto flex-1">
+                {/* Member Identity Header */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
+                  <div className="flex items-center gap-3.5 min-w-0">
+                    {selectedMemberToView.photoUrl ? (
+                      <img
+                        src={selectedMemberToView.photoUrl}
+                        alt={selectedMemberToView.name}
+                        className="w-14 h-14 rounded-xl object-cover border border-slate-200 shrink-0"
+                      />
+                    ) : (
+                      <div className="w-14 h-14 rounded-xl bg-emerald-50 text-[#00593B] font-bold text-lg flex items-center justify-center border border-emerald-200 shrink-0">
+                        {selectedMemberToView.name.charAt(0)}
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        <h4 className="text-base font-bold text-slate-900 truncate">{selectedMemberToView.name}</h4>
+                        <span className={`text-[11px] font-semibold ${
+                          effStatus === 'ACTIVE' ? 'text-emerald-700' : 'text-rose-600'
+                        }`}>
+                          · {effStatus === 'ACTIVE' ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
+                      <div className="text-slate-600 mt-0.5">
+                        <span className="font-mono tabular-nums font-semibold text-slate-800">
+                          ID: {selectedMemberToView.memberId}
+                        </span>
+                        {' · '}
+                        <span>{selectedMemberToView.role || 'Member'}</span>
+                        {selectedMemberToView.joinedDate && (
+                          <>
+                            {' · Joined '}
+                            <span className="font-mono tabular-nums">{selectedMemberToView.joinedDate}</span>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h4 className="text-base font-black text-slate-900 truncate">{selectedMemberToView.name}</h4>
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
-                        effStatus === 'ACTIVE'
-                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                          : 'bg-rose-50 text-rose-700 border border-rose-200'
-                      }`}>
-                        {effStatus}
-                      </span>
+                  </div>
+
+                  {/* Quick Account Totals Strip */}
+                  <div className="flex items-center gap-5 shrink-0 border-t sm:border-t-0 pt-3 sm:pt-0 border-slate-100">
+                    <div className="text-left sm:text-right">
+                      <div className="text-[11px] text-slate-500">Saving Accounts</div>
+                      <div className="font-mono tabular-nums text-sm font-bold text-emerald-700">
+                        {memberActiveSavings.length} active
+                        {memberClosedSavingsCount > 0 && (
+                          <span className="text-slate-400 font-medium"> / {memberClosedSavingsCount} closed</span>
+                        )}
+                      </div>
                     </div>
-                    <div className="text-blue-700 font-mono font-bold mt-0.5">
-                      ID: {selectedMemberToView.memberId} • {selectedMemberToView.role}
+                    <div className="h-8 w-px bg-slate-200" />
+                    <div className="text-left sm:text-right">
+                      <div className="text-[11px] text-slate-500">Loan Accounts</div>
+                      <div className="font-mono tabular-nums text-sm font-bold text-slate-900">
+                        {memberOpenLoans.length} open
+                        {memberClosedLoansCount > 0 && (
+                          <span className="text-slate-400 font-medium"> / {memberClosedLoansCount} closed</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase">Center</div>
-                    <div className="font-bold text-slate-800 mt-0.5">{selectedMemberToView.centerName || '-'}</div>
+                {/* Member Basic Information Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3 bg-slate-50/70 p-4 rounded-xl border border-slate-200/80">
+                  <div>
+                    <div className="text-[11px] text-slate-500">Center</div>
+                    <div className="font-semibold text-slate-900 mt-0.5">{selectedMemberToView.centerName || '—'}</div>
                   </div>
-                  <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase">Group</div>
-                    <div className="font-bold text-slate-800 mt-0.5">{selectedMemberToView.samuhName || '-'}</div>
+                  <div>
+                    <div className="text-[11px] text-slate-500">Group (Samuh)</div>
+                    <div className="font-semibold text-slate-900 mt-0.5">{selectedMemberToView.samuhName || '—'}</div>
                   </div>
-                  <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase">Branch</div>
-                    <div className="font-bold text-slate-800 mt-0.5">{selectedMemberToView.branch || '-'}</div>
+                  <div>
+                    <div className="text-[11px] text-slate-500">Branch</div>
+                    <div className="font-semibold text-slate-900 mt-0.5">{selectedMemberToView.branch || '—'}</div>
                   </div>
-                  <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase">Savings Account No.</div>
-                    <div className="font-mono font-bold text-slate-800 mt-0.5">{selectedMemberToView.savingsAccountNo || '-'}</div>
+                  <div>
+                    <div className="text-[11px] text-slate-500">Citizenship No.</div>
+                    <div className="font-mono tabular-nums font-semibold text-slate-800 mt-0.5">
+                      {selectedMemberToView.citizenshipNo || '—'}
+                    </div>
                   </div>
-                  <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase">Citizenship No.</div>
-                    <div className="font-mono font-bold text-slate-800 mt-0.5">{selectedMemberToView.citizenshipNo || '-'}</div>
+                  <div>
+                    <div className="text-[11px] text-slate-500">Mobile Number</div>
+                    <div className="font-mono tabular-nums font-semibold text-slate-800 mt-0.5">
+                      {selectedMemberToView.mobile || '—'}
+                    </div>
                   </div>
-                  <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase">Mobile Number</div>
-                    <div className="font-mono font-bold text-slate-800 mt-0.5">{selectedMemberToView.mobile || '-'}</div>
+                  <div>
+                    <div className="text-[11px] text-slate-500">Primary Saving A/C</div>
+                    <div className="font-mono tabular-nums font-semibold text-slate-800 mt-0.5">
+                      {selectedMemberToView.savingsAccountNo || memberActiveSavings[0]?.accountNo || '—'}
+                    </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3 pt-1">
-                  <div className="p-3 bg-emerald-50/70 rounded-xl border border-emerald-200">
-                    <div className="text-[10px] font-bold text-emerald-700 uppercase">Active Savings ({memberActiveSavings.length})</div>
-                    <div className="text-sm font-black font-mono text-emerald-800 mt-0.5">
-                      NPR {recurringSaving.toLocaleString()}
-                    </div>
-                  </div>
-                  <div className="p-3 bg-blue-50/70 rounded-xl border border-blue-200">
-                    <div className="text-[10px] font-bold text-blue-700 uppercase">Active Loans ({memberActiveLoans.length})</div>
-                    <div className="text-sm font-black font-mono text-blue-800 mt-0.5">
-                      NPR {activeLoanTotal.toLocaleString()}
-                    </div>
+                {/* View Filter Switcher: All / Saving Details / Loan Details */}
+                <div className="flex items-center justify-between gap-2 border-b border-slate-200 pb-2.5">
+                  <div className="inline-flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
+                    <button
+                      type="button"
+                      onClick={() => setViewMemberDetailTab('all')}
+                      className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
+                        viewMemberDetailTab === 'all'
+                          ? 'bg-white text-slate-900 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      All Details
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMemberDetailTab('saving')}
+                      className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5 ${
+                        viewMemberDetailTab === 'saving'
+                          ? 'bg-white text-[#00593B] shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <PiggyBank className="w-3.5 h-3.5" />
+                      <span>Savings (<span className="font-mono tabular-nums">{memberAllSavings.length}</span>)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMemberDetailTab('loan')}
+                      className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5 ${
+                        viewMemberDetailTab === 'loan'
+                          ? 'bg-white text-amber-700 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <HandCoins className="w-3.5 h-3.5" />
+                      <span>Loans (<span className="font-mono tabular-nums">{memberAllLoans.length}</span>)</span>
+                    </button>
                   </div>
                 </div>
+
+                {/* SAVING DETAILS SECTION */}
+                {(viewMemberDetailTab === 'all' || viewMemberDetailTab === 'saving') && (
+                  <div className="space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <PiggyBank className="w-4 h-4 text-[#00593B]" />
+                        <h5 className="text-xs font-bold text-slate-900">Saving Details</h5>
+                        <span className="text-[11px] text-slate-500">
+                          · <span className="font-mono tabular-nums font-semibold text-emerald-700">{memberActiveSavings.length}</span> active
+                          {memberClosedSavingsCount > 0 && (
+                            <>
+                              {' · '}
+                              <span className="font-mono tabular-nums">{memberClosedSavingsCount}</span> closed
+                            </>
+                          )}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-600">
+                        Active Recurring:{' '}
+                        <span className="font-mono tabular-nums font-bold text-emerald-700">
+                          NPR {recurringSaving.toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="border border-slate-200 rounded-xl overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
+                              <th className="py-2 px-3">Account No.</th>
+                              <th className="py-2 px-3">Saving Type</th>
+                              <th className="py-2 px-3">Open Date (BS)</th>
+                              <th className="py-2 px-3 text-right">Recurring Amt</th>
+                              <th className="py-2 px-3 text-right">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-slate-700">
+                            {memberAllSavings.map(sav => {
+                              const savStatus = getEffectiveSavingStatus(sav.status);
+                              const openDateBs = resolveSavingOpenDateBs(sav) || sav.date || '—';
+                              return (
+                                <tr key={sav.id} className="hover:bg-slate-50/70">
+                                  <td className="py-2.5 px-3 font-mono tabular-nums font-semibold text-slate-900 whitespace-nowrap">
+                                    {sav.accountNo || '—'}
+                                  </td>
+                                  <td className="py-2.5 px-3 font-medium text-slate-800">
+                                    {sav.savingType || 'Regular Saving'}
+                                  </td>
+                                  <td className="py-2.5 px-3 font-mono tabular-nums text-slate-600 whitespace-nowrap">
+                                    {openDateBs}
+                                  </td>
+                                  <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-emerald-700 whitespace-nowrap">
+                                    NPR {(Number(sav.amount) || 0).toLocaleString()}
+                                  </td>
+                                  <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                                    <span className={`font-semibold ${
+                                      savStatus === 'ACTIVE' ? 'text-emerald-700' : 'text-slate-400'
+                                    }`}>
+                                      {savStatus === 'ACTIVE' ? 'Active' : 'Closed'}
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                            {memberAllSavings.length === 0 && (
+                              <tr>
+                                <td colSpan={5} className="py-5 text-center text-slate-400">
+                                  No saving accounts found for this member.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* LOAN DETAILS SECTION */}
+                {(viewMemberDetailTab === 'all' || viewMemberDetailTab === 'loan') && (
+                  <div className="space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <HandCoins className="w-4 h-4 text-amber-600" />
+                        <h5 className="text-xs font-bold text-slate-900">Loan Details</h5>
+                        <span className="text-[11px] text-slate-500">
+                          · <span className="font-mono tabular-nums font-semibold text-emerald-700">{memberActiveLoansCount}</span> active
+                          {memberMaturedLoansCount > 0 && (
+                            <>
+                              {' · '}
+                              <span className="font-mono tabular-nums font-semibold text-amber-700">{memberMaturedLoansCount}</span> matured
+                            </>
+                          )}
+                          {memberClosedLoansCount > 0 && (
+                            <>
+                              {' · '}
+                              <span className="font-mono tabular-nums">{memberClosedLoansCount}</span> closed
+                            </>
+                          )}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-600">
+                        Open Principal:{' '}
+                        <span className="font-mono tabular-nums font-bold text-slate-900">
+                          NPR {openLoanTotal.toLocaleString()}
+                        </span>
+                        {openLoanInstallmentTotal > 0 && (
+                          <>
+                            {' · Monthly: '}
+                            <span className="font-mono tabular-nums font-semibold text-slate-800">
+                              NPR {openLoanInstallmentTotal.toLocaleString()}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="border border-slate-200 rounded-xl overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
+                              <th className="py-2 px-3">Account No.</th>
+                              <th className="py-2 px-3">Loan Product</th>
+                              <th className="py-2 px-3">Issue / Maturity (BS)</th>
+                              <th className="py-2 px-3 text-right">Loan Amount</th>
+                              <th className="py-2 px-3 text-right">Installment</th>
+                              <th className="py-2 px-3 text-right">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-slate-700">
+                            {memberAllLoans.map(loan => {
+                              const loanEffStatus = getEffectiveLoanStatus(loan);
+                              const issueDate = loan.loanDateBs || loan.loanDate || '—';
+                              const matDate = loan.maturityDate || '—';
+                              return (
+                                <tr key={loan.id} className="hover:bg-slate-50/70">
+                                  <td className="py-2.5 px-3 font-mono tabular-nums font-semibold text-slate-900 whitespace-nowrap">
+                                    {loan.accountNo || '—'}
+                                  </td>
+                                  <td className="py-2.5 px-3">
+                                    <div className="font-medium text-slate-800">{loan.loanProduct || 'Group Loan'}</div>
+                                    <div className="text-[10px] font-mono tabular-nums text-slate-500">
+                                      {loan.interestRate || 0}% · {loan.totalInstallments || 0} mos
+                                    </div>
+                                  </td>
+                                  <td className="py-2.5 px-3 font-mono tabular-nums text-slate-600 whitespace-nowrap">
+                                    <div>{issueDate} → {matDate}</div>
+                                    {loanEffStatus === 'CLOSED' && (loan.closedDateBs || loan.closedDate) && (
+                                      <div className="text-[10px] text-slate-400">
+                                        Closed: {loan.closedDateBs || loan.closedDate}
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-slate-900 whitespace-nowrap">
+                                    NPR {(Number(loan.loanAmount) || 0).toLocaleString()}
+                                  </td>
+                                  <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-700 whitespace-nowrap">
+                                    NPR {(Number(loan.installmentAmount) || 0).toLocaleString()}
+                                  </td>
+                                  <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                                    <span className={`font-semibold ${
+                                      loanEffStatus === 'ACTIVE'
+                                        ? 'text-emerald-700'
+                                        : loanEffStatus === 'MATURED'
+                                          ? 'text-amber-700'
+                                          : 'text-slate-400'
+                                    }`}>
+                                      {loanEffStatus === 'ACTIVE'
+                                        ? 'Active'
+                                        : loanEffStatus === 'MATURED'
+                                          ? 'Matured'
+                                          : 'Closed'}
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                            {memberAllLoans.length === 0 && (
+                              <tr>
+                                <td colSpan={6} className="py-5 text-center text-slate-400">
+                                  No loan accounts found for this member.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
-                {!isDayEnded && (
+              {/* Modal Footer */}
+              <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2 shrink-0">
+                <div className="flex items-center gap-2">
+                  {canViewIdCard && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsViewMemberModalOpen(false);
+                        setSelectedMemberToView(null);
+                        setActiveTab('reports');
+                        setReportTab('id-card');
+                      }}
+                      className="px-3 py-1.5 border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5 transition-colors"
+                    >
+                      <CreditCard className="w-3.5 h-3.5 text-[#00593B]" />
+                      <span>ID Card</span>
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {!isDayEnded && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = selectedMemberToView;
+                        setIsViewMemberModalOpen(false);
+                        setSelectedMemberToView(null);
+                        handleEditMember(target);
+                      }}
+                      className="px-3.5 py-1.5 border border-slate-200 bg-white hover:bg-slate-100 text-slate-800 rounded-lg text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5 transition-colors"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                      <span>Edit</span>
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => {
-                      const target = selectedMemberToView;
-                      setIsViewMemberModalOpen(false);
-                      setSelectedMemberToView(null);
-                      handleEditMember(target);
-                    }}
-                    className="px-4 py-2 border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl font-bold cursor-pointer inline-flex items-center gap-1.5"
+                    onClick={() => { setIsViewMemberModalOpen(false); setSelectedMemberToView(null); }}
+                    className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors"
                   >
-                    <Edit2 className="w-3.5 h-3.5" />
-                    <span>Edit</span>
+                    Close
                   </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => { setIsViewMemberModalOpen(false); setSelectedMemberToView(null); }}
-                  className="px-5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold cursor-pointer"
-                >
-                  Close
-                </button>
+                </div>
               </div>
             </div>
           </div>
