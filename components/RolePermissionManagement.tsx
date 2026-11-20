@@ -552,7 +552,7 @@ export const MENU_HIERARCHY: MainMenuGroup[] = [
   {
     id: 'micro_finance',
     name: 'Micro-Finance Operations',
-    description: 'Centers, Samuh groups, members, savings, loans, kista tracking, and collection sheets',
+    description: 'Centers, Samuh groups, active/inactive members, active/closed savings, loans, collection & signature sheets, meeting minutes, and QR ID cards',
     category: 'modules',
     icon: Coins,
     routePath: '/micro-finance',
@@ -570,8 +570,8 @@ export const MENU_HIERARCHY: MainMenuGroup[] = [
       },
       {
         id: 'mf_centers',
-        name: 'Centers Management & Center Codes',
-        description: 'Create, update, and manage micro-finance field centers and assigned center officers.',
+        name: 'Centers Management & Meeting Day Order',
+        description: 'Create, edit, and delete field centers ordered by meeting day, center codes, and assigned field officers.',
         viewPerm: 'sub_mf_centers_view',
         editPerm: 'sub_mf_centers_edit',
         deletePerm: 'sub_mf_centers_delete',
@@ -581,8 +581,8 @@ export const MENU_HIERARCHY: MainMenuGroup[] = [
       },
       {
         id: 'mf_groups',
-        name: 'Groups (Samuh) & Meeting Minutes',
-        description: 'Manage Samuh groups under centers, group leaders, and monthly meeting minutes.',
+        name: 'Groups (Samuh) Management',
+        description: 'Manage Samuh groups linked under centers (ordered by center meeting day), group leaders, bulk upload, and deletion.',
         viewPerm: 'sub_mf_groups_view',
         editPerm: 'sub_mf_groups_edit',
         deletePerm: 'sub_mf_groups_delete',
@@ -592,8 +592,8 @@ export const MENU_HIERARCHY: MainMenuGroup[] = [
       },
       {
         id: 'mf_members',
-        name: 'Micro-Finance Members & KYC Registry',
-        description: 'Enroll members into groups, maintain KYC profiles, signatures, and bulk imports.',
+        name: 'Members Registry (Active / Inactive & Bulk Export)',
+        description: 'Enroll members with center-filtered groups, view/edit/deactivate/activate (Active & Inactive lists), bulk Excel upload, Excel download, and delete.',
         viewPerm: 'sub_mf_members_view',
         editPerm: 'sub_mf_members_edit',
         deletePerm: 'sub_mf_members_delete',
@@ -603,8 +603,8 @@ export const MENU_HIERARCHY: MainMenuGroup[] = [
       },
       {
         id: 'mf_saving',
-        name: 'Micro-Finance Savings Accounts & Ledger',
-        description: 'Open member micro-saving accounts, post regular deposits, and maintain passbooks.',
+        name: 'Savings Management (Active / Close & Bulk Export)',
+        description: 'Open saving accounts, view/edit/deactivate/activate (Active & Close lists), bulk Excel upload, Excel download, and delete.',
         viewPerm: 'sub_mf_saving_view',
         editPerm: 'sub_mf_saving_edit',
         deletePerm: 'sub_mf_saving_delete',
@@ -614,8 +614,8 @@ export const MENU_HIERARCHY: MainMenuGroup[] = [
       },
       {
         id: 'mf_loan',
-        name: 'Micro-Finance Loans & Kista Schedules',
-        description: 'Disburse group/member loans, track maturity dates, installments, and loan closures.',
+        name: 'Loans Portfolio (Active / Mature / Close & Bulk Export)',
+        description: 'Disburse member loans, track Active/Mature/Close tabs & kista schedules, bulk Excel upload, Excel download, and delete.',
         viewPerm: 'sub_mf_loan_view',
         editPerm: 'sub_mf_loan_edit',
         deletePerm: 'sub_mf_loan_delete',
@@ -625,11 +625,44 @@ export const MENU_HIERARCHY: MainMenuGroup[] = [
       },
       {
         id: 'mf_reports',
-        name: 'Collection Sheets, Signature Sheets & Reports',
-        description: 'Generate monthly collection sheets, print member signature sheets, and export Excel reports.',
+        name: 'Reports: Collection Sheets',
+        description: 'Generate monthly center & group collection sheets, print collection schedules, and export Excel reports.',
         viewPerm: 'sub_mf_reports_view',
         editPerm: 'sub_mf_reports_edit',
         deletePerm: 'sub_mf_reports_delete',
+        coarseView: 'view_microfinance',
+        coarseEdit: 'edit_transaction',
+        coarseDelete: 'delete_transaction'
+      },
+      {
+        id: 'mf_signature_sheet',
+        name: 'Reports: Member Signature Sheets',
+        description: 'Generate, view, print, and delete monthly Samuh member attendance and signature sheets.',
+        viewPerm: 'sub_mf_signature_sheet_view',
+        editPerm: 'sub_mf_signature_sheet_edit',
+        deletePerm: 'sub_mf_signature_sheet_delete',
+        coarseView: 'view_microfinance',
+        coarseEdit: 'edit_transaction',
+        coarseDelete: 'delete_transaction'
+      },
+      {
+        id: 'mf_meeting_minutes',
+        name: 'Reports: Group Meeting Minutes',
+        description: 'Record, edit, view, print, and delete official monthly Samuh group meeting minutes.',
+        viewPerm: 'sub_mf_meeting_minutes_view',
+        editPerm: 'sub_mf_meeting_minutes_edit',
+        deletePerm: 'sub_mf_meeting_minutes_delete',
+        coarseView: 'view_microfinance',
+        coarseEdit: 'edit_transaction',
+        coarseDelete: 'delete_transaction'
+      },
+      {
+        id: 'mf_id_card',
+        name: 'Reports: Member ID Card Generator (Single & Bulk QR)',
+        description: 'Create and print single or bulk CR80 member ID cards across 6 formats with signatory upload and full-detail QR codes.',
+        viewPerm: 'sub_mf_id_card_view',
+        editPerm: 'sub_mf_id_card_edit',
+        deletePerm: 'sub_mf_id_card_delete',
         coarseView: 'view_microfinance',
         coarseEdit: 'edit_transaction',
         coarseDelete: 'delete_transaction'
@@ -1378,7 +1411,8 @@ export const RolePermissionManagement: React.FC = () => {
         'sub_hr_dashboard_view', 'sub_hr_employees_view', 'sub_hr_attendance_view',
         'sub_hr_leaves_view', 'sub_hr_payroll_view',
         'sub_ins_dashboard_view', 'sub_ins_report_view', 'sub_ins_alerts_view',
-        'sub_mf_dashboard_view', 'sub_mf_centers_view', 'sub_mf_groups_view', 'sub_mf_members_view', 'sub_mf_saving_view', 'sub_mf_loan_view', 'sub_mf_reports_view',
+        'sub_mf_dashboard_view', 'sub_mf_centers_view', 'sub_mf_groups_view', 'sub_mf_members_view', 'sub_mf_saving_view', 'sub_mf_loan_view',
+        'sub_mf_reports_view', 'sub_mf_signature_sheet_view', 'sub_mf_meeting_minutes_view', 'sub_mf_id_card_view',
         'sub_dep_dashboard_view', 'sub_dep_assets_view', 'sub_dep_reports_view',
         'sub_alert_bima_maturity_view', 'sub_alert_loan_maturity_view', 'sub_alert_notice_view',
         'sub_tool_remit_view', 'sub_tool_messages_view', 'sub_tool_calculator_view', 'sub_tool_fd_cert_view', 'sub_tool_emi_view', 'sub_tool_date_converter_view'
@@ -1414,7 +1448,7 @@ export const RolePermissionManagement: React.FC = () => {
         'sub_office_expenses_view', 'sub_office_exp_registry_view',
         'sub_member_accounts_view', 'sub_loan_accounts_view',
         'sub_ins_dashboard_view', 'sub_ins_report_view',
-        'sub_mf_dashboard_view', 'sub_mf_reports_view',
+        'sub_mf_dashboard_view', 'sub_mf_reports_view', 'sub_mf_signature_sheet_view', 'sub_mf_meeting_minutes_view',
         'sub_dep_dashboard_view', 'sub_dep_reports_view', 'sub_dep_accounting_view',
         'sub_admin_logs_view'
       ];

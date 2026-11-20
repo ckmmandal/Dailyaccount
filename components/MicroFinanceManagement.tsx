@@ -2,10 +2,10 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { 
-  LayoutDashboard, MapPin, Users, UserCheck, 
+  LayoutDashboard, MapPin, Users, UserCheck, UserX,
   PiggyBank, HandCoins, FileText,
   Search, Plus, RefreshCw, Upload, Download,
-  Edit2, Trash2, CheckCircle2,
+  Edit2, Trash2, CheckCircle2, Ban,
   Calendar, Clock, Building2, UserPlus,
   Printer, CreditCard, X, Camera, User, Eye, FileSpreadsheet,
   Lock, Loader2, AlertCircle
@@ -37,6 +37,7 @@ import { storageService } from '../services/storageService';
 import { productService } from '../services/productService';
 import NepaliDate from 'nepali-date-converter';
 import { GroupMeetingMinutesModule } from './microfinance/GroupMeetingMinutesModule';
+import { MemberIdCardModule } from './microfinance/MemberIdCardModule';
 import { isBackDateBlockedForEntry, getBackDateBlockedMessage } from '../utils/backDateControl';
 import { isDayEndedForBranch, getDayEndedBlockMessage, useDayEndLock } from '../utils/dayEndLock';
 import { DayEndFieldset } from './DayEndFieldset';
@@ -68,9 +69,9 @@ const calculateBsMaturityDate = (openBs: string, periodMonths: number): string =
   }
 };
 
-const getEffectiveSavingStatus = (status?: string): 'ACTIVE' | 'INACTIVE' => {
+const getEffectiveSavingStatus = (status?: string): 'ACTIVE' | 'CLOSED' => {
   const raw = String(status || '').toUpperCase();
-  if (raw === 'INACTIVE' || raw === 'DUE' || raw === 'PENDING') return 'INACTIVE';
+  if (raw === 'CLOSED' || raw === 'INACTIVE' || raw === 'DUE' || raw === 'PENDING') return 'CLOSED';
   return 'ACTIVE';
 };
 
@@ -193,6 +194,32 @@ const fromNepaliDigits = (str: string): string => {
   return String(str || '').replace(/[०-९]/g, d => String(np.indexOf(d)));
 };
 
+const normalizeMfText = (val?: string): string =>
+  fromNepaliDigits(String(val || ''))
+    .normalize('NFC')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+const normalizeMfMemberId = (val?: string): string =>
+  fromNepaliDigits(String(val || ''))
+    .replace(/\s+/g, '')
+    .trim()
+    .toLowerCase();
+
+const stripLeadingZerosId = (val?: string): string =>
+  normalizeMfMemberId(val).replace(/^0+(?=\d)/, '');
+
+const isSameMfMemberId = (a?: string, b?: string): boolean => {
+  const normA = normalizeMfMemberId(a);
+  const normB = normalizeMfMemberId(b);
+  if (!normA || !normB) return false;
+  if (normA === normB) return true;
+  const strippedA = stripLeadingZerosId(normA);
+  const strippedB = stripLeadingZerosId(normB);
+  return Boolean(strippedA && strippedB && strippedA === strippedB);
+};
+
 const matchesBsDateFilter = (
   dateText: string,
   selectedYear: string,
@@ -266,10 +293,50 @@ const splitMemberLoansByCategory = (memLoans: MFLoanRecord[]): { microLoan?: MFL
 type SubMenuTab = 'dashboard' | 'centers' | 'groups' | 'members' | 'saving' | 'loan' | 'reports';
 
 export const MicroFinanceManagement: React.FC = () => {
-  const { user, branch, branches: authBranches, settings: authSettings } = useAuth();
+  const { user, role, isSuperAdmin, hasPermission, branch, branches: authBranches, settings: authSettings } = useAuth();
   const isDayEnded = useDayEndLock(branch?.id);
   const [adminBranches, setAdminBranches] = useState<Branch[]>(authBranches || []);
   const [systemSettings, setSystemSettings] = useState<SystemSettings | null>(authSettings || null);
+
+  // Granular Role Permission Helpers synced with Admin Center -> Role & Permission Management
+  const mfPermState = useMemo(() => {
+    const combined = new Set<string>([
+      ...(Array.isArray(user?.permissions) ? user.permissions : []),
+      ...(Array.isArray(role?.permissions) ? role.permissions : [])
+    ]);
+    const hasGranularMf = Array.from(combined).some(p => typeof p === 'string' && p.startsWith('sub_mf_'));
+    return { combined, hasGranularMf };
+  }, [user?.permissions, role?.permissions]);
+
+  const canMfAccess = (subKey: string, mode: 'view' | 'edit' | 'delete' = 'view'): boolean => {
+    if (isSuperAdmin) return true;
+    if (!mfPermState.hasGranularMf) {
+      if (mode === 'view') return hasPermission('view_microfinance');
+      if (mode === 'edit') return hasPermission('add_transaction') || hasPermission('edit_transaction');
+      return hasPermission('delete_transaction');
+    }
+    if (mode === 'view') {
+      return (
+        mfPermState.combined.has(`sub_${subKey}_view`) ||
+        mfPermState.combined.has(`sub_${subKey}_edit`) ||
+        mfPermState.combined.has(`sub_${subKey}_delete`)
+      );
+    }
+    return mfPermState.combined.has(`sub_${subKey}_${mode}`);
+  };
+
+  const canViewDashboard = canMfAccess('mf_dashboard', 'view');
+  const canViewCenters = canMfAccess('mf_centers', 'view');
+  const canViewGroups = canMfAccess('mf_groups', 'view');
+  const canViewMembers = canMfAccess('mf_members', 'view');
+  const canViewSaving = canMfAccess('mf_saving', 'view');
+  const canViewLoan = canMfAccess('mf_loan', 'view');
+  const canViewCollectionReport = canMfAccess('mf_reports', 'view');
+  const canViewSignatureReport = canMfAccess('mf_signature_sheet', 'view');
+  const canViewMeetingMinutes = canMfAccess('mf_meeting_minutes', 'view');
+  const canViewIdCard = canMfAccess('mf_id_card', 'view');
+  const canViewReports =
+    canViewCollectionReport || canViewSignatureReport || canViewMeetingMinutes || canViewIdCard;
 
   useEffect(() => {
     storageService.getBranches().then(b => {
@@ -341,7 +408,9 @@ export const MicroFinanceManagement: React.FC = () => {
   const [appliedMemberGroupId, setAppliedMemberGroupId] = useState('');
 
   const [savingSearch, setSavingSearch] = useState('');
-  const [savingStatusFilter, setSavingStatusFilter] = useState('All');
+  const [savingStatusTab, setSavingStatusTab] = useState<'ACTIVE' | 'CLOSED'>('ACTIVE');
+  const [selectedSavingToToggleStatus, setSelectedSavingToToggleStatus] = useState<MFSavingsRecord | null>(null);
+  const [isToggleSavingStatusModalOpen, setIsToggleSavingStatusModalOpen] = useState(false);
   const [savingCenterFilterId, setSavingCenterFilterId] = useState('');
   const [savingGroupFilterId, setSavingGroupFilterId] = useState('');
   const [appliedSavingCenterId, setAppliedSavingCenterId] = useState('');
@@ -370,12 +439,53 @@ export const MicroFinanceManagement: React.FC = () => {
   }, []);
 
   // Reports state (Matching image_ff5945f2.png)
-  const [reportTab, setReportTab] = useState<'collection' | 'signature' | 'meeting-minutes'>('collection');
+  const [reportTab, setReportTab] = useState<'collection' | 'signature' | 'meeting-minutes' | 'id-card'>('collection');
   const [reportYear, setReportYear] = useState(currentBsDate.year);
   const [reportMonth, setReportMonth] = useState(currentBsDate.month);
   const [reportDay, setReportDay] = useState(currentBsDate.day);
   const [reportCenterId, setReportCenterId] = useState('');
   const [reportGroupId, setReportGroupId] = useState('');
+
+  // Auto-select first permitted main tab / report sub-tab based on Admin Center role permissions
+  useEffect(() => {
+    const allowedTabs: SubMenuTab[] = [];
+    if (canViewDashboard) allowedTabs.push('dashboard');
+    if (canViewCenters) allowedTabs.push('centers');
+    if (canViewGroups) allowedTabs.push('groups');
+    if (canViewMembers) allowedTabs.push('members');
+    if (canViewSaving) allowedTabs.push('saving');
+    if (canViewLoan) allowedTabs.push('loan');
+    if (canViewReports) allowedTabs.push('reports');
+    if (allowedTabs.length > 0 && !allowedTabs.includes(activeTab)) {
+      setActiveTab(allowedTabs[0]);
+    }
+  }, [
+    activeTab,
+    canViewDashboard,
+    canViewCenters,
+    canViewGroups,
+    canViewMembers,
+    canViewSaving,
+    canViewLoan,
+    canViewReports
+  ]);
+
+  useEffect(() => {
+    const allowedReportTabs: Array<'collection' | 'signature' | 'meeting-minutes' | 'id-card'> = [];
+    if (canViewCollectionReport) allowedReportTabs.push('collection');
+    if (canViewSignatureReport) allowedReportTabs.push('signature');
+    if (canViewMeetingMinutes) allowedReportTabs.push('meeting-minutes');
+    if (canViewIdCard) allowedReportTabs.push('id-card');
+    if (allowedReportTabs.length > 0 && !allowedReportTabs.includes(reportTab)) {
+      setReportTab(allowedReportTabs[0]);
+    }
+  }, [
+    reportTab,
+    canViewCollectionReport,
+    canViewSignatureReport,
+    canViewMeetingMinutes,
+    canViewIdCard
+  ]);
 
   const filteredReportCenters = useMemo(() => {
     const targetDay = parseInt(reportDay, 10);
@@ -412,6 +522,11 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const [isMemberModalOpen, setIsMemberModalOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<MFMember | null>(null);
+  const [memberStatusTab, setMemberStatusTab] = useState<'ACTIVE' | 'INACTIVE'>('ACTIVE');
+  const [selectedMemberToView, setSelectedMemberToView] = useState<MFMember | null>(null);
+  const [isViewMemberModalOpen, setIsViewMemberModalOpen] = useState(false);
+  const [selectedMemberToToggleStatus, setSelectedMemberToToggleStatus] = useState<MFMember | null>(null);
+  const [isToggleMemberStatusModalOpen, setIsToggleMemberStatusModalOpen] = useState(false);
   const [memberForm, setMemberForm] = useState({
     memberId: '',
     name: '',
@@ -675,6 +790,12 @@ export const MicroFinanceManagement: React.FC = () => {
   const [bulkFileName, setBulkFileName] = useState<string>('');
   const [bulkParsedRows, setBulkParsedRows] = useState<Record<string, unknown>[]>([]);
   const [bulkUploadError, setBulkUploadError] = useState<string | null>(null);
+  const [bulkUploadSuccess, setBulkUploadSuccess] = useState<{
+    entityType: string;
+    count: number;
+    fileName?: string;
+    skippedCount?: number;
+  } | null>(null);
   const [isBulkUploading, setIsBulkUploading] = useState<boolean>(false);
   const bulkFileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -1119,31 +1240,41 @@ export const MicroFinanceManagement: React.FC = () => {
           const memberIdRaw = getExcelCell(row, ['Member ID', 'MemberId', 'Member Code', 'ID', 'सदस्य नं']);
           const accountNoRaw = getExcelCell(row, ['Account No', 'Savings Account No', 'Saving Account', 'Saving Account No', 'A/C No', 'खाता नं']);
           const nameRaw = getExcelCell(row, ['Name', 'Member Name', 'Full Name', 'Customer Name', 'Account Holder', 'नाम', 'सदस्यको नाम']);
-          const cleanMemberId = memberIdRaw.toLowerCase().replace(/[^a-z0-9]/g, '');
+          const cleanMemberId = stripLeadingZerosId(memberIdRaw).replace(/[^a-z0-9]/g, '');
 
-          const excelGroup = getExcelCell(row, ['Group Name', 'Group', 'Samuh Name']).trim().toLowerCase();
-          const excelCenter = getExcelCell(row, ['Center Name', 'Center']).trim().toLowerCase();
+          const excelGroupRaw = getExcelCell(row, ['Group Name', 'Group', 'Samuh Name', 'समुह', 'समूह']);
+          const excelCenterRaw = getExcelCell(row, ['Center Name', 'Center', 'केन्द्र']);
+          const excelGroupNorm = normalizeMfText(excelGroupRaw);
+          const excelCenterNorm = normalizeMfText(excelCenterRaw);
 
           const matchedMember = members.find(m => {
-            const mId = (m.memberId || '').toLowerCase();
-            const mIdDigits = mId.replace(/[^a-z0-9]/g, '');
             if (memberIdRaw) {
-              return mId === memberIdRaw.toLowerCase() || (Boolean(cleanMemberId) && mIdDigits.endsWith(cleanMemberId));
+              if (isSameMfMemberId(m.memberId, memberIdRaw)) return true;
+              const mIdDigits = stripLeadingZerosId(m.memberId).replace(/[^a-z0-9]/g, '');
+              if (cleanMemberId && cleanMemberId.length >= 6 && mIdDigits === cleanMemberId) return true;
+              return false;
             }
-            const mAcc = (m.savingsAccountNo || '').toLowerCase();
-            if (accountNoRaw && mAcc === accountNoRaw.toLowerCase()) return true;
-            const mName = (m.name || '').trim().toLowerCase();
-            if (nameRaw && mName === nameRaw.toLowerCase()) {
-              if (excelGroup && (m.samuhName || '').trim().toLowerCase() !== excelGroup) return false;
-              if (excelCenter && (m.centerName || '').trim().toLowerCase() !== excelCenter) return false;
+            if (accountNoRaw && normalizeMfMemberId(m.savingsAccountNo) === normalizeMfMemberId(accountNoRaw)) {
+              return true;
+            }
+            if (nameRaw && normalizeMfText(m.name) === normalizeMfText(nameRaw)) {
+              if (excelGroupNorm && normalizeMfText(m.samuhName) !== excelGroupNorm) return false;
+              if (excelCenterNorm && normalizeMfText(m.centerName) !== excelCenterNorm) return false;
               return true;
             }
             return false;
           });
 
+          const matchedGroupFromExcel = excelGroupNorm
+            ? groups.find(g => normalizeMfText(g.name) === excelGroupNorm || normalizeMfText(g.code) === excelGroupNorm)
+            : undefined;
+          const matchedCenterFromExcel = excelCenterNorm
+            ? centers.find(c => normalizeMfText(c.name) === excelCenterNorm || normalizeMfText(c.code) === excelCenterNorm)
+            : undefined;
+
           const name =
-            nameRaw ||
             matchedMember?.name ||
+            nameRaw ||
             (memberIdRaw ? `Member ${memberIdRaw}` : accountNoRaw ? `Account ${accountNoRaw}` : '');
 
           const amount = parseExcelNumber(
@@ -1182,11 +1313,11 @@ export const MicroFinanceManagement: React.FC = () => {
             statusRaw === 'INACTIVE' || statusRaw === 'DUE' || statusRaw === 'PENDING' ? 'INACTIVE' : 'ACTIVE';
 
           items.push({
-            memberId: memberIdRaw || matchedMember?.memberId || `M-${1001 + idx}`,
+            memberId: matchedMember?.memberId || memberIdRaw || `M-${1001 + idx}`,
             accountNo: accountNoRaw || matchedMember?.savingsAccountNo || `SAV-${1001 + idx}`,
             name,
-            groupName: getExcelCell(row, ['Group Name', 'Group', 'Samuh Name']) || matchedMember?.samuhName || '',
-            centerName: getExcelCell(row, ['Center Name', 'Center']) || matchedMember?.centerName || '',
+            groupName: matchedMember?.samuhName || matchedGroupFromExcel?.name || excelGroupRaw || '',
+            centerName: matchedMember?.centerName || matchedGroupFromExcel?.centerName || matchedCenterFromExcel?.name || excelCenterRaw || '',
             date: todayAd,
             dateBs: normalizedBs || todayBs,
             amount,
@@ -1220,20 +1351,28 @@ export const MicroFinanceManagement: React.FC = () => {
         bulkParsedRows.forEach((row, idx) => {
           const memberIdRaw = getExcelCell(row, ['Member ID', 'MemberId', 'Member Code']);
           const nameRaw = getExcelCell(row, ['Name', 'Member Name', 'Full Name']);
-          const excelGroup = getExcelCell(row, ['Group Name', 'Group']).trim().toLowerCase();
-          const excelCenter = getExcelCell(row, ['Center Name', 'Center']).trim().toLowerCase();
+          const excelGroupRaw = getExcelCell(row, ['Group Name', 'Group', 'Samuh Name']);
+          const excelCenterRaw = getExcelCell(row, ['Center Name', 'Center']);
+          const excelGroupNorm = normalizeMfText(excelGroupRaw);
+          const excelCenterNorm = normalizeMfText(excelCenterRaw);
           const matchedMember = members.find(m => {
             if (memberIdRaw) {
-              return m.memberId.toLowerCase() === memberIdRaw.toLowerCase();
+              return isSameMfMemberId(m.memberId, memberIdRaw);
             }
-            if (nameRaw && m.name.trim().toLowerCase() === nameRaw.toLowerCase()) {
-              if (excelGroup && (m.samuhName || '').trim().toLowerCase() !== excelGroup) return false;
-              if (excelCenter && (m.centerName || '').trim().toLowerCase() !== excelCenter) return false;
+            if (nameRaw && normalizeMfText(m.name) === normalizeMfText(nameRaw)) {
+              if (excelGroupNorm && normalizeMfText(m.samuhName) !== excelGroupNorm) return false;
+              if (excelCenterNorm && normalizeMfText(m.centerName) !== excelCenterNorm) return false;
               return true;
             }
             return false;
           });
-          const name = nameRaw || matchedMember?.name || (memberIdRaw ? `Member ${memberIdRaw}` : '');
+          const matchedGroupFromExcel = excelGroupNorm
+            ? groups.find(g => normalizeMfText(g.name) === excelGroupNorm || normalizeMfText(g.code) === excelGroupNorm)
+            : undefined;
+          const matchedCenterFromExcel = excelCenterNorm
+            ? centers.find(c => normalizeMfText(c.name) === excelCenterNorm || normalizeMfText(c.code) === excelCenterNorm)
+            : undefined;
+          const name = matchedMember?.name || nameRaw || (memberIdRaw ? `Member ${memberIdRaw}` : '');
           const loanAmount = parseExcelNumber(getExcelCell(row, ['Loan Amount', 'Amount', 'Principal']));
           if (!name || loanAmount <= 0) return;
 
@@ -1254,11 +1393,11 @@ export const MicroFinanceManagement: React.FC = () => {
             statusRaw === 'CLOSED' ? 'CLOSED' : statusRaw === 'MATURED' ? 'MATURED' : 'ACTIVE';
 
           items.push({
-            memberId: memberIdRaw || matchedMember?.memberId || `M-${1001 + idx}`,
+            memberId: matchedMember?.memberId || memberIdRaw || `M-${1001 + idx}`,
             accountNo: getExcelCell(row, ['Account No', 'Loan Account No']) || `LN-${2001 + loans.length + idx}`,
             name,
-            centerName: getExcelCell(row, ['Center Name', 'Center']) || matchedMember?.centerName || centers[0]?.name || '',
-            groupName: getExcelCell(row, ['Group Name', 'Group']) || matchedMember?.samuhName || groups[0]?.name || '',
+            centerName: matchedMember?.centerName || matchedGroupFromExcel?.centerName || matchedCenterFromExcel?.name || excelCenterRaw || centers[0]?.name || '',
+            groupName: matchedMember?.samuhName || matchedGroupFromExcel?.name || excelGroupRaw || groups[0]?.name || '',
             loanDate: todayAd,
             loanDateBs,
             loanAmount,
@@ -1301,14 +1440,27 @@ export const MicroFinanceManagement: React.FC = () => {
         setMembers(microFinanceService.getMembers());
         createdCount = filteredItems.length;
         if (skippedDuplicates > 0) {
+          const uploadedFileName = bulkFileName;
           setIsBulkModalOpen(false);
-          showToast(`Created ${createdCount} loan(s); skipped ${skippedDuplicates} duplicate/unclosed loan row(s).`);
+          setBulkUploadSuccess({
+            entityType: bulkType,
+            count: createdCount,
+            fileName: uploadedFileName,
+            skippedCount: skippedDuplicates
+          });
+          showToast(`Data successfully uploaded: ${createdCount} loan(s); skipped ${skippedDuplicates} duplicate/unclosed row(s).`);
           return;
         }
       }
 
+      const uploadedFileName = bulkFileName;
       setIsBulkModalOpen(false);
-      showToast(`Successfully created ${createdCount} ${bulkType} record(s) from Excel!`);
+      setBulkUploadSuccess({
+        entityType: bulkType,
+        count: createdCount,
+        fileName: uploadedFileName
+      });
+      showToast(`Data successfully uploaded: ${createdCount} ${bulkType} record(s) from Excel!`);
     } finally {
       setIsBulkUploading(false);
     }
@@ -1364,7 +1516,12 @@ export const MicroFinanceManagement: React.FC = () => {
   useEffect(() => {
     if (activeTab === 'dashboard') {
       setMeetingMinutes(meetingMinutesService.getMeetings());
-    } else if (activeTab === 'reports') {
+    } else if (
+      activeTab === 'reports' ||
+      activeTab === 'saving' ||
+      activeTab === 'loan' ||
+      activeTab === 'members'
+    ) {
       void microFinanceService.fetchAllFromSupabase().then(res => {
         setCenters(res.centers);
         setGroups(res.groups);
@@ -1374,9 +1531,11 @@ export const MicroFinanceManagement: React.FC = () => {
         setSheets(res.sheets);
         setSignatureSheets(res.signatureSheets);
       });
-      void meetingMinutesService.fetchAllFromSupabase().then(res => {
-        setMeetingMinutes(res.meetings);
-      });
+      if (activeTab === 'reports') {
+        void meetingMinutesService.fetchAllFromSupabase().then(res => {
+          setMeetingMinutes(res.meetings);
+        });
+      }
     }
   }, [activeTab, reportTab]);
 
@@ -1391,7 +1550,7 @@ export const MicroFinanceManagement: React.FC = () => {
     const femaleMembers = members.filter(m => m.gender === 'Female').length;
 
     const paidSavingsList = savings.filter(s => getEffectiveSavingStatus(s.status) === 'ACTIVE');
-    const dueSavingsList = savings.filter(s => getEffectiveSavingStatus(s.status) === 'INACTIVE');
+    const dueSavingsList = savings.filter(s => getEffectiveSavingStatus(s.status) === 'CLOSED');
     const savingBalance = paidSavingsList.reduce((acc, s) => acc + s.amount, 0) +
                           members.reduce((acc, m) => acc + (m.totalSavings || 0), 0);
     const dueSavingsAmount = dueSavingsList.reduce((acc, s) => acc + s.amount, 0);
@@ -1507,51 +1666,112 @@ export const MicroFinanceManagement: React.FC = () => {
     );
   }, [sortedCentersByMeetingDay, centerSearch]);
 
-  // Filtered Groups
+  // Filtered Groups (sorted ascending by Center meeting date set during Center creation)
   const filteredGroups = useMemo(() => {
-    return groups.filter(g => 
-      g.name.toLowerCase().includes(groupSearch.toLowerCase()) ||
-      g.code.toLowerCase().includes(groupSearch.toLowerCase()) ||
-      g.centerName.toLowerCase().includes(groupSearch.toLowerCase())
-    );
-  }, [groups, groupSearch]);
+    const centerById = new Map<string, MFCenter>();
+    const centerByName = new Map<string, MFCenter>();
+    centers.forEach(c => {
+      if (c.id) centerById.set(c.id, c);
+      const normName = normalizeMfText(c.name);
+      if (normName && !centerByName.has(normName)) centerByName.set(normName, c);
+    });
+
+    const getGroupCenterSortKey = (g: MFSamuhGroup) => {
+      const parentCenter =
+        (g.centerId ? centerById.get(g.centerId) : undefined) ||
+        centerByName.get(normalizeMfText(g.centerName));
+      const day =
+        extractMeetingDayNumber(parentCenter?.meetingDay) ??
+        extractMeetingDayNumber(g.meetingDay) ??
+        extractMeetingDayNumber(parentCenter?.name || g.centerName) ??
+        Number.MAX_SAFE_INTEGER;
+      const centerName = parentCenter?.name || g.centerName || '';
+      return { day, centerName };
+    };
+
+    const q = groupSearch.toLowerCase();
+    return groups
+      .filter(
+        g =>
+          g.name.toLowerCase().includes(q) ||
+          g.code.toLowerCase().includes(q) ||
+          g.centerName.toLowerCase().includes(q)
+      )
+      .sort((a, b) => {
+        const keyA = getGroupCenterSortKey(a);
+        const keyB = getGroupCenterSortKey(b);
+        if (keyA.day !== keyB.day) return keyA.day - keyB.day;
+        const centerCmp = keyA.centerName.localeCompare(keyB.centerName);
+        if (centerCmp !== 0) return centerCmp;
+        const codeCmp = String(a.code || '').localeCompare(String(b.code || ''), undefined, { numeric: true });
+        if (codeCmp !== 0) return codeCmp;
+        return String(a.name || '').localeCompare(String(b.name || ''));
+      });
+  }, [groups, centers, groupSearch]);
 
   const memberLookupById = useMemo(() => {
-    const map = new Map<string, MFMember>();
+    const exact = new Map<string, MFMember>();
+    const stripped = new Map<string, MFMember>();
+    const byAccount = new Map<string, MFMember>();
     members.forEach(m => {
-      const key = String(m.memberId || '').trim().toLowerCase();
-      if (key && !map.has(key)) map.set(key, m);
+      const key = normalizeMfMemberId(m.memberId);
+      if (key && !exact.has(key)) exact.set(key, m);
+      const strippedKey = stripLeadingZerosId(m.memberId);
+      if (strippedKey && !stripped.has(strippedKey)) stripped.set(strippedKey, m);
+      const accKey = normalizeMfMemberId(m.savingsAccountNo);
+      if (accKey && !byAccount.has(accKey)) byAccount.set(accKey, m);
     });
-    return map;
+    const find = (memberId?: string, accountNo?: string): MFMember | undefined => {
+      const exactKey = normalizeMfMemberId(memberId);
+      if (exactKey) {
+        const exactHit = exact.get(exactKey);
+        if (exactHit) return exactHit;
+        const strippedKey = stripLeadingZerosId(exactKey);
+        if (strippedKey) {
+          const strippedHit = stripped.get(strippedKey);
+          if (strippedHit) return strippedHit;
+        }
+      }
+      const accKey = normalizeMfMemberId(accountNo);
+      if (accKey) {
+        return byAccount.get(accKey);
+      }
+      return undefined;
+    };
+    return { exact, stripped, byAccount, find };
   }, [members]);
 
   const getGroupsForCenterFilter = (centerId: string) => {
     if (!centerId) return groups;
     const selectedCenter = centers.find(c => c.id === centerId);
-    const centerNameNorm = String(selectedCenter?.name || '').trim().toLowerCase();
+    const centerNameNorm = normalizeMfText(selectedCenter?.name);
     return groups.filter(
-      g => g.centerId === centerId || (centerNameNorm !== '' && String(g.centerName || '').trim().toLowerCase() === centerNameNorm)
+      g => g.centerId === centerId || (centerNameNorm !== '' && normalizeMfText(g.centerName) === centerNameNorm)
     );
   };
 
-  // Filtered Members
-  const filteredMembers = useMemo(() => {
+  const getEffectiveMemberStatus = (status?: string): 'ACTIVE' | 'INACTIVE' => {
+    return String(status || 'ACTIVE').toUpperCase() === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE';
+  };
+
+  // Filtered Members (before Active/Inactive split, for live tab counts)
+  const baseFilteredMembers = useMemo(() => {
     const q = memberSearch.toLowerCase();
     const selCenter = appliedMemberCenterId ? centers.find(c => c.id === appliedMemberCenterId) : undefined;
     const selGroup = appliedMemberGroupId ? groups.find(g => g.id === appliedMemberGroupId) : undefined;
-    const selCenterNorm = String(selCenter?.name || '').trim().toLowerCase();
-    const selGroupNorm = String(selGroup?.name || '').trim().toLowerCase();
+    const selCenterNorm = normalizeMfText(selCenter?.name);
+    const selGroupNorm = normalizeMfText(selGroup?.name);
 
     return members.filter(m => {
       if (appliedMemberCenterId) {
-        const mCenterNorm = String(m.centerName || '').trim().toLowerCase();
+        const mCenterNorm = normalizeMfText(m.centerName);
         const matchCenter =
           m.centerId === appliedMemberCenterId ||
           (selCenterNorm !== '' && mCenterNorm === selCenterNorm);
         if (!matchCenter) return false;
       }
       if (appliedMemberGroupId) {
-        const mGroupNorm = String(m.samuhName || '').trim().toLowerCase();
+        const mGroupNorm = normalizeMfText(m.samuhName);
         const matchGroup =
           m.samuhId === appliedMemberGroupId ||
           (selGroupNorm !== '' && mGroupNorm === selGroupNorm);
@@ -1566,44 +1786,96 @@ export const MicroFinanceManagement: React.FC = () => {
     });
   }, [members, centers, groups, memberSearch, appliedMemberCenterId, appliedMemberGroupId]);
 
-  // Filtered Savings
-  const filteredSavings = useMemo(() => {
+  const memberStatusCounts = useMemo(() => {
+    let active = 0;
+    let inactive = 0;
+    baseFilteredMembers.forEach(m => {
+      if (getEffectiveMemberStatus(m.status) === 'INACTIVE') inactive += 1;
+      else active += 1;
+    });
+    return { active, inactive };
+  }, [baseFilteredMembers]);
+
+  // Filtered Members by Active / Inactive tab
+  const filteredMembers = useMemo(() => {
+    return baseFilteredMembers.filter(m => getEffectiveMemberStatus(m.status) === memberStatusTab);
+  }, [baseFilteredMembers, memberStatusTab]);
+
+  // Base Filtered Savings (search + center + group, used for Active / Close counts)
+  const baseFilteredSavings = useMemo(() => {
     const selCenter = appliedSavingCenterId ? centers.find(c => c.id === appliedSavingCenterId) : undefined;
     const selGroup = appliedSavingGroupId ? groups.find(g => g.id === appliedSavingGroupId) : undefined;
-    const selCenterNorm = String(selCenter?.name || '').trim().toLowerCase();
-    const selGroupNorm = String(selGroup?.name || '').trim().toLowerCase();
+    const selCenterNorm = normalizeMfText(selCenter?.name);
+    const selGroupNorm = normalizeMfText(selGroup?.name);
+    const centerGroupNames = appliedSavingCenterId
+      ? new Set(
+          groups
+            .filter(
+              g =>
+                g.centerId === appliedSavingCenterId ||
+                (selCenterNorm !== '' && normalizeMfText(g.centerName) === selCenterNorm)
+            )
+            .map(g => normalizeMfText(g.name))
+            .filter(Boolean)
+        )
+      : null;
+
+    const searchQ = savingSearch.trim().toLowerCase();
+    const searchStripped = stripLeadingZerosId(savingSearch);
 
     return savings.filter(s => {
-      const linkedMember = memberLookupById.get(String(s.memberId || '').trim().toLowerCase());
+      const linkedMember = memberLookupById.find(s.memberId, s.accountNo);
+      const recCenterNorm = normalizeMfText(s.centerName);
+      const recGroupNorm = normalizeMfText(s.groupName);
+
       if (appliedSavingCenterId) {
-        const recCenterNorm = String(s.centerName || '').trim().toLowerCase();
-        const matchCenter = recCenterNorm
-          ? selCenterNorm !== '' && recCenterNorm === selCenterNorm
-          : Boolean(
-              linkedMember &&
-                (linkedMember.centerId === appliedSavingCenterId ||
-                  (selCenterNorm !== '' && String(linkedMember.centerName || '').trim().toLowerCase() === selCenterNorm))
-            );
-        if (!matchCenter) return false;
+        const memberMatchesCenter = Boolean(
+          linkedMember &&
+            (linkedMember.centerId === appliedSavingCenterId ||
+              (selCenterNorm !== '' && normalizeMfText(linkedMember.centerName) === selCenterNorm))
+        );
+        const recordMatchesCenter =
+          (selCenterNorm !== '' && recCenterNorm === selCenterNorm) ||
+          Boolean(centerGroupNames && recGroupNorm && centerGroupNames.has(recGroupNorm));
+        if (!memberMatchesCenter && !recordMatchesCenter) return false;
       }
+
       if (appliedSavingGroupId) {
-        const recGroupNorm = String(s.groupName || '').trim().toLowerCase();
-        const matchGroup = recGroupNorm
-          ? selGroupNorm !== '' && recGroupNorm === selGroupNorm
-          : Boolean(
-              linkedMember &&
-                (linkedMember.samuhId === appliedSavingGroupId ||
-                  (selGroupNorm !== '' && String(linkedMember.samuhName || '').trim().toLowerCase() === selGroupNorm))
-            );
-        if (!matchGroup) return false;
+        const memberMatchesGroup = Boolean(
+          linkedMember &&
+            (linkedMember.samuhId === appliedSavingGroupId ||
+              (selGroupNorm !== '' && normalizeMfText(linkedMember.samuhName) === selGroupNorm))
+        );
+        const recordMatchesGroup = selGroupNorm !== '' && recGroupNorm === selGroupNorm;
+        if (!memberMatchesGroup && !recordMatchesGroup) return false;
       }
-      const matchSearch = s.name.toLowerCase().includes(savingSearch.toLowerCase()) ||
-                          s.memberId.toLowerCase().includes(savingSearch.toLowerCase()) ||
-                          s.accountNo.toLowerCase().includes(savingSearch.toLowerCase());
-      const matchStatus = savingStatusFilter === 'All' || getEffectiveSavingStatus(s.status) === savingStatusFilter;
-      return matchSearch && matchStatus;
+
+      const matchSearch =
+        !searchQ ||
+        s.name.toLowerCase().includes(searchQ) ||
+        s.memberId.toLowerCase().includes(searchQ) ||
+        (searchStripped !== '' && stripLeadingZerosId(s.memberId).includes(searchStripped)) ||
+        s.accountNo.toLowerCase().includes(searchQ) ||
+        (s.groupName || '').toLowerCase().includes(searchQ) ||
+        (linkedMember?.samuhName || '').toLowerCase().includes(searchQ);
+      return matchSearch;
     });
-  }, [savings, centers, groups, memberLookupById, savingSearch, savingStatusFilter, appliedSavingCenterId, appliedSavingGroupId]);
+  }, [savings, centers, groups, memberLookupById, savingSearch, appliedSavingCenterId, appliedSavingGroupId]);
+
+  const savingStatusCounts = useMemo(() => {
+    let active = 0;
+    let closed = 0;
+    baseFilteredSavings.forEach(s => {
+      if (getEffectiveSavingStatus(s.status) === 'CLOSED') closed += 1;
+      else active += 1;
+    });
+    return { active, closed };
+  }, [baseFilteredSavings]);
+
+  // Filtered Savings by Active / Close tab
+  const filteredSavings = useMemo(() => {
+    return baseFilteredSavings.filter(s => getEffectiveSavingStatus(s.status) === savingStatusTab);
+  }, [baseFilteredSavings, savingStatusTab]);
 
   const getEffectiveLoanStatus = (loan: MFLoanRecord): 'ACTIVE' | 'MATURED' | 'CLOSED' => {
     if (loan.status === 'CLOSED') return 'CLOSED';
@@ -1622,46 +1894,154 @@ export const MicroFinanceManagement: React.FC = () => {
 
   // Filtered Loans: Active & Mature read from lightweight active state; Close loads on-demand from Supabase
   const filteredLoans = useMemo(() => {
-    const query = loanSearch.toLowerCase();
+    const query = loanSearch.trim().toLowerCase();
+    const queryStripped = stripLeadingZerosId(loanSearch);
     const sourceList = loanStatusTab === 'CLOSED' ? closedLoansArchive : loans;
     const selCenter = appliedLoanCenterId ? centers.find(c => c.id === appliedLoanCenterId) : undefined;
     const selGroup = appliedLoanGroupId ? groups.find(g => g.id === appliedLoanGroupId) : undefined;
-    const selCenterNorm = String(selCenter?.name || '').trim().toLowerCase();
-    const selGroupNorm = String(selGroup?.name || '').trim().toLowerCase();
+    const selCenterNorm = normalizeMfText(selCenter?.name);
+    const selGroupNorm = normalizeMfText(selGroup?.name);
+    const centerGroupNames = appliedLoanCenterId
+      ? new Set(
+          groups
+            .filter(
+              g =>
+                g.centerId === appliedLoanCenterId ||
+                (selCenterNorm !== '' && normalizeMfText(g.centerName) === selCenterNorm)
+            )
+            .map(g => normalizeMfText(g.name))
+            .filter(Boolean)
+        )
+      : null;
 
     return sourceList.filter(l => {
       const effStatus = getEffectiveLoanStatus(l);
       if (effStatus !== loanStatusTab) return false;
-      const linkedMember = memberLookupById.get(String(l.memberId || '').trim().toLowerCase());
+      const linkedMember = memberLookupById.find(l.memberId);
+      const recCenterNorm = normalizeMfText(l.centerName);
+      const recGroupNorm = normalizeMfText(l.groupName);
+
       if (appliedLoanCenterId) {
-        const recCenterNorm = String(l.centerName || '').trim().toLowerCase();
-        const matchCenter = recCenterNorm
-          ? selCenterNorm !== '' && recCenterNorm === selCenterNorm
-          : Boolean(
-              linkedMember &&
-                (linkedMember.centerId === appliedLoanCenterId ||
-                  (selCenterNorm !== '' && String(linkedMember.centerName || '').trim().toLowerCase() === selCenterNorm))
-            );
-        if (!matchCenter) return false;
+        const memberMatchesCenter = Boolean(
+          linkedMember &&
+            (linkedMember.centerId === appliedLoanCenterId ||
+              (selCenterNorm !== '' && normalizeMfText(linkedMember.centerName) === selCenterNorm))
+        );
+        const recordMatchesCenter =
+          (selCenterNorm !== '' && recCenterNorm === selCenterNorm) ||
+          Boolean(centerGroupNames && recGroupNorm && centerGroupNames.has(recGroupNorm));
+        if (!memberMatchesCenter && !recordMatchesCenter) return false;
       }
+
       if (appliedLoanGroupId) {
-        const recGroupNorm = String(l.groupName || '').trim().toLowerCase();
-        const matchGroup = recGroupNorm
-          ? selGroupNorm !== '' && recGroupNorm === selGroupNorm
-          : Boolean(
-              linkedMember &&
-                (linkedMember.samuhId === appliedLoanGroupId ||
-                  (selGroupNorm !== '' && String(linkedMember.samuhName || '').trim().toLowerCase() === selGroupNorm))
-            );
-        if (!matchGroup) return false;
+        const memberMatchesGroup = Boolean(
+          linkedMember &&
+            (linkedMember.samuhId === appliedLoanGroupId ||
+              (selGroupNorm !== '' && normalizeMfText(linkedMember.samuhName) === selGroupNorm))
+        );
+        const recordMatchesGroup = selGroupNorm !== '' && recGroupNorm === selGroupNorm;
+        if (!memberMatchesGroup && !recordMatchesGroup) return false;
       }
+
       return (
+        !query ||
         l.name.toLowerCase().includes(query) ||
         l.memberId.toLowerCase().includes(query) ||
+        (queryStripped !== '' && stripLeadingZerosId(l.memberId).includes(queryStripped)) ||
         l.accountNo.toLowerCase().includes(query)
       );
     });
   }, [loans, closedLoansArchive, centers, groups, memberLookupById, loanSearch, loanStatusTab, appliedLoanCenterId, appliedLoanGroupId]);
+
+  const exportRowsToExcel = (rows: Record<string, string | number>[], sheetName: string, fileName: string) => {
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const keys = Object.keys(rows[0] || {});
+    ws['!cols'] = keys.map(key => {
+      const maxLen = rows.reduce((max, row) => Math.max(max, String(row[key] ?? '').length), key.length);
+      return { wch: Math.min(Math.max(maxLen + 3, 10), 40) };
+    });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
+    XLSX.writeFile(wb, fileName);
+  };
+
+  const handleExportMembersExcel = () => {
+    if (filteredMembers.length === 0) {
+      showToast('No Members data available to download.');
+      return;
+    }
+    const rows = filteredMembers.map((m, idx) => ({
+      'S.N.': idx + 1,
+      'Member ID': String(m.memberId || ''),
+      'Member Name': String(m.name || ''),
+      'Branch': String(m.branch || ''),
+      'Center': String(m.centerName || ''),
+      'Group': String(m.samuhName || ''),
+      'Role': String(m.role || 'Member'),
+      'Citizenship No': String(m.citizenshipNo || ''),
+      'Mobile': String(m.mobile || ''),
+      'Savings Account No': String(m.savingsAccountNo || ''),
+      'Status': String(m.status || 'ACTIVE')
+    }));
+    exportRowsToExcel(rows, 'Members', `MF_Members_${getTodayBsDate()}.xlsx`);
+    showToast(`Downloaded ${rows.length} Member record(s) to Excel.`);
+  };
+
+  const handleExportSavingsExcel = () => {
+    if (filteredSavings.length === 0) {
+      showToast('No Savings data available to download.');
+      return;
+    }
+    const rows = filteredSavings.map((item, idx) => {
+      const linked = memberLookupById.find(item.memberId, item.accountNo);
+      return {
+        'S.N.': idx + 1,
+        'Member ID': String(item.memberId || ''),
+        'Account No': String(item.accountNo || ''),
+        'Name': String(item.name || ''),
+        'Center': String(item.centerName || linked?.centerName || ''),
+        'Group': String(item.groupName || linked?.samuhName || ''),
+        'Saving Type': String(item.savingType || ''),
+        'Open Date': String(resolveSavingOpenDateBs(item) || item.date || ''),
+        'Recurring Amount': Number(item.amount) || 0,
+        'Status': getEffectiveSavingStatus(item.status)
+      };
+    });
+    exportRowsToExcel(rows, 'Savings', `MF_Savings_${getTodayBsDate()}.xlsx`);
+    showToast(`Downloaded ${rows.length} Saving record(s) to Excel.`);
+  };
+
+  const handleExportLoansExcel = () => {
+    if (filteredLoans.length === 0) {
+      showToast('No Loan data available to download.');
+      return;
+    }
+    const rows = filteredLoans.map((l, idx) => {
+      const linked = memberLookupById.find(l.memberId);
+      const baseRow: Record<string, string | number> = {
+        'S.N.': idx + 1,
+        'Member ID': String(l.memberId || ''),
+        'Account No': String(l.accountNo || ''),
+        'Name': String(l.name || ''),
+        'Center': String(l.centerName || linked?.centerName || ''),
+        'Group': String(l.groupName || linked?.samuhName || ''),
+        'Loan Product': String(l.loanProduct || ''),
+        'Loan Date': String(normalizeBsDate(l.loanDateBs || l.loanDate) || ''),
+        'Maturity Date': String(normalizeBsDate(l.maturityDate) || ''),
+        'Loan Amount': Number(l.loanAmount) || 0,
+        'Period (Months)': Number(l.totalInstallments) || 0,
+        'Installment': Number(l.installmentAmount) || 0,
+        'Interest Rate (%)': Number(l.interestRate) || 0,
+        'Status': getEffectiveLoanStatus(l)
+      };
+      if (loanStatusTab === 'CLOSED') {
+        baseRow['Close Date'] = String(normalizeBsDate(l.closedDateBs || l.closedDate) || '');
+      }
+      return baseRow;
+    });
+    exportRowsToExcel(rows, `Loans_${loanStatusTab}`, `MF_Loans_${loanStatusTab}_${getTodayBsDate()}.xlsx`);
+    showToast(`Downloaded ${rows.length} Loan record(s) to Excel.`);
+  };
 
   // Handlers for Center
   const handleOpenAddCenter = () => {
@@ -1852,6 +2232,17 @@ export const MicroFinanceManagement: React.FC = () => {
   const handleOpenAddMember = () => {
     setEditingMember(null);
     const genAccountNo = `SAV-${1000 + members.length + 1}`;
+    const defaultCenterId =
+      appliedMemberCenterId ||
+      sortedCentersByMeetingDay[0]?.id ||
+      centers[0]?.id ||
+      '';
+    const centerGroups = defaultCenterId ? getGroupsForCenterFilter(defaultCenterId) : [];
+    const defaultGroupId =
+      (appliedMemberGroupId && centerGroups.some(g => g.id === appliedMemberGroupId)
+        ? appliedMemberGroupId
+        : centerGroups[0]?.id) || '';
+
     setMemberForm({
       memberId: `M-${1000 + members.length + 1}`,
       name: '',
@@ -1859,8 +2250,8 @@ export const MicroFinanceManagement: React.FC = () => {
       mobile: '',
       gender: 'Female',
       branch: availableBranches[0]?.name || branch?.name || 'Ratauli Central Head Office',
-      centerId: centers[0]?.id || '',
-      samuhId: groups[0]?.id || '',
+      centerId: defaultCenterId,
+      samuhId: defaultGroupId,
       role: 'Member',
       savingsAccountNo: genAccountNo,
       address: '',
@@ -1875,6 +2266,21 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const handleEditMember = (member: MFMember) => {
     setEditingMember(member);
+    const resolvedCenterId =
+      (member.centerId && centers.some(c => c.id === member.centerId)
+        ? member.centerId
+        : centers.find(c => normalizeMfText(c.name) === normalizeMfText(member.centerName))?.id) ||
+      sortedCentersByMeetingDay[0]?.id ||
+      centers[0]?.id ||
+      '';
+    const centerGroups = resolvedCenterId ? getGroupsForCenterFilter(resolvedCenterId) : [];
+    const resolvedGroupId =
+      (member.samuhId && centerGroups.some(g => g.id === member.samuhId)
+        ? member.samuhId
+        : centerGroups.find(g => normalizeMfText(g.name) === normalizeMfText(member.samuhName))?.id) ||
+      centerGroups[0]?.id ||
+      '';
+
     setMemberForm({
       memberId: member.memberId,
       name: member.name,
@@ -1882,8 +2288,8 @@ export const MicroFinanceManagement: React.FC = () => {
       mobile: member.mobile,
       gender: member.gender,
       branch: member.branch,
-      centerId: member.centerId,
-      samuhId: member.samuhId,
+      centerId: resolvedCenterId,
+      samuhId: resolvedGroupId,
       role: member.role,
       savingsAccountNo: member.savingsAccountNo,
       address: member.address,
@@ -1960,9 +2366,72 @@ export const MicroFinanceManagement: React.FC = () => {
     showToast('Member deleted');
   };
 
+  const handleOpenViewMember = (member: MFMember) => {
+    setSelectedMemberToView(member);
+    setIsViewMemberModalOpen(true);
+  };
+
+  const handleOpenToggleMemberStatus = (member: MFMember) => {
+    if (isDayEndedForBranch(branch?.id)) {
+      alert(getDayEndedBlockMessage());
+      return;
+    }
+    setSelectedMemberToToggleStatus(member);
+    setIsToggleMemberStatusModalOpen(true);
+  };
+
+  const handleConfirmToggleMemberStatus = () => {
+    if (!selectedMemberToToggleStatus) return;
+    if (isDayEndedForBranch(branch?.id)) {
+      alert(getDayEndedBlockMessage());
+      return;
+    }
+    const currentStatus = getEffectiveMemberStatus(selectedMemberToToggleStatus.status);
+    const nextStatus: 'ACTIVE' | 'INACTIVE' = currentStatus === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
+    microFinanceService.updateMember(selectedMemberToToggleStatus.id, { status: nextStatus });
+    setMembers(microFinanceService.getMembers());
+    setGroups(microFinanceService.getGroups());
+    setIsToggleMemberStatusModalOpen(false);
+    setSelectedMemberToToggleStatus(null);
+    showToast(
+      nextStatus === 'INACTIVE'
+        ? `Member ${selectedMemberToToggleStatus.name} deactivated & moved to Inactive`
+        : `Member ${selectedMemberToToggleStatus.name} activated & moved to Active`
+    );
+  };
+
   const handleOpenViewSaving = (item: MFSavingsRecord) => {
     setSelectedSavingToView(item);
     setIsViewSavingModalOpen(true);
+  };
+
+  const handleOpenToggleSavingStatus = (item: MFSavingsRecord) => {
+    if (isDayEndedForBranch(branch?.id)) {
+      alert(getDayEndedBlockMessage());
+      return;
+    }
+    setSelectedSavingToToggleStatus(item);
+    setIsToggleSavingStatusModalOpen(true);
+  };
+
+  const handleConfirmToggleSavingStatus = () => {
+    if (!selectedSavingToToggleStatus) return;
+    if (isDayEndedForBranch(branch?.id)) {
+      alert(getDayEndedBlockMessage());
+      return;
+    }
+    const currentStatus = getEffectiveSavingStatus(selectedSavingToToggleStatus.status);
+    const nextStatus: 'ACTIVE' | 'CLOSED' = currentStatus === 'ACTIVE' ? 'CLOSED' : 'ACTIVE';
+    const updated = microFinanceService.updateSaving(selectedSavingToToggleStatus.id, { status: nextStatus });
+    setSavings(updated);
+    setMembers(microFinanceService.getMembers());
+    setIsToggleSavingStatusModalOpen(false);
+    setSelectedSavingToToggleStatus(null);
+    showToast(
+      nextStatus === 'CLOSED'
+        ? `Saving account ${selectedSavingToToggleStatus.accountNo} (${selectedSavingToToggleStatus.name}) deactivated & moved to Close`
+        : `Saving account ${selectedSavingToToggleStatus.accountNo} (${selectedSavingToToggleStatus.name}) activated & moved to Active`
+    );
   };
 
   const handleOpenEditSaving = (item: MFSavingsRecord) => {
@@ -2500,49 +2969,55 @@ export const MicroFinanceManagement: React.FC = () => {
 
   // Strict matcher: ensures loans never leak across members sharing the same name or different center/group
   const doesLoanBelongToMember = (loan: MFLoanRecord, mem: MFMember): boolean => {
-    const loanMemId = (loan.memberId || '').trim().toLowerCase();
-    const memId = (mem.memberId || '').trim().toLowerCase();
-    const loanGroup = (loan.groupName || '').trim().toLowerCase();
-    const memGroup = (mem.samuhName || '').trim().toLowerCase();
-    const loanCenter = (loan.centerName || '').trim().toLowerCase();
-    const memCenter = (mem.centerName || '').trim().toLowerCase();
+    const loanMemId = normalizeMfMemberId(loan.memberId);
+    const memId = normalizeMfMemberId(mem.memberId);
+    if (loanMemId && memId) {
+      return isSameMfMemberId(loanMemId, memId);
+    }
+
+    const loanGroup = normalizeMfText(loan.groupName);
+    const memGroup = normalizeMfText(mem.samuhName);
+    const loanCenter = normalizeMfText(loan.centerName);
+    const memCenter = normalizeMfText(mem.centerName);
 
     if (loanGroup && memGroup && loanGroup !== memGroup) return false;
     if (loanCenter && memCenter && loanCenter !== memCenter) return false;
 
-    if (loanMemId && memId) {
-      return loanMemId === memId;
-    }
-
-    const loanName = (loan.name || '').trim().toLowerCase();
-    const memName = (mem.name || '').trim().toLowerCase();
+    const loanName = normalizeMfText(loan.name);
+    const memName = normalizeMfText(mem.name);
     return Boolean(!loanMemId && loanName && memName && loanName === memName);
   };
 
-  // Helper: returns matching ACTIVE saving accounts in Savings Management for a member (strict ID + center/group match)
-  const getMemberActiveSavings = (mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string }): MFSavingsRecord[] => {
-    const memId = (mem.memberId || '').trim().toLowerCase();
-    const memName = (mem.name || '').trim().toLowerCase();
-    const memGroup = (mem.samuhName || '').trim().toLowerCase();
-    const memCenter = (mem.centerName || '').trim().toLowerCase();
+  // Helper: returns matching ACTIVE saving accounts in Savings Management for a member (strict ID match with leading-zero equivalence, fallback to name + center/group only when saving has no memberId)
+  const getMemberActiveSavings = (mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string; savingsAccountNo?: string }): MFSavingsRecord[] => {
+    const memId = normalizeMfMemberId(mem.memberId);
+    const memAcc = normalizeMfMemberId(mem.savingsAccountNo);
+    const memName = normalizeMfText(mem.name);
+    const memGroup = normalizeMfText(mem.samuhName);
+    const memCenter = normalizeMfText(mem.centerName);
 
-    const activeSavings = savings.filter(s => {
-      if (getEffectiveSavingStatus(s.status) !== 'ACTIVE') return false;
-      const sGroup = (s.groupName || '').trim().toLowerCase();
-      const sCenter = (s.centerName || '').trim().toLowerCase();
-      if (sGroup && memGroup && sGroup !== memGroup) return false;
-      if (sCenter && memCenter && sCenter !== memCenter) return false;
-      return true;
-    });
+    const activeSavings = savings.filter(s => getEffectiveSavingStatus(s.status) === 'ACTIVE');
 
     if (memId) {
-      return activeSavings.filter(s => (s.memberId || '').trim().toLowerCase() === memId);
+      const byId = activeSavings.filter(s => isSameMfMemberId(s.memberId, memId));
+      if (byId.length > 0) return byId;
+    }
+
+    if (memAcc) {
+      const byAcc = activeSavings.filter(s => normalizeMfMemberId(s.accountNo) === memAcc);
+      if (byAcc.length > 0) return byAcc;
     }
 
     if (memName) {
-      return activeSavings.filter(
-        s => !(s.memberId || '').trim() && (s.name || '').trim().toLowerCase() === memName
-      );
+      return activeSavings.filter(s => {
+        if (normalizeMfMemberId(s.memberId)) return false;
+        if (normalizeMfText(s.name) !== memName) return false;
+        const sGroup = normalizeMfText(s.groupName);
+        const sCenter = normalizeMfText(s.centerName);
+        if (sGroup && memGroup && sGroup !== memGroup) return false;
+        if (sCenter && memCenter && sCenter !== memCenter) return false;
+        return true;
+      });
     }
 
     return [];
@@ -2942,102 +3417,116 @@ export const MicroFinanceManagement: React.FC = () => {
         <div className="flex items-center justify-between gap-2 overflow-x-auto scrollbar-hide pb-0.5 md:pb-0">
           <div className="flex items-center gap-1 shrink-0">
             {/* 1. Dashboard */}
-            <button
-              type="button"
-              onClick={() => setActiveTab('dashboard')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                activeTab === 'dashboard'
-                  ? 'bg-[#00593B] text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <LayoutDashboard className="w-4 h-4" />
-              <span>Dashboard</span>
-            </button>
+            {canViewDashboard && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('dashboard')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  activeTab === 'dashboard'
+                    ? 'bg-[#00593B] text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <LayoutDashboard className="w-4 h-4" />
+                <span>Dashboard</span>
+              </button>
+            )}
 
             {/* 2. Centers */}
-            <button
-              type="button"
-              onClick={() => setActiveTab('centers')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                activeTab === 'centers'
-                  ? 'bg-[#00593B] text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <MapPin className="w-4 h-4" />
-              <span>Centers</span>
-            </button>
+            {canViewCenters && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('centers')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  activeTab === 'centers'
+                    ? 'bg-[#00593B] text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <MapPin className="w-4 h-4" />
+                <span>Centers</span>
+              </button>
+            )}
 
             {/* 3. Groups */}
-            <button
-              type="button"
-              onClick={() => setActiveTab('groups')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                activeTab === 'groups'
-                  ? 'bg-[#00593B] text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <Users className="w-4 h-4" />
-              <span>Groups</span>
-            </button>
+            {canViewGroups && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('groups')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  activeTab === 'groups'
+                    ? 'bg-[#00593B] text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <Users className="w-4 h-4" />
+                <span>Groups</span>
+              </button>
+            )}
 
             {/* 4. Members */}
-            <button
-              type="button"
-              onClick={() => setActiveTab('members')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                activeTab === 'members'
-                  ? 'bg-[#00593B] text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <UserCheck className="w-4 h-4" />
-              <span>Members</span>
-            </button>
+            {canViewMembers && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('members')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  activeTab === 'members'
+                    ? 'bg-[#00593B] text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <UserCheck className="w-4 h-4" />
+                <span>Members</span>
+              </button>
+            )}
 
             {/* 5. Saving */}
-            <button
-              type="button"
-              onClick={() => setActiveTab('saving')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                activeTab === 'saving'
-                  ? 'bg-[#00593B] text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <PiggyBank className="w-4 h-4" />
-              <span>Saving</span>
-            </button>
+            {canViewSaving && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('saving')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  activeTab === 'saving'
+                    ? 'bg-[#00593B] text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <PiggyBank className="w-4 h-4" />
+                <span>Saving</span>
+              </button>
+            )}
 
             {/* 6. Loan */}
-            <button
-              type="button"
-              onClick={() => setActiveTab('loan')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                activeTab === 'loan'
-                  ? 'bg-[#00593B] text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <HandCoins className="w-4 h-4" />
-              <span>Loan</span>
-            </button>
+            {canViewLoan && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('loan')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  activeTab === 'loan'
+                    ? 'bg-[#00593B] text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <HandCoins className="w-4 h-4" />
+                <span>Loan</span>
+              </button>
+            )}
 
             {/* 7. Reports */}
-            <button
-              type="button"
-              onClick={() => setActiveTab('reports')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                activeTab === 'reports'
-                  ? 'bg-[#00593B] text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <FileText className="w-4 h-4" />
-              <span>Reports</span>
-            </button>
+            {canViewReports && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('reports')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  activeTab === 'reports'
+                    ? 'bg-[#00593B] text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <FileText className="w-4 h-4" />
+                <span>Reports</span>
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
@@ -3058,7 +3547,7 @@ export const MicroFinanceManagement: React.FC = () => {
       {/* ============================================================== */}
       {/* 1. DASHBOARD OVERVIEW (All Menus Summary - Strictly English) */}
       {/* ============================================================== */}
-      {activeTab === 'dashboard' && (
+      {activeTab === 'dashboard' && canViewDashboard && (
         <div className="space-y-4">
           {/* Clean Dashboard Header Bar (Removed Welcome back, ADMIN SYSTEM, and Quick Action) */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
@@ -3489,7 +3978,7 @@ export const MicroFinanceManagement: React.FC = () => {
       {/* ============================================================== */}
       {/* 2. CENTERS MANAGEMENT (Matching image_fd131ba8.png) */}
       {/* ============================================================== */}
-      {activeTab === 'centers' && (
+      {activeTab === 'centers' && canViewCenters && (
         <div className="space-y-4">
           {/* Header Controls */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -3615,7 +4104,7 @@ export const MicroFinanceManagement: React.FC = () => {
       {/* ============================================================== */}
       {/* 3. GROUP MANAGEMENT (Matching image_e80ae620.png) */}
       {/* ============================================================== */}
-      {activeTab === 'groups' && (
+      {activeTab === 'groups' && canViewGroups && (
         <div className="space-y-4">
           {/* Header Controls */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -3752,16 +4241,52 @@ export const MicroFinanceManagement: React.FC = () => {
       {/* ============================================================== */}
       {/* 4. MEMBERS (Matching image_9a145ab7.png) */}
       {/* ============================================================== */}
-      {activeTab === 'members' && (
+      {activeTab === 'members' && canViewMembers && (
         <div className="space-y-4">
           {/* Header */}
-          <div>
-            <h2 className="text-xl font-black text-slate-900">Members</h2>
-            <div className="flex items-center gap-1.5 mt-0.5">
-              <span className="w-2 h-2 rounded-full bg-blue-600 inline-block"></span>
-              <span className="text-[10px] font-black tracking-widest text-slate-400 uppercase">
-                MICROFINANCE SYSTEM
-              </span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-black text-slate-900">Members</h2>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span className="w-2 h-2 rounded-full bg-blue-600 inline-block"></span>
+                <span className="text-[10px] font-black tracking-widest text-slate-400 uppercase">
+                  MICROFINANCE SYSTEM
+                </span>
+              </div>
+            </div>
+
+            {/* Active / Inactive Switcher */}
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 self-start sm:self-auto">
+              {([
+                { key: 'ACTIVE', label: 'Active', count: memberStatusCounts.active },
+                { key: 'INACTIVE', label: 'Inactive', count: memberStatusCounts.inactive }
+              ] as const).map(tab => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setMemberStatusTab(tab.key)}
+                  className={`px-3.5 py-1.5 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                    memberStatusTab === tab.key
+                      ? tab.key === 'INACTIVE'
+                        ? 'bg-white text-rose-600 shadow-2xs'
+                        : 'bg-white text-emerald-700 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <span>{tab.label}</span>
+                  <span
+                    className={`px-1.5 py-0.2 rounded-md text-[10px] font-mono ${
+                      memberStatusTab === tab.key
+                        ? tab.key === 'INACTIVE'
+                          ? 'bg-rose-50 text-rose-700'
+                          : 'bg-emerald-50 text-emerald-700'
+                        : 'bg-slate-200/70 text-slate-600'
+                    }`}
+                  >
+                    {tab.count}
+                  </span>
+                </button>
+              ))}
             </div>
           </div>
 
@@ -3857,9 +4382,9 @@ export const MicroFinanceManagement: React.FC = () => {
 
               <button
                 type="button"
-                onClick={() => showToast('Exporting members to Excel...')}
-                className="p-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 rounded-xl transition-colors cursor-pointer shadow-2xs"
-                title="Download Member List"
+                onClick={handleExportMembersExcel}
+                className="p-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 hover:text-emerald-700 rounded-xl transition-colors cursor-pointer shadow-2xs"
+                title="Download Displayed Members to Excel"
               >
                 <Download className="w-4 h-4" />
               </button>
@@ -3890,11 +4415,14 @@ export const MicroFinanceManagement: React.FC = () => {
                     <th className="py-2 px-3">CENTER</th>
                     <th className="py-2 px-3">GROUP</th>
                     <th className="py-2 px-3 text-center">ROLE</th>
+                    <th className="py-2 px-3 text-center">STATUS</th>
                     <th className="py-2 px-3 text-right">ACTION</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-                  {filteredMembers.map((member, idx) => (
+                  {filteredMembers.map((member, idx) => {
+                    const effMemberStatus = getEffectiveMemberStatus(member.status);
+                    return (
                     <tr key={member.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-2 px-3 text-center text-slate-400 font-bold">{idx + 1}</td>
                       <td className="py-2 px-3 font-mono font-bold text-blue-700">{member.memberId}</td>
@@ -3928,13 +4456,53 @@ export const MicroFinanceManagement: React.FC = () => {
                           {member.role}
                         </span>
                       </td>
+                      <td className="py-2 px-3 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                          effMemberStatus === 'ACTIVE'
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            : 'bg-rose-50 text-rose-700 border border-rose-200'
+                        }`}>
+                          {effMemberStatus}
+                        </span>
+                      </td>
                       <td className="py-2 px-3 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            disabled={isDayEnded}
+                            onClick={() => handleOpenToggleMemberStatus(member)}
+                            className={`p-1 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                              effMemberStatus === 'ACTIVE'
+                                ? 'text-amber-600 hover:text-amber-700 hover:bg-amber-50'
+                                : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'
+                            }`}
+                            title={
+                              isDayEnded
+                                ? 'Day Ended - Action Locked'
+                                : effMemberStatus === 'ACTIVE'
+                                ? 'Deactivate Member'
+                                : 'Activate Member'
+                            }
+                          >
+                            {effMemberStatus === 'ACTIVE' ? (
+                              <UserX className="w-4 h-4" />
+                            ) : (
+                              <UserCheck className="w-4 h-4" />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenViewMember(member)}
+                            className="p-1 text-slate-500 hover:text-blue-700 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer"
+                            title="View Member Details"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
                           <button
                             type="button"
                             disabled={isDayEnded}
                             onClick={() => handleEditMember(member)}
-                            className="p-1 text-slate-400 hover:text-blue-600 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="p-1 text-slate-400 hover:text-emerald-700 rounded-lg hover:bg-emerald-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                             title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Member'}
                           >
                             <Edit2 className="w-4 h-4" />
@@ -3951,12 +4519,13 @@ export const MicroFinanceManagement: React.FC = () => {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
 
                   {filteredMembers.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="py-12 text-center text-slate-400">
-                        No members found matching search.
+                      <td colSpan={9} className="py-12 text-center text-slate-400">
+                        No {memberStatusTab === 'ACTIVE' ? 'active' : 'inactive'} members found matching your filter.
                       </td>
                     </tr>
                   )}
@@ -3970,7 +4539,7 @@ export const MicroFinanceManagement: React.FC = () => {
       {/* ============================================================== */}
       {/* 5. SAVINGS MANAGEMENT (Matching image_a56aee7c.png) */}
       {/* ============================================================== */}
-      {activeTab === 'saving' && (
+      {activeTab === 'saving' && canViewSaving && (
         <div className="space-y-4">
           {/* Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -3984,7 +4553,41 @@ export const MicroFinanceManagement: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Active / Close Switcher */}
+              <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
+                {([
+                  { key: 'ACTIVE', label: 'Active', count: savingStatusCounts.active },
+                  { key: 'CLOSED', label: 'Close', count: savingStatusCounts.closed }
+                ] as const).map(tab => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setSavingStatusTab(tab.key)}
+                    className={`px-3.5 py-1.5 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                      savingStatusTab === tab.key
+                        ? tab.key === 'CLOSED'
+                          ? 'bg-white text-rose-600 shadow-2xs'
+                          : 'bg-white text-emerald-700 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <span>{tab.label}</span>
+                    <span
+                      className={`px-1.5 py-0.2 rounded-md text-[10px] font-mono ${
+                        savingStatusTab === tab.key
+                          ? tab.key === 'CLOSED'
+                            ? 'bg-rose-50 text-rose-700'
+                            : 'bg-emerald-50 text-emerald-700'
+                          : 'bg-slate-200/70 text-slate-600'
+                      }`}
+                    >
+                      {tab.count}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
               <button
                 type="button"
                 onClick={reloadData}
@@ -4003,6 +4606,15 @@ export const MicroFinanceManagement: React.FC = () => {
               >
                 <Upload className="w-3.5 h-3.5" />
                 <span>Bulk Upload</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportSavingsExcel}
+                className="p-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 hover:text-emerald-700 rounded-xl transition-colors cursor-pointer shadow-2xs"
+                title="Download Displayed Savings to Excel"
+              >
+                <Download className="w-4 h-4" />
               </button>
 
               <button
@@ -4102,15 +4714,6 @@ export const MicroFinanceManagement: React.FC = () => {
                   </button>
                 )}
 
-                <select
-                  value={savingStatusFilter}
-                  onChange={e => setSavingStatusFilter(e.target.value)}
-                  className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-hidden"
-                >
-                  <option value="All">All Status</option>
-                  <option value="ACTIVE">Active</option>
-                  <option value="INACTIVE">Inactive</option>
-                </select>
               </div>
             </div>
 
@@ -4139,7 +4742,7 @@ export const MicroFinanceManagement: React.FC = () => {
                       <td className="py-2 px-3 font-mono font-bold text-blue-700">{item.memberId}</td>
                       <td className="py-2 px-3 font-mono font-semibold text-slate-800">{item.accountNo}</td>
                       <td className="py-2 px-3 font-extrabold text-slate-900">{item.name}</td>
-                      <td className="py-2 px-3 text-slate-600">{item.groupName}</td>
+                      <td className="py-2 px-3 text-slate-600">{item.groupName || memberLookupById.find(item.memberId, item.accountNo)?.samuhName || '-'}</td>
                       <td className="py-2 px-3 text-slate-700 font-mono font-bold">
                         {resolveSavingOpenDateBs(item) || item.date || '2083-06-29'}
                       </td>
@@ -4157,6 +4760,29 @@ export const MicroFinanceManagement: React.FC = () => {
                       </td>
                       <td className="py-2 px-3 text-right">
                         <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            disabled={isDayEnded}
+                            onClick={() => handleOpenToggleSavingStatus(item)}
+                            className={`p-1 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                              effectiveStatus === 'ACTIVE'
+                                ? 'text-amber-600 hover:text-amber-700 hover:bg-amber-50'
+                                : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'
+                            }`}
+                            title={
+                              isDayEnded
+                                ? 'Day Ended - Action Locked'
+                                : effectiveStatus === 'ACTIVE'
+                                ? 'Deactivate / Close Saving Account'
+                                : 'Activate Saving Account'
+                            }
+                          >
+                            {effectiveStatus === 'ACTIVE' ? (
+                              <Ban className="w-4 h-4" />
+                            ) : (
+                              <CheckCircle2 className="w-4 h-4" />
+                            )}
+                          </button>
                           <button
                             type="button"
                             onClick={() => handleOpenViewSaving(item)}
@@ -4196,7 +4822,9 @@ export const MicroFinanceManagement: React.FC = () => {
                           <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center">
                             <Search className="w-6 h-6" />
                           </div>
-                          <p className="text-sm font-extrabold text-slate-800">No savings records found.</p>
+                          <p className="text-sm font-extrabold text-slate-800">
+                            No {savingStatusTab === 'ACTIVE' ? 'active' : 'closed'} saving accounts found.
+                          </p>
                           <p className="text-xs text-slate-400">Try adjusting your filters or search term.</p>
                         </div>
                       </td>
@@ -4212,7 +4840,7 @@ export const MicroFinanceManagement: React.FC = () => {
       {/* ============================================================== */}
       {/* 6. LOAN PORTFOLIO (Matching image_f59f8220.png) */}
       {/* ============================================================== */}
-      {activeTab === 'loan' && (
+      {activeTab === 'loan' && canViewLoan && (
         <div className="space-y-4">
           {/* Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -4271,6 +4899,15 @@ export const MicroFinanceManagement: React.FC = () => {
               >
                 <Upload className="w-3.5 h-3.5" />
                 <span>Bulk Upload</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportLoansExcel}
+                className="p-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 hover:text-emerald-700 rounded-xl transition-colors cursor-pointer shadow-2xs"
+                title="Download Displayed Loans to Excel"
+              >
+                <Download className="w-4 h-4" />
               </button>
 
               <button
@@ -4529,52 +5166,73 @@ export const MicroFinanceManagement: React.FC = () => {
       {/* ============================================================== */}
       {/* 7. REPORTS (Matching image_ff5945f2.png) */}
       {/* ============================================================== */}
-      {activeTab === 'reports' && (
+      {activeTab === 'reports' && canViewReports && (
         <div className="space-y-2.5">
-          {/* Top Switcher Tabs: Collection Sheet vs Signature Sheet vs Meeting Minute */}
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setReportTab('collection')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
-                reportTab === 'collection'
-                  ? 'bg-white text-blue-700 shadow-sm border border-slate-200'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              <LayoutDashboard className="w-4 h-4" />
-              <span>Collection Sheet</span>
-            </button>
+          {/* Top Switcher Tabs: Collection Sheet vs Signature Sheet vs Meeting Minute vs ID Card */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {canViewCollectionReport && (
+              <button
+                type="button"
+                onClick={() => setReportTab('collection')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
+                  reportTab === 'collection'
+                    ? 'bg-white text-blue-700 shadow-sm border border-slate-200'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                <LayoutDashboard className="w-4 h-4" />
+                <span>Collection Sheet</span>
+              </button>
+            )}
 
-            <button
-              type="button"
-              onClick={() => setReportTab('signature')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
-                reportTab === 'signature'
-                  ? 'bg-white text-blue-700 shadow-sm border border-slate-200'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              <Printer className="w-4 h-4" />
-              <span>Signature Sheet</span>
-            </button>
+            {canViewSignatureReport && (
+              <button
+                type="button"
+                onClick={() => setReportTab('signature')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
+                  reportTab === 'signature'
+                    ? 'bg-white text-blue-700 shadow-sm border border-slate-200'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                <Printer className="w-4 h-4" />
+                <span>Signature Sheet</span>
+              </button>
+            )}
 
-            <button
-              type="button"
-              onClick={() => setReportTab('meeting-minutes')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
-                reportTab === 'meeting-minutes'
-                  ? 'bg-white text-emerald-800 shadow-sm border border-slate-200'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              <FileText className="w-4 h-4 text-emerald-600" />
-              <span>Meeting Minute</span>
-            </button>
+            {canViewMeetingMinutes && (
+              <button
+                type="button"
+                onClick={() => setReportTab('meeting-minutes')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
+                  reportTab === 'meeting-minutes'
+                    ? 'bg-white text-emerald-800 shadow-sm border border-slate-200'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                <FileText className="w-4 h-4 text-emerald-600" />
+                <span>Meeting Minute</span>
+              </button>
+            )}
+
+            {canViewIdCard && (
+              <button
+                type="button"
+                onClick={() => setReportTab('id-card')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
+                  reportTab === 'id-card'
+                    ? 'bg-white text-blue-700 shadow-sm border border-slate-200'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                <CreditCard className="w-4 h-4 text-blue-600" />
+                <span>ID Card</span>
+              </button>
+            )}
           </div>
 
           {/* TAB 1: COLLECTION SHEET */}
-          {reportTab === 'collection' && (
+          {reportTab === 'collection' && canViewCollectionReport && (
             <>
               {/* Filter Card with Year, Month, Day, Center, Group, View */}
               <div className="bg-white rounded-2xl border border-slate-200 px-3 py-2.5 shadow-2xs">
@@ -4822,7 +5480,7 @@ export const MicroFinanceManagement: React.FC = () => {
           )}
 
           {/* TAB 2: SIGNATURE SHEET (Permanent Table with Filters) */}
-          {reportTab === 'signature' && (
+          {reportTab === 'signature' && canViewSignatureReport && (
             <div className="space-y-2.5">
               {/* Signature Sheet Filter Card: Compact Year, Month, Day, Center, Group, Employee, and small View button */}
               <div className="bg-white rounded-2xl border border-slate-200 px-3 py-2.5 shadow-2xs">
@@ -5108,7 +5766,7 @@ export const MicroFinanceManagement: React.FC = () => {
           )}
 
           {/* TAB 3: GROUP MEETING & MINUTES */}
-          {reportTab === 'meeting-minutes' && (
+          {reportTab === 'meeting-minutes' && canViewMeetingMinutes && (
             <GroupMeetingMinutesModule
               groups={groups}
               members={members}
@@ -5118,6 +5776,51 @@ export const MicroFinanceManagement: React.FC = () => {
               logoUrl={logoUrl}
               onToast={showToast}
               branchId={branch?.id}
+            />
+          )}
+
+          {/* TAB 4: MEMBER ID CARD GENERATOR */}
+          {reportTab === 'id-card' && canViewIdCard && (
+            <MemberIdCardModule
+              members={members}
+              centers={centers}
+              groups={groups}
+              logoUrl={logoUrl}
+              organizationNameNp={
+                systemSettings?.systemNameNp ||
+                authSettings?.systemNameNp ||
+                'रतौली बचत तथा ऋण सहकारी संस्था लिमिटेड'
+              }
+              organizationName={
+                systemSettings?.systemName ||
+                authSettings?.systemName ||
+                'RATAULI SAVING & CREDIT CO-OPERATIVE LIMITED'
+              }
+              organizationAddress={
+                systemSettings?.addressNp ||
+                systemSettings?.address ||
+                authSettings?.addressNp ||
+                authSettings?.address ||
+                'पिपरा गाउँपालिका -६, रतौली, महोत्तरी'
+              }
+              organizationPhone={
+                systemSettings?.phone ||
+                authSettings?.phone ||
+                '+977-044-000000'
+              }
+              registrationNo={
+                systemSettings?.registrationNo ||
+                authSettings?.registrationNo ||
+                '421/054/055'
+              }
+              panNo={
+                systemSettings?.panNo ||
+                authSettings?.panNo ||
+                '302488825'
+              }
+              defaultIssueDate={getTodayBsDate()}
+              onMembersUpdated={setMembers}
+              onToast={showToast}
             />
           )}
         </div>
@@ -5448,7 +6151,15 @@ export const MicroFinanceManagement: React.FC = () => {
                   <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">CENTER</label>
                   <select
                     value={memberForm.centerId}
-                    onChange={e => setMemberForm({ ...memberForm, centerId: e.target.value })}
+                    onChange={e => {
+                      const nextCenterId = e.target.value;
+                      const nextCenterGroups = nextCenterId ? getGroupsForCenterFilter(nextCenterId) : [];
+                      setMemberForm(prev => ({
+                        ...prev,
+                        centerId: nextCenterId,
+                        samuhId: nextCenterGroups[0]?.id || ''
+                      }));
+                    }}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
                   >
                     {sortedCentersByMeetingDay.map(c => (
@@ -5458,15 +6169,24 @@ export const MicroFinanceManagement: React.FC = () => {
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">GROUP</label>
-                  <select
-                    value={memberForm.samuhId}
-                    onChange={e => setMemberForm({ ...memberForm, samuhId: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
-                  >
-                    {groups.map(g => (
-                      <option key={g.id} value={g.id}>{g.name}</option>
-                    ))}
-                  </select>
+                  {(() => {
+                    const centerGroups = memberForm.centerId ? getGroupsForCenterFilter(memberForm.centerId) : [];
+                    return (
+                      <select
+                        value={memberForm.samuhId}
+                        onChange={e => setMemberForm({ ...memberForm, samuhId: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
+                      >
+                        {centerGroups.length === 0 ? (
+                          <option value="">No groups in this center</option>
+                        ) : (
+                          centerGroups.map(g => (
+                            <option key={g.id} value={g.id}>{g.name}</option>
+                          ))
+                        )}
+                      </select>
+                    );
+                  })()}
                 </div>
               </div>
 
@@ -6433,31 +7153,31 @@ export const MicroFinanceManagement: React.FC = () => {
             </div>
 
             <div>
-              <h3 className="text-base font-extrabold text-slate-900">Delete Loan Record?</h3>
+              <h3 className="text-base font-extrabold text-slate-900">Are you sure you want to delete?</h3>
               <p className="text-xs text-slate-500 mt-1">
-                Are you sure you want to delete loan account <strong className="font-mono text-slate-800">{selectedLoanToDelete.accountNo}</strong> for <strong>{selectedLoanToDelete.name}</strong>?
+                Loan account <strong className="font-mono text-slate-800">{selectedLoanToDelete.accountNo}</strong> for <strong>{selectedLoanToDelete.name}</strong> will be permanently deleted.
               </p>
               <div className="mt-2.5 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-[11px] text-rose-700 font-semibold">
-                Amount: NPR {selectedLoanToDelete.loanAmount.toLocaleString()}
+                Member ID: {selectedLoanToDelete.memberId} • Amount: NPR {selectedLoanToDelete.loanAmount.toLocaleString()}
               </div>
             </div>
 
-            <div className="flex justify-center gap-2 pt-2">
+            <div className="flex justify-center gap-3 pt-2">
               <button
                 type="button"
-                onClick={() => setIsDeleteLoanModalOpen(false)}
-                className="px-4 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer"
+                onClick={() => { setIsDeleteLoanModalOpen(false); setSelectedLoanToDelete(null); }}
+                className="min-w-[96px] px-5 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer transition-colors"
               >
-                Cancel
+                No
               </button>
               <button
                 type="button"
                 disabled={isDayEnded}
                 onClick={handleConfirmDeleteLoan}
                 title={isDayEnded ? 'Day Ended - Action Locked' : 'Confirm Delete Loan'}
-                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="min-w-[96px] px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Yes, Delete
+                Yes
               </button>
             </div>
           </div>
@@ -7306,11 +8026,11 @@ export const MicroFinanceManagement: React.FC = () => {
                     <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">STATUS</label>
                     <select
                       value={getEffectiveSavingStatus(editSavingForm.status)}
-                      onChange={e => setEditSavingForm({ ...editSavingForm, status: e.target.value as 'ACTIVE' | 'INACTIVE' })}
+                      onChange={e => setEditSavingForm({ ...editSavingForm, status: e.target.value as 'ACTIVE' | 'CLOSED' })}
                       className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 cursor-pointer"
                     >
                       <option value="ACTIVE">ACTIVE</option>
-                      <option value="INACTIVE">INACTIVE</option>
+                      <option value="CLOSED">CLOSED</option>
                     </select>
                   </div>
                 </div>
@@ -7371,31 +8091,31 @@ export const MicroFinanceManagement: React.FC = () => {
             </div>
 
             <div>
-              <h3 className="text-base font-extrabold text-slate-900">Delete Saving Record?</h3>
+              <h3 className="text-base font-extrabold text-slate-900">Are you sure you want to delete?</h3>
               <p className="text-xs text-slate-500 mt-1">
-                Are you sure you want to delete saving record <strong className="font-mono text-slate-800">{selectedSavingToDelete.accountNo}</strong> for <strong>{selectedSavingToDelete.name}</strong>?
+                Saving record <strong className="font-mono text-slate-800">{selectedSavingToDelete.accountNo}</strong> for <strong>{selectedSavingToDelete.name}</strong> will be permanently deleted.
               </p>
               <div className="mt-2.5 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-[11px] text-rose-700 font-semibold">
                 Member ID: {selectedSavingToDelete.memberId} • Date: {selectedSavingToDelete.dateBs || selectedSavingToDelete.date} • Amount: NPR {selectedSavingToDelete.amount.toLocaleString()}
               </div>
             </div>
 
-            <div className="flex justify-center gap-2 pt-2">
+            <div className="flex justify-center gap-3 pt-2">
               <button
                 type="button"
                 onClick={() => { setIsDeleteSavingModalOpen(false); setSelectedSavingToDelete(null); }}
-                className="px-4 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer"
+                className="min-w-[96px] px-5 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer transition-colors"
               >
-                Cancel
+                No
               </button>
               <button
                 type="button"
                 disabled={isDayEnded}
                 onClick={handleConfirmDeleteSaving}
                 title={isDayEnded ? 'Day Ended - Action Locked' : 'Confirm Delete Saving'}
-                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="min-w-[96px] px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Yes, Delete
+                Yes
               </button>
             </div>
           </div>
@@ -7455,27 +8175,33 @@ export const MicroFinanceManagement: React.FC = () => {
             </div>
 
             <div>
-              <h3 className="text-base font-extrabold text-slate-900">Delete Center?</h3>
+              <h3 className="text-base font-extrabold text-slate-900">Are you sure you want to delete?</h3>
               <p className="text-xs text-slate-500 mt-1">
-                Are you sure you want to delete center <strong className="font-mono text-slate-800">{selectedCenterToDelete.code}</strong> ({selectedCenterToDelete.name})?
+                Center <strong className="font-mono text-slate-800">{selectedCenterToDelete.code}</strong> (<strong>{selectedCenterToDelete.name}</strong>) will be permanently deleted.
               </p>
+              {selectedCenterToDelete.location && (
+                <div className="mt-2.5 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-[11px] text-rose-700 font-semibold">
+                  Location: {selectedCenterToDelete.location} • Meeting: {selectedCenterToDelete.meetingDay}
+                </div>
+              )}
             </div>
 
-            <div className="flex justify-center gap-2 pt-2">
+            <div className="flex justify-center gap-3 pt-2">
               <button
                 type="button"
                 onClick={() => { setIsDeleteCenterModalOpen(false); setSelectedCenterToDelete(null); }}
-                className="px-4 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer"
+                className="min-w-[96px] px-5 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer transition-colors"
               >
-                Cancel
+                No
               </button>
               <button
                 type="button"
                 disabled={isDayEnded}
                 onClick={handleConfirmDeleteCenter}
-                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title={isDayEnded ? 'Day Ended - Action Locked' : 'Confirm Delete Center'}
+                className="min-w-[96px] px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Yes, Delete
+                Yes
               </button>
             </div>
           </div>
@@ -7493,32 +8219,282 @@ export const MicroFinanceManagement: React.FC = () => {
             </div>
 
             <div>
-              <h3 className="text-base font-extrabold text-slate-900">Delete Group?</h3>
+              <h3 className="text-base font-extrabold text-slate-900">Are you sure you want to delete?</h3>
               <p className="text-xs text-slate-500 mt-1">
-                Are you sure you want to delete group <strong className="font-mono text-slate-800">{selectedGroupToDelete.code}</strong> ({selectedGroupToDelete.name})?
+                Group <strong className="font-mono text-slate-800">{selectedGroupToDelete.code}</strong> (<strong>{selectedGroupToDelete.name}</strong>) will be permanently deleted.
               </p>
+              {selectedGroupToDelete.centerName && (
+                <div className="mt-2.5 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-[11px] text-rose-700 font-semibold">
+                  Center: {selectedGroupToDelete.centerName}
+                </div>
+              )}
             </div>
 
-            <div className="flex justify-center gap-2 pt-2">
+            <div className="flex justify-center gap-3 pt-2">
               <button
                 type="button"
                 onClick={() => { setIsDeleteGroupModalOpen(false); setSelectedGroupToDelete(null); }}
-                className="px-4 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer"
+                className="min-w-[96px] px-5 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer transition-colors"
               >
-                Cancel
+                No
               </button>
               <button
                 type="button"
                 disabled={isDayEnded}
                 onClick={handleConfirmDeleteGroup}
-                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title={isDayEnded ? 'Day Ended - Action Locked' : 'Confirm Delete Group'}
+                className="min-w-[96px] px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Yes, Delete
+                Yes
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* ============================================================== */}
+      {/* MODAL: VIEW MEMBER DETAILS */}
+      {/* ============================================================== */}
+      {isViewMemberModalOpen && selectedMemberToView && (() => {
+        const effStatus = getEffectiveMemberStatus(selectedMemberToView.status);
+        const memberActiveSavings = getMemberActiveSavings(selectedMemberToView);
+        const recurringSaving = memberActiveSavings.reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+        const memberActiveLoans = loans.filter(
+          l => l.status !== 'CLOSED' && doesLoanBelongToMember(l, selectedMemberToView)
+        );
+        const activeLoanTotal = memberActiveLoans.reduce((sum, l) => sum + (Number(l.loanAmount) || 0), 0);
+
+        return (
+          <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-xs flex justify-center items-center p-4">
+            <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-200">
+              <div className="bg-[#1d4ed8] px-6 py-4 flex justify-between items-center text-white">
+                <div className="flex items-center gap-2">
+                  <User className="w-5 h-5" />
+                  <h3 className="text-sm font-extrabold tracking-wide">Member Details</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setIsViewMemberModalOpen(false); setSelectedMemberToView(null); }}
+                  className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4 text-xs">
+                <div className="flex items-center gap-4 pb-4 border-b border-slate-100">
+                  {selectedMemberToView.photoUrl ? (
+                    <img
+                      src={selectedMemberToView.photoUrl}
+                      alt={selectedMemberToView.name}
+                      className="w-16 h-16 rounded-2xl object-cover border border-slate-200 shadow-xs shrink-0"
+                    />
+                  ) : (
+                    <div className="w-16 h-16 rounded-2xl bg-blue-100 text-blue-800 font-black text-xl flex items-center justify-center border border-blue-200 shrink-0">
+                      {selectedMemberToView.name.charAt(0)}
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h4 className="text-base font-black text-slate-900 truncate">{selectedMemberToView.name}</h4>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                        effStatus === 'ACTIVE'
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : 'bg-rose-50 text-rose-700 border border-rose-200'
+                      }`}>
+                        {effStatus}
+                      </span>
+                    </div>
+                    <div className="text-blue-700 font-mono font-bold mt-0.5">
+                      ID: {selectedMemberToView.memberId} • {selectedMemberToView.role}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase">Center</div>
+                    <div className="font-bold text-slate-800 mt-0.5">{selectedMemberToView.centerName || '-'}</div>
+                  </div>
+                  <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase">Group</div>
+                    <div className="font-bold text-slate-800 mt-0.5">{selectedMemberToView.samuhName || '-'}</div>
+                  </div>
+                  <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase">Branch</div>
+                    <div className="font-bold text-slate-800 mt-0.5">{selectedMemberToView.branch || '-'}</div>
+                  </div>
+                  <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase">Savings Account No.</div>
+                    <div className="font-mono font-bold text-slate-800 mt-0.5">{selectedMemberToView.savingsAccountNo || '-'}</div>
+                  </div>
+                  <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase">Citizenship No.</div>
+                    <div className="font-mono font-bold text-slate-800 mt-0.5">{selectedMemberToView.citizenshipNo || '-'}</div>
+                  </div>
+                  <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase">Mobile Number</div>
+                    <div className="font-mono font-bold text-slate-800 mt-0.5">{selectedMemberToView.mobile || '-'}</div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <div className="p-3 bg-emerald-50/70 rounded-xl border border-emerald-200">
+                    <div className="text-[10px] font-bold text-emerald-700 uppercase">Active Savings ({memberActiveSavings.length})</div>
+                    <div className="text-sm font-black font-mono text-emerald-800 mt-0.5">
+                      NPR {recurringSaving.toLocaleString()}
+                    </div>
+                  </div>
+                  <div className="p-3 bg-blue-50/70 rounded-xl border border-blue-200">
+                    <div className="text-[10px] font-bold text-blue-700 uppercase">Active Loans ({memberActiveLoans.length})</div>
+                    <div className="text-sm font-black font-mono text-blue-800 mt-0.5">
+                      NPR {activeLoanTotal.toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+                {!isDayEnded && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = selectedMemberToView;
+                      setIsViewMemberModalOpen(false);
+                      setSelectedMemberToView(null);
+                      handleEditMember(target);
+                    }}
+                    className="px-4 py-2 border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl font-bold cursor-pointer inline-flex items-center gap-1.5"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                    <span>Edit</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => { setIsViewMemberModalOpen(false); setSelectedMemberToView(null); }}
+                  className="px-5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ============================================================== */}
+      {/* MODAL: DEACTIVATE / ACTIVATE MEMBER CONFIRMATION */}
+      {/* ============================================================== */}
+      {isToggleMemberStatusModalOpen && selectedMemberToToggleStatus && (() => {
+        const isCurrentlyActive = getEffectiveMemberStatus(selectedMemberToToggleStatus.status) === 'ACTIVE';
+        return (
+          <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-xs flex justify-center items-center p-4">
+            <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden p-6 text-center space-y-4 animate-in zoom-in-95 duration-200">
+              <div className={`w-14 h-14 rounded-full flex items-center justify-center mx-auto ${
+                isCurrentlyActive ? 'bg-amber-100 text-amber-600' : 'bg-emerald-100 text-emerald-600'
+              }`}>
+                {isCurrentlyActive ? <UserX className="w-7 h-7" /> : <UserCheck className="w-7 h-7" />}
+              </div>
+
+              <div>
+                <h3 className="text-base font-extrabold text-slate-900">
+                  {isCurrentlyActive ? 'Are you sure you want to deactivate?' : 'Are you sure you want to activate?'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Member <strong className="font-mono text-slate-800">{selectedMemberToToggleStatus.memberId}</strong> (<strong>{selectedMemberToToggleStatus.name}</strong>) will be moved to the <strong>{isCurrentlyActive ? 'Inactive' : 'Active'}</strong> list.
+                </p>
+                {(selectedMemberToToggleStatus.centerName || selectedMemberToToggleStatus.samuhName) && (
+                  <div className={`mt-2.5 p-2.5 rounded-xl text-[11px] font-semibold border ${
+                    isCurrentlyActive
+                      ? 'bg-amber-50 border-amber-200 text-amber-800'
+                      : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  }`}>
+                    {selectedMemberToToggleStatus.centerName}
+                    {selectedMemberToToggleStatus.centerName && selectedMemberToToggleStatus.samuhName ? ' • ' : ''}
+                    {selectedMemberToToggleStatus.samuhName}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => { setIsToggleMemberStatusModalOpen(false); setSelectedMemberToToggleStatus(null); }}
+                  className="min-w-[96px] px-5 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer transition-colors"
+                >
+                  No
+                </button>
+                <button
+                  type="button"
+                  disabled={isDayEnded}
+                  onClick={handleConfirmToggleMemberStatus}
+                  className={`min-w-[96px] px-5 py-2 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                    isCurrentlyActive ? 'bg-amber-600 hover:bg-amber-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                  }`}
+                >
+                  Yes
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ============================================================== */}
+      {/* MODAL: DEACTIVATE / ACTIVATE SAVING ACCOUNT CONFIRMATION */}
+      {/* ============================================================== */}
+      {isToggleSavingStatusModalOpen && selectedSavingToToggleStatus && (() => {
+        const isCurrentlyActive = getEffectiveSavingStatus(selectedSavingToToggleStatus.status) === 'ACTIVE';
+        return (
+          <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-xs flex justify-center items-center p-4">
+            <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden p-6 text-center space-y-4 animate-in zoom-in-95 duration-200">
+              <div className={`w-14 h-14 rounded-full flex items-center justify-center mx-auto ${
+                isCurrentlyActive ? 'bg-amber-100 text-amber-600' : 'bg-emerald-100 text-emerald-600'
+              }`}>
+                {isCurrentlyActive ? <Ban className="w-7 h-7" /> : <CheckCircle2 className="w-7 h-7" />}
+              </div>
+
+              <div>
+                <h3 className="text-base font-extrabold text-slate-900">
+                  {isCurrentlyActive ? 'Are you sure you want to deactivate?' : 'Are you sure you want to activate?'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Saving account <strong className="font-mono text-slate-800">{selectedSavingToToggleStatus.accountNo}</strong> (<strong>{selectedSavingToToggleStatus.name}</strong>) will be moved to the <strong>{isCurrentlyActive ? 'Close' : 'Active'}</strong> list.
+                </p>
+                <div className={`mt-2.5 p-2.5 rounded-xl text-[11px] font-semibold border ${
+                  isCurrentlyActive
+                    ? 'bg-amber-50 border-amber-200 text-amber-800'
+                    : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                }`}>
+                  Member ID: {selectedSavingToToggleStatus.memberId} • Recurring: NPR {selectedSavingToToggleStatus.amount.toLocaleString()}
+                  {selectedSavingToToggleStatus.groupName ? ` • ${selectedSavingToToggleStatus.groupName}` : ''}
+                </div>
+              </div>
+
+              <div className="flex justify-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => { setIsToggleSavingStatusModalOpen(false); setSelectedSavingToToggleStatus(null); }}
+                  className="min-w-[96px] px-5 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer transition-colors"
+                >
+                  No
+                </button>
+                <button
+                  type="button"
+                  disabled={isDayEnded}
+                  onClick={handleConfirmToggleSavingStatus}
+                  className={`min-w-[96px] px-5 py-2 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                    isCurrentlyActive ? 'bg-amber-600 hover:bg-amber-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                  }`}
+                >
+                  Yes
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ============================================================== */}
       {/* MODAL: DELETE MEMBER CONFIRMATION */}
@@ -7531,27 +8507,33 @@ export const MicroFinanceManagement: React.FC = () => {
             </div>
 
             <div>
-              <h3 className="text-base font-extrabold text-slate-900">Delete Member?</h3>
+              <h3 className="text-base font-extrabold text-slate-900">Are you sure you want to delete?</h3>
               <p className="text-xs text-slate-500 mt-1">
-                Are you sure you want to delete member <strong className="font-mono text-slate-800">{selectedMemberToDelete.memberId}</strong> (<strong>{selectedMemberToDelete.name}</strong>)?
+                Member <strong className="font-mono text-slate-800">{selectedMemberToDelete.memberId}</strong> (<strong>{selectedMemberToDelete.name}</strong>) will be permanently deleted.
               </p>
+              {(selectedMemberToDelete.centerName || selectedMemberToDelete.samuhName) && (
+                <div className="mt-2.5 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-[11px] text-rose-700 font-semibold">
+                  {selectedMemberToDelete.centerName}{selectedMemberToDelete.centerName && selectedMemberToDelete.samuhName ? ' • ' : ''}{selectedMemberToDelete.samuhName}
+                </div>
+              )}
             </div>
 
-            <div className="flex justify-center gap-2 pt-2">
+            <div className="flex justify-center gap-3 pt-2">
               <button
                 type="button"
                 onClick={() => { setIsDeleteMemberModalOpen(false); setSelectedMemberToDelete(null); }}
-                className="px-4 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer"
+                className="min-w-[96px] px-5 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer transition-colors"
               >
-                Cancel
+                No
               </button>
               <button
                 type="button"
                 disabled={isDayEnded}
                 onClick={handleConfirmDeleteMember}
-                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title={isDayEnded ? 'Day Ended - Action Locked' : 'Confirm Delete Member'}
+                className="min-w-[96px] px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Yes, Delete
+                Yes
               </button>
             </div>
           </div>
@@ -7678,6 +8660,42 @@ export const MicroFinanceManagement: React.FC = () => {
                     ? `Upload File (${bulkParsedRows.length})`
                     : 'Upload File'}
                 </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL: BULK UPLOAD SUCCESS NARRATION */}
+      {/* ============================================================== */}
+      {bulkUploadSuccess && (
+        <div className="fixed inset-0 z-[10000] bg-slate-950/75 backdrop-blur-xs flex justify-center items-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-emerald-200 overflow-hidden p-6 text-center space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="w-14 h-14 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
+              <CheckCircle2 className="w-8 h-8" />
+            </div>
+
+            <div className="space-y-1.5">
+              <h3 className="text-base font-extrabold text-slate-900">Data Successfully Uploaded</h3>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                <strong>{bulkUploadSuccess.count}</strong> {bulkUploadSuccess.entityType} record(s) have been successfully uploaded and saved
+                {bulkUploadSuccess.fileName ? ` from "${bulkUploadSuccess.fileName}"` : ''}.
+              </p>
+              {bulkUploadSuccess.skippedCount && bulkUploadSuccess.skippedCount > 0 && (
+                <div className="mt-2 p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-800 font-semibold">
+                  {bulkUploadSuccess.skippedCount} duplicate / unclosed loan row(s) were skipped.
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-center pt-1">
+              <button
+                type="button"
+                onClick={() => setBulkUploadSuccess(null)}
+                className="min-w-[120px] px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors"
+              >
+                OK
               </button>
             </div>
           </div>

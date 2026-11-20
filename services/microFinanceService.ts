@@ -64,7 +64,7 @@ export interface MFSavingsRecord {
   dateBs?: string;
   amount: number;
   savingType: 'Normal Saving' | 'Recurring Saving' | 'Compulsory' | 'Optional' | 'Fixed Deposit' | string;
-  status: 'ACTIVE' | 'INACTIVE' | 'PAID' | 'DUE' | 'PENDING';
+  status: 'ACTIVE' | 'CLOSED' | 'INACTIVE' | 'PAID' | 'DUE' | 'PENDING';
   collectedBy?: string;
   createdBy?: string;
   createdByName?: string;
@@ -237,17 +237,24 @@ export const normalizeLoanProductKey = (product?: string): string =>
     .trim()
     .toLowerCase();
 
+const normalizeDuplicateMemberId = (val?: string): string =>
+  toEnglishDigits(String(val || ''))
+    .replace(/\s+/g, '')
+    .trim()
+    .toLowerCase()
+    .replace(/^0+(?=\d)/, '');
+
 export const findUnclosedDuplicateLoan = (
   existingLoans: MFLoanRecord[],
   memberId: string,
   loanProduct: string
 ): MFLoanRecord | undefined => {
-  const memKey = String(memberId || '').trim().toLowerCase();
+  const memKey = normalizeDuplicateMemberId(memberId);
   const prodKey = normalizeLoanProductKey(loanProduct);
   if (!memKey || !prodKey) return undefined;
   return existingLoans.find(l => {
     if (l.status === 'CLOSED') return false;
-    const lMemKey = String(l.memberId || '').trim().toLowerCase();
+    const lMemKey = normalizeDuplicateMemberId(l.memberId);
     const lProdKey = normalizeLoanProductKey(l.loanProduct);
     return lMemKey === memKey && lProdKey === prodKey;
   });
@@ -754,7 +761,7 @@ const mapRowToSaving = (r: Record<string, unknown>): MFSavingsRecord => ({
   savingType: String(r.saving_type || 'Compulsory'),
   status: ((): MFSavingsRecord['status'] => {
     const raw = String(r.status || '').toUpperCase();
-    if (raw === 'INACTIVE' || raw === 'DUE' || raw === 'PENDING') return 'INACTIVE';
+    if (raw === 'CLOSED' || raw === 'INACTIVE' || raw === 'DUE' || raw === 'PENDING') return 'CLOSED';
     return 'ACTIVE';
   })(),
   collectedBy: r.collected_by ? String(r.collected_by) : undefined,
@@ -873,14 +880,85 @@ const mapRowToSigSheet = (r: Record<string, unknown>): MFSignatureSheet => ({
   createdAt: String(r.created_at || '')
 });
 
+const safeSetLocalStorage = (key: string, value: unknown): void => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (err) {
+    console.warn(`localStorage write skipped for ${key}:`, err);
+  }
+};
+
 const bgUpsert = async (table: string, rows: Record<string, unknown>[]): Promise<void> => {
   if (!supabase || rows.length === 0) return;
+  const CHUNK_SIZE = 500;
   try {
-    const { error } = await supabase.from(table).upsert(rows, { onConflict: 'id' });
-    if (error) console.warn(`Supabase ${table} upsert warning:`, error.message);
+    for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+      const chunk = rows.slice(i, i + CHUNK_SIZE);
+      const { error } = await supabase.from(table).upsert(chunk, { onConflict: 'id' });
+      if (error) console.warn(`Supabase ${table} upsert warning:`, error.message);
+    }
   } catch (err) {
     console.warn(`Supabase ${table} upsert failed:`, err);
   }
+};
+
+const fetchAllRowsPaginated = async (
+  table: string,
+  options?: {
+    orderColumn?: string;
+    filter?: { column: string; op: 'eq' | 'neq'; value: string };
+  }
+): Promise<{ data: Record<string, unknown>[] | null; error: { message: string } | null }> => {
+  if (!supabase) return { data: null, error: null };
+  const PAGE_SIZE = 1000;
+  const orderCol = options?.orderColumn || 'created_at';
+
+  const runPaged = async (useOrderCol: boolean): Promise<{ data: Record<string, unknown>[] | null; error: { message: string } | null }> => {
+    const allRows: Record<string, unknown>[] = [];
+    const seenIds = new Set<string>();
+    let from = 0;
+
+    while (from < 50000) {
+      let query = supabase.from(table).select('*');
+      if (options?.filter) {
+        if (options.filter.op === 'eq') {
+          query = query.eq(options.filter.column, options.filter.value);
+        } else {
+          query = query.neq(options.filter.column, options.filter.value);
+        }
+      }
+      if (useOrderCol) {
+        query = query.order(orderCol, { ascending: false }).order('id', { ascending: false });
+      } else {
+        query = query.order('id', { ascending: false });
+      }
+
+      const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
+      if (error) return { data: null, error };
+      const page = Array.isArray(data) ? (data as Record<string, unknown>[]) : [];
+      page.forEach(row => {
+        const rowId = row?.id !== undefined && row?.id !== null ? String(row.id) : '';
+        if (rowId) {
+          if (!seenIds.has(rowId)) {
+            seenIds.add(rowId);
+            allRows.push(row);
+          }
+        } else {
+          allRows.push(row);
+        }
+      });
+
+      if (page.length < PAGE_SIZE) break;
+      from += PAGE_SIZE;
+    }
+
+    return { data: allRows, error: null };
+  };
+
+  const primary = await runPaged(true);
+  if (!primary.error) return primary;
+  console.warn(`Supabase ${table} ordered paginated select failed, retrying by id:`, primary.error.message);
+  return await runPaged(false);
 };
 
 const bgDelete = async (table: string, id: string): Promise<void> => {
@@ -1137,11 +1215,14 @@ export const microFinanceService = {
       if (data !== null) {
         const parsed = JSON.parse(data);
         if (Array.isArray(parsed)) {
-          return parsed.map((s: MFSavingsRecord, idx: number) => ({
-            ...s,
-            status: (String(s.status || '').toUpperCase() === 'INACTIVE' || String(s.status || '').toUpperCase() === 'DUE' || String(s.status || '').toUpperCase() === 'PENDING') ? 'INACTIVE' : 'ACTIVE',
-            dateBs: s.dateBs || (s.date && /^20[5-9]\d-/.test(normalizeBsDate(s.date)) ? normalizeBsDate(s.date) : (DEFAULT_SAVINGS[idx]?.dateBs || '2083-06-29'))
-          }));
+          return parsed.map((s: MFSavingsRecord, idx: number) => {
+            const rawStatus = String(s.status || '').toUpperCase();
+            return {
+              ...s,
+              status: (rawStatus === 'CLOSED' || rawStatus === 'INACTIVE' || rawStatus === 'DUE' || rawStatus === 'PENDING') ? 'CLOSED' : 'ACTIVE',
+              dateBs: s.dateBs || (s.date && /^20[5-9]\d-/.test(normalizeBsDate(s.date)) ? normalizeBsDate(s.date) : (DEFAULT_SAVINGS[idx]?.dateBs || '2083-06-29'))
+            };
+          });
         }
       }
     } catch (e) {
@@ -1191,9 +1272,9 @@ export const microFinanceService = {
     const savings = existingList.map(s => {
       if (s.id === id) {
         const nextStatusRaw = String(updates.status ?? s.status ?? 'ACTIVE').toUpperCase();
-        const normalizedStatus: 'ACTIVE' | 'INACTIVE' =
-          nextStatusRaw === 'INACTIVE' || nextStatusRaw === 'DUE' || nextStatusRaw === 'PENDING'
-            ? 'INACTIVE'
+        const normalizedStatus: 'ACTIVE' | 'CLOSED' =
+          nextStatusRaw === 'CLOSED' || nextStatusRaw === 'INACTIVE' || nextStatusRaw === 'DUE' || nextStatusRaw === 'PENDING'
+            ? 'CLOSED'
             : 'ACTIVE';
         const nextDateBs = normalizeBsDate(updates.dateBs ?? s.dateBs ?? s.date);
         updatedItem = {
@@ -1214,7 +1295,8 @@ export const microFinanceService = {
 
       // Adjust member totalSavings if amount, status, or memberId changed
       if (oldItem) {
-        const wasActive = String(oldItem.status || '').toUpperCase() !== 'INACTIVE' && String(oldItem.status || '').toUpperCase() !== 'DUE' && String(oldItem.status || '').toUpperCase() !== 'PENDING';
+        const oldRaw = String(oldItem.status || '').toUpperCase();
+        const wasActive = oldRaw !== 'CLOSED' && oldRaw !== 'INACTIVE' && oldRaw !== 'DUE' && oldRaw !== 'PENDING';
         const isNowActive = updatedItem.status === 'ACTIVE';
         const oldDelta = wasActive ? Number(oldItem.amount) || 0 : 0;
         const newDelta = isNowActive ? Number(updatedItem.amount) || 0 : 0;
@@ -1336,16 +1418,15 @@ export const microFinanceService = {
   fetchActiveLoansFromSupabase: async (): Promise<MFLoanRecord[]> => {
     const localActive = microFinanceService.getLoans();
     try {
-      const { data, error } = await supabase
-        .from('mf_loans')
-        .select('*')
-        .neq('status', 'CLOSED')
-        .order('created_at', { ascending: false });
+      const { data, error } = await fetchAllRowsPaginated('mf_loans', {
+        orderColumn: 'created_at',
+        filter: { column: 'status', op: 'neq', value: 'CLOSED' }
+      });
 
       if (!error && Array.isArray(data)) {
         if (data.length > 0) {
-          const mapped = data.map((r: SupabaseLoanRow) => mapRowToLoan(r)).filter(l => l.status !== 'CLOSED');
-          microFinanceService.saveLoans(mapped);
+          const mapped = data.map(r => mapRowToLoan(r as unknown as SupabaseLoanRow)).filter(l => l.status !== 'CLOSED');
+          safeSetLocalStorage(STORAGE_KEYS.LOANS, mapped);
           return mapped;
         }
         // Check if table is completely empty (initial seed)
@@ -1368,7 +1449,7 @@ export const microFinanceService = {
 
       if (fallbackRow?.data?.loans && Array.isArray(fallbackRow.data.loans)) {
         const remoteActive = (fallbackRow.data.loans as MFLoanRecord[]).filter(l => l.status !== 'CLOSED');
-        microFinanceService.saveLoans(remoteActive);
+        safeSetLocalStorage(STORAGE_KEYS.LOANS, remoteActive);
         return remoteActive;
       }
     } catch (e) {
@@ -1381,14 +1462,13 @@ export const microFinanceService = {
   fetchClosedLoansFromSupabase: async (): Promise<MFLoanRecord[]> => {
     const localClosed = getClosedLoansLocalRaw();
     try {
-      const { data, error } = await supabase
-        .from('mf_loans')
-        .select('*')
-        .eq('status', 'CLOSED')
-        .order('closed_date_bs', { ascending: false });
+      const { data, error } = await fetchAllRowsPaginated('mf_loans', {
+        orderColumn: 'closed_date_bs',
+        filter: { column: 'status', op: 'eq', value: 'CLOSED' }
+      });
 
       if (!error && Array.isArray(data)) {
-        const mapped = data.map((r: SupabaseLoanRow) => mapRowToLoan(r));
+        const mapped = data.map(r => mapRowToLoan(r as unknown as SupabaseLoanRow));
         const map = new Map<string, MFLoanRecord>();
         localClosed.forEach(l => map.set(l.id, l));
         mapped.forEach(l => map.set(l.id, l));
@@ -1665,7 +1745,8 @@ export const microFinanceService = {
       createdAt: today
     }));
     const updated = [...created, ...existing];
-    microFinanceService.saveSavings(updated);
+    safeSetLocalStorage(STORAGE_KEYS.SAVINGS, updated);
+    void bgUpsert('mf_savings', created.map(mapSavingToRow));
 
     // Update member totalSavings in batch for ACTIVE (or legacy PAID) savings
     const memberAdds = new Map<string, number>();
@@ -1675,12 +1756,19 @@ export const microFinanceService = {
       }
     });
     if (memberAdds.size > 0) {
-      const members = microFinanceService.getMembers().map(m =>
-        memberAdds.has(m.memberId)
-          ? { ...m, totalSavings: (m.totalSavings || 0) + (memberAdds.get(m.memberId) || 0) }
-          : m
-      );
-      microFinanceService.saveMembers(members);
+      const changedMembers: MFMember[] = [];
+      const members = microFinanceService.getMembers().map(m => {
+        if (memberAdds.has(m.memberId)) {
+          const next = { ...m, totalSavings: (m.totalSavings || 0) + (memberAdds.get(m.memberId) || 0) };
+          changedMembers.push(next);
+          return next;
+        }
+        return m;
+      });
+      safeSetLocalStorage(STORAGE_KEYS.MEMBERS, members);
+      if (changedMembers.length > 0) {
+        void bgUpsert('mf_members', changedMembers.map(mapMemberToRow));
+      }
     }
     return updated;
   },
@@ -1913,14 +2001,6 @@ export const microFinanceService = {
     }
 
     try {
-      const safeSelectAll = async (table: string) => {
-        if (!supabase) return { data: null, error: null };
-        const ordered = await supabase.from(table).select('*').order('created_at', { ascending: false });
-        if (!ordered.error) return ordered;
-        console.warn(`Supabase ${table} ordered select failed, retrying plain select:`, ordered.error.message);
-        return await supabase.from(table).select('*');
-      };
-
       const [
         cRes,
         gRes,
@@ -1931,12 +2011,12 @@ export const microFinanceService = {
         setRes,
         loans
       ] = await Promise.all([
-        supabase.from('mf_centers').select('*').order('created_at', { ascending: false }),
-        supabase.from('mf_groups').select('*').order('created_at', { ascending: false }),
-        supabase.from('mf_members').select('*').order('created_at', { ascending: false }),
-        supabase.from('mf_savings').select('*').order('created_at', { ascending: false }),
-        safeSelectAll('mf_collection_sheets'),
-        safeSelectAll('mf_signature_sheets'),
+        fetchAllRowsPaginated('mf_centers'),
+        fetchAllRowsPaginated('mf_groups'),
+        fetchAllRowsPaginated('mf_members'),
+        fetchAllRowsPaginated('mf_savings'),
+        fetchAllRowsPaginated('mf_collection_sheets'),
+        fetchAllRowsPaginated('mf_signature_sheets'),
         supabase.from('mf_settings').select('data').eq('id', 'mf_general_settings').maybeSingle(),
         microFinanceService.fetchActiveLoansFromSupabase()
       ]);
@@ -1944,8 +2024,8 @@ export const microFinanceService = {
       let centers = localCenters;
       if (!cRes.error && Array.isArray(cRes.data)) {
         if (cRes.data.length > 0) {
-          centers = (cRes.data as Record<string, unknown>[]).map(mapRowToCenter);
-          localStorage.setItem(STORAGE_KEYS.CENTERS, JSON.stringify(centers));
+          centers = cRes.data.map(mapRowToCenter);
+          safeSetLocalStorage(STORAGE_KEYS.CENTERS, centers);
         } else if (localCenters.length > 0) {
           void bgUpsert('mf_centers', localCenters.map(mapCenterToRow));
         }
@@ -1954,8 +2034,8 @@ export const microFinanceService = {
       let groups = localGroups;
       if (!gRes.error && Array.isArray(gRes.data)) {
         if (gRes.data.length > 0) {
-          groups = (gRes.data as Record<string, unknown>[]).map(mapRowToGroup);
-          localStorage.setItem(STORAGE_KEYS.GROUPS, JSON.stringify(groups));
+          groups = gRes.data.map(mapRowToGroup);
+          safeSetLocalStorage(STORAGE_KEYS.GROUPS, groups);
         } else if (localGroups.length > 0) {
           void bgUpsert('mf_groups', localGroups.map(mapGroupToRow));
         }
@@ -1964,8 +2044,8 @@ export const microFinanceService = {
       let members = localMembers;
       if (!mRes.error && Array.isArray(mRes.data)) {
         if (mRes.data.length > 0) {
-          members = (mRes.data as Record<string, unknown>[]).map(mapRowToMember);
-          localStorage.setItem(STORAGE_KEYS.MEMBERS, JSON.stringify(members));
+          members = mRes.data.map(mapRowToMember);
+          safeSetLocalStorage(STORAGE_KEYS.MEMBERS, members);
         } else if (localMembers.length > 0) {
           void bgUpsert('mf_members', localMembers.map(mapMemberToRow));
         }
@@ -1974,8 +2054,8 @@ export const microFinanceService = {
       let savings = localSavings;
       if (!sRes.error && Array.isArray(sRes.data)) {
         if (sRes.data.length > 0) {
-          savings = (sRes.data as Record<string, unknown>[]).map(mapRowToSaving);
-          localStorage.setItem(STORAGE_KEYS.SAVINGS, JSON.stringify(savings));
+          savings = sRes.data.map(mapRowToSaving);
+          safeSetLocalStorage(STORAGE_KEYS.SAVINGS, savings);
         } else {
           const nonDefaultSavings = localSavings.filter(s => !['sav-1', 'sav-2', 'sav-3'].includes(s.id));
           if (nonDefaultSavings.length > 0) {
@@ -1987,21 +2067,21 @@ export const microFinanceService = {
       // Sync mf_collection_sheets directly from Supabase (authoritative, no auto-default seeding)
       let sheets = localSheets;
       if (!shRes.error && Array.isArray(shRes.data)) {
-        sheets = (shRes.data as Record<string, unknown>[]).map(mapRowToSheet);
-        localStorage.setItem(STORAGE_KEYS.SHEETS, JSON.stringify(sheets));
+        sheets = shRes.data.map(mapRowToSheet);
+        safeSetLocalStorage(STORAGE_KEYS.SHEETS, sheets);
       }
 
       // Sync mf_signature_sheets directly from Supabase (authoritative, no auto-default seeding)
       let signatureSheets = localSigSheets;
       if (!sigRes.error && Array.isArray(sigRes.data)) {
-        signatureSheets = (sigRes.data as Record<string, unknown>[]).map(mapRowToSigSheet);
-        localStorage.setItem(STORAGE_KEYS.SIGNATURE_SHEETS, JSON.stringify(signatureSheets));
+        signatureSheets = sigRes.data.map(mapRowToSigSheet);
+        safeSetLocalStorage(STORAGE_KEYS.SIGNATURE_SHEETS, signatureSheets);
       }
 
       let settings = localSettings;
       if (!setRes.error && setRes.data?.data) {
         settings = { ...DEFAULT_SETTINGS, ...(setRes.data.data as Partial<MFSettings>) };
-        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+        safeSetLocalStorage(STORAGE_KEYS.SETTINGS, settings);
       }
 
       return { centers, groups, members, savings, loans, sheets, signatureSheets, settings };
