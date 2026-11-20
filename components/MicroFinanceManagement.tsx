@@ -7881,67 +7881,83 @@ export const MicroFinanceManagement: React.FC = () => {
                   <div>स्थान: <span className="font-black text-black">{centerObj?.location || 'रतौली'}</span></div>
                 </div>
 
-                {/* Multi-tier Clean Black & White Table: Suitable compact columns, zero horizontal stretch */}
+                {/* Multi-tier Clean Black & White Table: Fixed proportional column widths for balanced print & preview */}
                 <div className="overflow-x-auto rounded-lg border-2 border-black shadow-none">
-                  <table className="w-full border-collapse text-xs text-black">
+                  <table className="w-full table-fixed border-collapse text-[11px] text-black">
+                    <colgroup>
+                      <col style={{ width: '3%' }} />
+                      <col style={{ width: '9.5%' }} />
+                      <col style={{ width: '14.5%' }} />
+                      <col style={{ width: '8%' }} />
+                      <col style={{ width: '7.5%' }} />
+                      <col style={{ width: '8%' }} />
+                      <col style={{ width: '3.5%' }} />
+                      <col style={{ width: '6.5%' }} />
+                      <col style={{ width: '7.5%' }} />
+                      <col style={{ width: '8%' }} />
+                      <col style={{ width: '3.5%' }} />
+                      <col style={{ width: '6.5%' }} />
+                      <col style={{ width: '6.5%' }} />
+                      <col style={{ width: '7.5%' }} />
+                    </colgroup>
                     <thead>
-                      <tr className="bg-slate-100 text-black font-black uppercase text-[10px] tracking-wider border-b-2 border-black">
-                        <th rowSpan={2} className="py-1 px-1 border-r border-black text-center w-10 whitespace-nowrap">S.N.</th>
-                        <th rowSpan={2} className="py-1 px-1.5 border-r border-black text-center w-20 whitespace-nowrap">Member ID</th>
-                        <th rowSpan={2} className="py-1 px-2 border-r border-black text-left min-w-[130px] whitespace-nowrap">Name</th>
-                        <th rowSpan={2} className="py-1 px-1.5 border-r border-black text-right w-20 whitespace-nowrap">Saving</th>
-                        <th colSpan={4} className="py-0.5 px-1.5 border-r border-black text-center bg-slate-100 font-black whitespace-nowrap">
+                      <tr className="bg-slate-100 text-black font-black uppercase text-[9.5px] tracking-tight border-b-2 border-black">
+                        <th rowSpan={2} className="py-1 px-0.5 border-r border-black text-center whitespace-nowrap">S.N.</th>
+                        <th rowSpan={2} className="py-1 px-1 border-r border-black text-center whitespace-nowrap">Member ID</th>
+                        <th rowSpan={2} className="py-1 px-1.5 border-r border-black text-left whitespace-nowrap">Name</th>
+                        <th rowSpan={2} className="py-1 px-1 border-r border-black text-right whitespace-nowrap">Saving</th>
+                        <th colSpan={4} className="py-0.5 px-1 border-r border-black text-center bg-slate-100 font-black whitespace-nowrap">
                           Micro-enterprises Loan
                         </th>
-                        <th colSpan={4} className="py-0.5 px-1.5 border-r border-black text-center bg-slate-100 font-black whitespace-nowrap">
+                        <th colSpan={4} className="py-0.5 px-1 border-r border-black text-center bg-slate-100 font-black whitespace-nowrap">
                           Emergency Loan
                         </th>
-                        <th rowSpan={2} className="py-1 px-1 text-right border-r border-black w-16 whitespace-nowrap text-black font-black">
+                        <th rowSpan={2} className="py-1 px-1 text-right border-r border-black whitespace-nowrap text-black font-black">
                           Due
                         </th>
-                        <th rowSpan={2} className="py-1 px-2 text-right bg-slate-100 text-black font-black w-20 whitespace-nowrap">
+                        <th rowSpan={2} className="py-1 px-1.5 text-right bg-slate-100 text-black font-black whitespace-nowrap">
                           Total
                         </th>
                       </tr>
-                      <tr className="bg-slate-50 text-black font-black uppercase text-[9px] tracking-wider border-b-2 border-black">
-                        <th className="py-0.5 px-1 border-r border-black text-center w-20 whitespace-nowrap">Date</th>
-                        <th className="py-0.5 px-1 border-r border-black text-right w-18 whitespace-nowrap">Principal</th>
-                        <th className="py-0.5 px-1 border-r border-black text-center w-10 whitespace-nowrap">Kista</th>
-                        <th className="py-0.5 px-1 border-r border-black text-right text-black w-16 whitespace-nowrap">Amount</th>
-                        <th className="py-0.5 px-1 border-r border-black text-center w-14 whitespace-nowrap">Date</th>
-                        <th className="py-0.5 px-1 border-r border-black text-right w-16 whitespace-nowrap">Principal</th>
-                        <th className="py-0.5 px-1 border-r border-black text-center w-10 whitespace-nowrap">Kista</th>
-                        <th className="py-0.5 px-1 border-r border-black text-right text-black w-16 whitespace-nowrap">Amount</th>
+                      <tr className="bg-slate-50 text-black font-black uppercase text-[8.5px] tracking-tight border-b-2 border-black">
+                        <th className="py-0.5 px-0.5 border-r border-black text-center whitespace-nowrap">Date</th>
+                        <th className="py-0.5 px-1 border-r border-black text-right whitespace-nowrap">Principal</th>
+                        <th className="py-0.5 px-0.5 border-r border-black text-center whitespace-nowrap">Kista</th>
+                        <th className="py-0.5 px-1 border-r border-black text-right text-black whitespace-nowrap">Amount</th>
+                        <th className="py-0.5 px-0.5 border-r border-black text-center whitespace-nowrap">Date</th>
+                        <th className="py-0.5 px-1 border-r border-black text-right whitespace-nowrap">Principal</th>
+                        <th className="py-0.5 px-0.5 border-r border-black text-center whitespace-nowrap">Kista</th>
+                        <th className="py-0.5 px-1 border-r border-black text-right text-black whitespace-nowrap">Amount</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-black/30 font-medium text-black bg-white">
                       {rowsData.map((row) => (
                         <tr key={row.memberId} className="hover:bg-slate-50 border-b border-black/40">
-                          <td className="py-1 px-1 text-center font-bold text-black border-r border-black whitespace-nowrap">{row.sn}</td>
-                          <td className="py-1 px-1.5 text-center font-mono font-bold text-black border-r border-black whitespace-nowrap">{row.memberId}</td>
-                          <td className="py-1 px-2 font-bold text-black border-r border-black whitespace-nowrap">{row.name}</td>
-                          <td className="p-0 font-mono text-black border-r border-black whitespace-nowrap">
-                            <div className="flex items-stretch">
+                          <td className="py-1 px-0.5 text-center font-bold font-mono tabular-nums text-black border-r border-black whitespace-nowrap">{row.sn}</td>
+                          <td className="py-1 px-1 text-center font-mono tabular-nums font-bold text-[10px] text-black border-r border-black whitespace-nowrap">{row.memberId}</td>
+                          <td className="py-1 px-1.5 font-bold text-black border-r border-black leading-tight break-words">{row.name}</td>
+                          <td className="p-0 h-px font-mono tabular-nums text-black border-r border-black whitespace-nowrap">
+                            <div className="flex items-stretch h-full">
                               <span
-                                className="w-7 py-1 px-1 flex items-center justify-center text-[9px] font-bold text-slate-600 border-r border-black/40 shrink-0"
+                                className="mf-saving-kista-cell w-6 py-1 px-0.5 flex items-center justify-center text-[9px] font-bold text-slate-700 border-r border-slate-700 shrink-0"
                                 title={row.savingKista ? `Saving Kista: ${row.savingKista} (Open: ${row.savingOpenDateBs})` : undefined}
                               >
                                 {row.savingKista ?? ''}
                               </span>
-                              <span className="flex-1 py-1 px-1.5 font-bold text-right">
+                              <span className="flex-1 py-1 px-1 flex items-center justify-end font-bold text-right">
                                 {row.saving.toLocaleString()}
                               </span>
                             </div>
                           </td>
-                          <td className="py-1 px-1 text-center font-mono text-[11px] text-black border-r border-black whitespace-nowrap">{row.microDate}</td>
-                          <td className="py-1 px-1 text-right font-mono font-bold text-black border-r border-black whitespace-nowrap">{row.microPrincipal ? row.microPrincipal.toLocaleString() : '-'}</td>
-                          <td className="py-1 px-1 text-center font-mono font-bold text-black border-r border-black whitespace-nowrap">{row.microKista || '-'}</td>
-                          <td className="py-1 px-1 text-right font-mono font-bold text-black border-r border-black whitespace-nowrap">{row.microAmount ? row.microAmount.toLocaleString() : '-'}</td>
-                          <td className="py-1 px-1 text-center font-mono text-[11px] text-black border-r border-black whitespace-nowrap">{row.emergencyDate}</td>
-                          <td className="py-1 px-1 text-right font-mono font-bold text-black border-r border-black whitespace-nowrap">{row.emergencyPrincipal ? row.emergencyPrincipal.toLocaleString() : '-'}</td>
-                          <td className="py-1 px-1 text-center font-mono font-bold text-black border-r border-black whitespace-nowrap">{row.emergencyKista || '-'}</td>
-                          <td className="py-1 px-1 text-right font-mono font-bold text-black border-r border-black whitespace-nowrap">{row.emergencyAmount ? row.emergencyAmount.toLocaleString() : '-'}</td>
-                          <td className="py-0.5 px-1 text-right font-mono border-r border-black whitespace-nowrap">
+                          <td className="py-1 px-0.5 text-center font-mono tabular-nums text-[10px] text-black border-r border-black whitespace-nowrap">{row.microDate}</td>
+                          <td className="py-1 px-1 text-right font-mono tabular-nums font-bold text-black border-r border-black whitespace-nowrap">{row.microPrincipal ? row.microPrincipal.toLocaleString() : '-'}</td>
+                          <td className="py-1 px-0.5 text-center font-mono tabular-nums font-bold text-black border-r border-black whitespace-nowrap">{row.microKista || '-'}</td>
+                          <td className="py-1 px-1 text-right font-mono tabular-nums font-bold text-black border-r border-black whitespace-nowrap">{row.microAmount ? row.microAmount.toLocaleString() : '-'}</td>
+                          <td className="py-1 px-0.5 text-center font-mono tabular-nums text-[10px] text-black border-r border-black whitespace-nowrap">{row.emergencyDate}</td>
+                          <td className="py-1 px-1 text-right font-mono tabular-nums font-bold text-black border-r border-black whitespace-nowrap">{row.emergencyPrincipal ? row.emergencyPrincipal.toLocaleString() : '-'}</td>
+                          <td className="py-1 px-0.5 text-center font-mono tabular-nums font-bold text-black border-r border-black whitespace-nowrap">{row.emergencyKista || '-'}</td>
+                          <td className="py-1 px-1 text-right font-mono tabular-nums font-bold text-black border-r border-black whitespace-nowrap">{row.emergencyAmount ? row.emergencyAmount.toLocaleString() : '-'}</td>
+                          <td className="py-1 px-1 text-right font-mono tabular-nums border-r border-black whitespace-nowrap">
                             <input
                               type="number"
                               min={0}
@@ -7953,10 +7969,13 @@ export const MicroFinanceManagement: React.FC = () => {
                                 setManualDues(prev => ({ ...prev, [row.memberId]: val }));
                               }}
                               title={isDayEnded ? 'Day Ended - Action Locked' : 'Enter manual due amount'}
-                              className="w-14 px-1 py-0.5 text-right font-mono font-bold text-black bg-white border border-black rounded shadow-2xs focus:outline-hidden focus:ring-1 focus:ring-black disabled:opacity-60 disabled:cursor-not-allowed"
+                              className="mf-due-input print:hidden w-full max-w-[54px] px-0.5 py-0 text-right font-mono tabular-nums font-bold text-[11px] text-black bg-transparent border border-transparent hover:border-slate-300 focus:border-slate-900 rounded-xs focus:outline-hidden disabled:opacity-60 disabled:cursor-not-allowed"
                             />
+                            <span className="mf-due-print-val hidden print:inline font-mono tabular-nums font-bold text-black">
+                              {row.dueAmt ? row.dueAmt.toLocaleString() : '0'}
+                            </span>
                           </td>
-                          <td className="py-1 px-2 text-right font-mono font-black text-black whitespace-nowrap">
+                          <td className="py-1 px-1.5 text-right font-mono tabular-nums font-black text-black whitespace-nowrap">
                             {row.rowTotal.toLocaleString()}
                           </td>
                         </tr>
@@ -7982,37 +8001,37 @@ export const MicroFinanceManagement: React.FC = () => {
                     </tbody>
                     {/* Clean Black & White Total Footer */}
                     <tfoot>
-                      <tr className="bg-slate-100 text-black font-black text-xs border-t-2 border-black whitespace-nowrap">
-                        <td colSpan={3} className="py-1.5 px-2 text-center tracking-widest text-xs uppercase border-r border-black whitespace-nowrap">
+                      <tr className="bg-slate-100 text-black font-black text-[10.5px] border-t-2 border-black whitespace-nowrap">
+                        <td colSpan={3} className="py-1.5 px-2 text-center tracking-widest text-[11px] uppercase border-r border-black whitespace-nowrap">
                           TOTAL
                         </td>
-                        <td className="py-1.5 px-1.5 text-right font-mono font-black text-black border-r border-black whitespace-nowrap">
+                        <td className="py-1.5 px-1 text-right font-mono tabular-nums font-black text-black border-r border-black whitespace-nowrap">
                           {totalSaving.toFixed(2)}
                         </td>
-                        <td className="py-1.5 px-1 text-center text-black border-r border-black whitespace-nowrap">-</td>
-                        <td className="py-1.5 px-1 text-right font-mono font-black text-black border-r border-black whitespace-nowrap">
+                        <td className="py-1.5 px-0.5 text-center text-black border-r border-black whitespace-nowrap">-</td>
+                        <td className="py-1.5 px-1 text-right font-mono tabular-nums font-black text-black border-r border-black whitespace-nowrap">
                           {totalMicroPrincipal.toFixed(2)}
                         </td>
-                        <td className="py-1.5 px-1 text-center font-mono font-black text-black border-r border-black whitespace-nowrap">
+                        <td className="py-1.5 px-0.5 text-center font-mono tabular-nums font-black text-black border-r border-black whitespace-nowrap">
                           -
                         </td>
-                        <td className="py-1.5 px-1 text-right font-mono font-black text-black border-r border-black whitespace-nowrap">
+                        <td className="py-1.5 px-1 text-right font-mono tabular-nums font-black text-black border-r border-black whitespace-nowrap">
                           {totalMicroAmount.toFixed(2)}
                         </td>
-                        <td className="py-1.5 px-1 text-center text-black border-r border-black whitespace-nowrap">-</td>
-                        <td className="py-1.5 px-1 text-right font-mono font-black text-black border-r border-black whitespace-nowrap">
+                        <td className="py-1.5 px-0.5 text-center text-black border-r border-black whitespace-nowrap">-</td>
+                        <td className="py-1.5 px-1 text-right font-mono tabular-nums font-black text-black border-r border-black whitespace-nowrap">
                           {totalEmergencyPrincipal.toFixed(2)}
                         </td>
-                        <td className="py-1.5 px-1 text-center font-mono font-black text-black border-r border-black whitespace-nowrap">
+                        <td className="py-1.5 px-0.5 text-center font-mono tabular-nums font-black text-black border-r border-black whitespace-nowrap">
                           -
                         </td>
-                        <td className="py-1.5 px-1 text-right font-mono font-black text-black border-r border-black whitespace-nowrap">
+                        <td className="py-1.5 px-1 text-right font-mono tabular-nums font-black text-black border-r border-black whitespace-nowrap">
                           {totalEmergencyAmount.toFixed(2)}
                         </td>
-                        <td className="py-1.5 px-1 text-right font-mono font-black text-black border-r border-black whitespace-nowrap">
+                        <td className="py-1.5 px-1 text-right font-mono tabular-nums font-black text-black border-r border-black whitespace-nowrap">
                           {totalDue.toFixed(2)}
                         </td>
-                        <td className="py-1.5 px-2 text-right bg-slate-200 text-black font-mono font-black text-xs whitespace-nowrap">
+                        <td className="py-1.5 px-1.5 text-right bg-slate-200 text-black font-mono tabular-nums font-black text-[10.5px] whitespace-nowrap">
                           {grandTotal.toFixed(2)}
                         </td>
                       </tr>
@@ -8144,48 +8163,56 @@ export const MicroFinanceManagement: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Table with crisp black borders (Center aligned बचत & ऋण रकम per user request) */}
+                {/* Table with crisp black borders (Compact row height & narrower बचत / ऋण रकम columns) */}
                 <div className="overflow-x-auto pt-1">
-                  <table className="w-full border-collapse border-2 border-slate-900 text-xs">
+                  <table className="w-full table-fixed border-collapse border-2 border-slate-900 text-xs">
+                    <colgroup>
+                      <col style={{ width: '6%' }} />
+                      <col style={{ width: '29%' }} />
+                      <col style={{ width: '17%' }} />
+                      <col style={{ width: '12%' }} />
+                      <col style={{ width: '13%' }} />
+                      <col style={{ width: '23%' }} />
+                    </colgroup>
                     <thead>
                       <tr className="border-b-2 border-slate-900 bg-slate-50 font-black text-slate-900 text-[11px]">
-                        <th className="p-2 border border-slate-900 text-center w-14 whitespace-nowrap">क्र.सं.</th>
-                        <th className="p-2 border border-slate-900 text-left whitespace-nowrap">सदस्यको नाम</th>
-                        <th className="p-2 border border-slate-900 text-center w-32 whitespace-nowrap">सदस्य नं.</th>
-                        <th className="p-2 border border-slate-900 text-center w-32 whitespace-nowrap">बचत (रु.)</th>
-                        <th className="p-2 border border-slate-900 text-center w-36 whitespace-nowrap">ऋण रकम (रु.)</th>
-                        <th className="p-2 border border-slate-900 text-center w-40 whitespace-nowrap">हस्ताक्षर</th>
+                        <th className="py-1.5 px-1.5 border border-slate-900 text-center whitespace-nowrap">क्र.सं.</th>
+                        <th className="py-1.5 px-2 border border-slate-900 text-left whitespace-nowrap">सदस्यको नाम</th>
+                        <th className="py-1.5 px-1.5 border border-slate-900 text-center whitespace-nowrap">सदस्य नं.</th>
+                        <th className="py-1.5 px-1.5 border border-slate-900 text-center whitespace-nowrap">बचत (रु.)</th>
+                        <th className="py-1.5 px-1.5 border border-slate-900 text-center whitespace-nowrap">ऋण रकम (रु.)</th>
+                        <th className="py-1.5 px-2 border border-slate-900 text-center whitespace-nowrap">हस्ताक्षर</th>
                       </tr>
                     </thead>
                     <tbody>
                       {sortByNameAZ(selectedSignatureSheetToPrint.members || []).map((mem, idx) => (
                         <tr key={mem.memberId || idx} className="border-b border-slate-800">
-                          <td className="p-3 border border-slate-900 text-center font-bold text-slate-700 whitespace-nowrap">
+                          <td className="py-1.5 px-1.5 border border-slate-900 text-center font-bold text-slate-700 whitespace-nowrap">
                             {toNepaliDigits(idx + 1)}
                           </td>
-                          <td className="p-3 border border-slate-900 font-bold text-slate-900 whitespace-nowrap">
+                          <td className="py-1.5 px-2 border border-slate-900 font-bold text-slate-900 leading-tight break-words">
                             {mem.name}
                           </td>
-                          <td className="p-3 border border-slate-900 text-center font-mono font-bold text-slate-800 whitespace-nowrap">
+                          <td className="py-1.5 px-1.5 border border-slate-900 text-center font-mono tabular-nums font-bold text-[11px] text-slate-800 whitespace-nowrap">
                             {mem.memberId}
                           </td>
-                          {/* बचत (रु.) - Center aligned */}
-                          <td className="p-3 border border-slate-900 text-center font-mono font-bold"></td>
-                          {/* ऋण रकम (रु.) - Center aligned */}
-                          <td className="p-3 border border-slate-900 text-center font-mono font-bold"></td>
-                          {/* हस्ताक्षर - Blank for physical signature */}
-                          <td className="p-3 border border-slate-900 text-center h-12"></td>
+                          {/* बचत (रु.) - Compact width, center aligned */}
+                          <td className="py-1.5 px-1.5 border border-slate-900 text-center font-mono font-bold"></td>
+                          {/* ऋण रकम (रु.) - Compact width, center aligned */}
+                          <td className="py-1.5 px-1.5 border border-slate-900 text-center font-mono font-bold"></td>
+                          {/* हस्ताक्षर - Compact height for neat single-page print */}
+                          <td className="py-1 px-2 border border-slate-900 text-center h-8"></td>
                         </tr>
                       ))}
 
                       {/* Total summary row (Center aligned) */}
                       <tr className="border-t-2 border-slate-900 bg-slate-100 font-black text-slate-900">
-                        <td colSpan={3} className="p-2.5 border border-slate-900 text-center uppercase tracking-wider">
+                        <td colSpan={3} className="py-1.5 px-2 border border-slate-900 text-center uppercase tracking-wider">
                           कुल जम्मा (Total)
                         </td>
-                        <td className="p-2.5 border border-slate-900 text-center font-mono text-xs"></td>
-                        <td className="p-2.5 border border-slate-900 text-center font-mono text-xs"></td>
-                        <td className="p-2.5 border border-slate-900"></td>
+                        <td className="py-1.5 px-1.5 border border-slate-900 text-center font-mono text-xs"></td>
+                        <td className="py-1.5 px-1.5 border border-slate-900 text-center font-mono text-xs"></td>
+                        <td className="py-1.5 px-2 border border-slate-900"></td>
                       </tr>
                     </tbody>
                   </table>
@@ -8199,23 +8226,23 @@ export const MicroFinanceManagement: React.FC = () => {
                   <table className="w-full border-collapse border-2 border-slate-900 text-xs">
                     <thead>
                       <tr className="border-b-2 border-slate-900 bg-slate-50 font-black text-slate-900 text-[11px]">
-                        <th className="p-2 border border-slate-900 text-center w-14 whitespace-nowrap">S.N.</th>
-                        <th className="p-2 border border-slate-900 text-left whitespace-nowrap">Name</th>
-                        <th className="p-2 border border-slate-900 text-center w-32 whitespace-nowrap">Loan Amount</th>
-                        <th className="p-2 border border-slate-900 text-center w-20 whitespace-nowrap">Duration</th>
-                        <th className="p-2 border border-slate-900 text-center w-52 whitespace-nowrap">Signature</th>
+                        <th className="py-1.5 px-2 border border-slate-900 text-center w-14 whitespace-nowrap">S.N.</th>
+                        <th className="py-1.5 px-2 border border-slate-900 text-left whitespace-nowrap">Name</th>
+                        <th className="py-1.5 px-2 border border-slate-900 text-center w-28 whitespace-nowrap">Loan Amount</th>
+                        <th className="py-1.5 px-2 border border-slate-900 text-center w-20 whitespace-nowrap">Duration</th>
+                        <th className="py-1.5 px-2 border border-slate-900 text-center w-48 whitespace-nowrap">Signature</th>
                       </tr>
                     </thead>
                     <tbody>
                       {[1, 2].map((rowNum) => (
                         <tr key={rowNum} className="border-b border-slate-800">
-                          <td className="p-2 border border-slate-900 text-center font-bold text-slate-700 h-9 whitespace-nowrap">
+                          <td className="py-1 px-2 border border-slate-900 text-center font-bold text-slate-700 h-7 whitespace-nowrap">
                             {rowNum}
                           </td>
-                          <td className="p-2 border border-slate-900 h-9"></td>
-                          <td className="p-2 border border-slate-900 h-9"></td>
-                          <td className="p-2 border border-slate-900 h-9"></td>
-                          <td className="p-2 border border-slate-900 h-9"></td>
+                          <td className="py-1 px-2 border border-slate-900 h-7"></td>
+                          <td className="py-1 px-2 border border-slate-900 h-7"></td>
+                          <td className="py-1 px-2 border border-slate-900 h-7"></td>
+                          <td className="py-1 px-2 border border-slate-900 h-7"></td>
                         </tr>
                       ))}
                     </tbody>

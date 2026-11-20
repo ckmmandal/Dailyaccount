@@ -115,9 +115,19 @@
         print-color-adjust: exact !important;
       }
       body.printing-mf-sheet #mf-direct-print-target input {
-        border: 1px solid #000000 !important;
+        border: none !important;
+        box-shadow: none !important;
         background: transparent !important;
         color: #000000 !important;
+      }
+      body.printing-mf-sheet #mf-direct-print-target .mf-due-input {
+        display: none !important;
+      }
+      body.printing-mf-sheet #mf-direct-print-target .mf-due-print-val {
+        display: inline !important;
+      }
+      body.printing-mf-sheet #mf-direct-print-target .mf-saving-kista-cell {
+        border-right: 1px solid #000000 !important;
       }
     }
     @media screen {
