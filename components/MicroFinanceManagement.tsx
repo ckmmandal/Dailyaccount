@@ -8250,7 +8250,7 @@ export const MicroFinanceManagement: React.FC = () => {
                 </div>
 
                 {/* Bottom Signatures: समूह अध्यक्ष with Name (Left) and कर्मचारी (Right) */}
-                <div className="flex justify-between items-end pt-8 pb-3 px-6 text-xs font-bold text-slate-900">
+                <div className="mf-signature-footer flex justify-between items-end pt-8 pb-3 px-6 text-xs font-bold text-slate-900">
                   <div className="text-center space-y-1">
                     <div className="w-56 border-b-2 border-dotted border-slate-800 mx-auto"></div>
                     <div className="text-xs font-bold text-slate-800 pt-0.5">
