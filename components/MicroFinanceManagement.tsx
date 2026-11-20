@@ -75,6 +75,21 @@ const getEffectiveSavingStatus = (status?: string): 'ACTIVE' | 'CLOSED' => {
   return 'ACTIVE';
 };
 
+const getEffectiveMemberStatus = (status?: string): 'ACTIVE' | 'INACTIVE' => {
+  return String(status || 'ACTIVE').toUpperCase() === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE';
+};
+
+const getEffectiveLoanStatus = (loan: MFLoanRecord): 'ACTIVE' | 'MATURED' | 'CLOSED' => {
+  if (loan.status === 'CLOSED') return 'CLOSED';
+  if (loan.status === 'MATURED') return 'MATURED';
+  const matNorm = normalizeBsDate(loan.maturityDate);
+  const isBsDate = /^20[7-9]\d-/.test(matNorm);
+  if (loan.status === 'ACTIVE' && isBsDate && matNorm <= getTodayBsDate()) {
+    return 'MATURED';
+  }
+  return 'ACTIVE';
+};
+
 const extractMeetingDayNumber = (meetingDay?: string): number | null => {
   if (!meetingDay) return null;
   const np = ['०', '१', '२', '३', '४', '५', '६', '७', '८', '९'];
@@ -399,6 +414,7 @@ export const MicroFinanceManagement: React.FC = () => {
   const [meetingMinutes, setMeetingMinutes] = useState<GroupMeetingRecord[]>(() => meetingMinutesService.getMeetings());
 
   // Search & Center/Group Filter states
+  const [dashboardCenterSearch, setDashboardCenterSearch] = useState('');
   const [centerSearch, setCenterSearch] = useState('');
   const [groupSearch, setGroupSearch] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
@@ -1495,6 +1511,9 @@ export const MicroFinanceManagement: React.FC = () => {
     void meetingMinutesService.fetchAllFromSupabase().then(res => {
       setMeetingMinutes(res.meetings);
     });
+    void microFinanceService.fetchClosedLoansFromSupabase().then(archived => {
+      setClosedLoansArchive(archived);
+    }).catch(() => {});
     showToast('Data refreshed successfully');
   };
 
@@ -1511,6 +1530,9 @@ export const MicroFinanceManagement: React.FC = () => {
     void meetingMinutesService.fetchAllFromSupabase().then(res => {
       setMeetingMinutes(res.meetings);
     });
+    void microFinanceService.fetchClosedLoansFromSupabase().then(archived => {
+      setClosedLoansArchive(archived);
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -1539,109 +1561,6 @@ export const MicroFinanceManagement: React.FC = () => {
     }
   }, [activeTab, reportTab]);
 
-  // All-Menu Live Dashboard Aggregates (100% English)
-  const dashboardStats = useMemo(() => {
-    const totalCenters = centers.length;
-    const activeCenters = centers.filter(c => c.status === 'ACTIVE').length;
-    const totalGroups = groups.length;
-    const activeSamuhs = groups.filter(g => g.status === 'ACTIVE').length;
-    const totalMembers = members.length;
-    const activeMembers = members.filter(m => m.status === 'ACTIVE').length;
-    const femaleMembers = members.filter(m => m.gender === 'Female').length;
-
-    const paidSavingsList = savings.filter(s => getEffectiveSavingStatus(s.status) === 'ACTIVE');
-    const dueSavingsList = savings.filter(s => getEffectiveSavingStatus(s.status) === 'CLOSED');
-    const savingBalance = paidSavingsList.reduce((acc, s) => acc + s.amount, 0) +
-                          members.reduce((acc, m) => acc + (m.totalSavings || 0), 0);
-    const dueSavingsAmount = dueSavingsList.reduce((acc, s) => acc + s.amount, 0);
-
-    const activeLoansList = loans.filter(l => l.status === 'ACTIVE');
-    const maturedLoansList = loans.filter(l => l.status === 'MATURED');
-    const closedLoansList = loans.filter(l => l.status === 'CLOSED');
-    const loanPortfolio = loans.reduce((acc, l) => acc + l.loanAmount, 0);
-    const outstandingLoan = loans.reduce((acc, l) => acc + l.remainingAmount, 0);
-    const recoveredLoan = Math.max(0, loanPortfolio - outstandingLoan);
-    const monthlyInstallmentTotal = activeLoansList.reduce((acc, l) => acc + (l.installmentAmount || 0), 0);
-    const parRate = loanPortfolio > 0
-      ? ((maturedLoansList.reduce((acc, l) => acc + l.remainingAmount, 0) / loanPortfolio) * 100).toFixed(2)
-      : '0.00';
-
-    const collectionSheetsCount = sheets.length;
-    const signatureSheetsCount = signatureSheets.length;
-    const meetingMinutesCount = meetingMinutes.length;
-    const totalReportsCount = collectionSheetsCount + signatureSheetsCount + meetingMinutesCount;
-
-    return {
-      totalCenters,
-      activeCenters,
-      totalGroups,
-      activeSamuhs,
-      totalMembers,
-      activeMembers,
-      femaleMembers,
-      savingBalance,
-      paidSavingsCount: paidSavingsList.length,
-      dueSavingsCount: dueSavingsList.length,
-      dueSavingsAmount,
-      loanPortfolio,
-      outstandingLoan,
-      recoveredLoan,
-      activeLoansCount: activeLoansList.length,
-      maturedLoansCount: maturedLoansList.length,
-      closedLoansCount: closedLoansList.length,
-      monthlyInstallmentTotal,
-      parRate,
-      collectionSheetsCount,
-      signatureSheetsCount,
-      meetingMinutesCount,
-      totalReportsCount
-    };
-  }, [centers, groups, members, savings, loans, sheets, signatureSheets, meetingMinutes]);
-
-  // Live Center-wise breakdown across Centers, Groups, Members, Saving & Loan
-  const centerAnalytics = useMemo(() => {
-    return centers.map(c => {
-      const centerGroups = groups.filter(g => g.centerId === c.id || g.centerName === c.name);
-      const centerMembers = members.filter(m => m.centerId === c.id || m.centerName === c.name);
-      const centerSavings = savings
-        .filter(s => s.centerName === c.name && getEffectiveSavingStatus(s.status) === 'ACTIVE')
-        .reduce((sum, s) => sum + s.amount, 0) +
-        centerMembers.reduce((sum, m) => sum + (m.totalSavings || 0), 0);
-      const centerLoans = loans.filter(l => l.centerName === c.name);
-      const centerLoanTotal = centerLoans.reduce((sum, l) => sum + l.loanAmount, 0);
-      const centerOutstanding = centerLoans.reduce((sum, l) => sum + l.remainingAmount, 0);
-
-      return {
-        id: c.id,
-        code: c.code,
-        name: c.name,
-        shortName: c.code || c.name.split('(')[0].trim(),
-        branch: c.branch,
-        meetingDay: c.meetingDay,
-        fieldOfficer: c.fieldOfficer || 'Unassigned',
-        status: c.status,
-        groupsCount: centerGroups.length,
-        membersCount: centerMembers.length,
-        savings: centerSavings,
-        loans: centerLoanTotal,
-        outstanding: centerOutstanding
-      };
-    });
-  }, [centers, groups, members, savings, loans]);
-
-  // Live Loan Status Breakdown for Pie Chart
-  const loanStatusChartData = useMemo(() => {
-    const activeCount = loans.filter(l => l.status === 'ACTIVE').length;
-    const maturedCount = loans.filter(l => l.status === 'MATURED').length;
-    const closedCount = loans.filter(l => l.status === 'CLOSED').length;
-    const items = [
-      { name: 'Active Loans', value: activeCount, color: '#2563eb' },
-      { name: 'Matured Loans', value: maturedCount, color: '#f59e0b' },
-      { name: 'Closed Loans', value: closedCount, color: '#10b981' }
-    ].filter(item => item.value > 0);
-    return items.length > 0 ? items : [{ name: 'No Loans', value: 1, color: '#e2e8f0' }];
-  }, [loans]);
-
   // Month list strictly in English (NO NEPALI)
   const nepaliMonthsEnglish = [
     'Baisakh', 'Jestha', 'Ashadh', 'Shrawan', 'Bhadra', 'Ashwin',
@@ -1656,6 +1575,233 @@ export const MicroFinanceManagement: React.FC = () => {
       return String(a.name || '').localeCompare(String(b.name || ''));
     });
   }, [centers]);
+
+  // Deduplicated full loan account list (Active + Matured + Archived Closed) for accurate operational counts
+  const allLoanAccountsForCounts = useMemo(() => {
+    const byId = new Map<string, MFLoanRecord>();
+    loans.forEach(l => byId.set(l.id, l));
+    closedLoansArchive.forEach(l => {
+      if (!byId.has(l.id)) byId.set(l.id, l);
+    });
+    return Array.from(byId.values());
+  }, [loans, closedLoansArchive]);
+
+  // All-Menu Operational Dashboard Aggregates (Strictly counts & statuses — NO Saving Balance or Loan Portfolio amounts)
+  const dashboardStats = useMemo(() => {
+    const todayBsDayNum = parseInt(currentBsDate.day, 10) || 0;
+    const totalCenters = centers.length;
+    const activeCenters = centers.filter(c => String(c.status || 'ACTIVE').toUpperCase() === 'ACTIVE').length;
+    const inactiveCenters = totalCenters - activeCenters;
+    const todayMeetingCentersCount = centers.filter(c => {
+      const d = extractMeetingDayNumber(c.meetingDay) ?? extractMeetingDayNumber(c.name);
+      return d !== null && d === todayBsDayNum;
+    }).length;
+
+    const totalGroups = groups.length;
+    const activeSamuhs = groups.filter(g => String(g.status || 'ACTIVE').toUpperCase() === 'ACTIVE').length;
+    const inactiveSamuhs = totalGroups - activeSamuhs;
+
+    const totalMembers = members.length;
+    const activeMembers = members.filter(m => getEffectiveMemberStatus(m.status) === 'ACTIVE').length;
+    const inactiveMembers = totalMembers - activeMembers;
+    const membersWithPhotoCount = members.filter(m => Boolean(m.photoUrl && m.photoUrl.trim())).length;
+
+    const totalSavingAccounts = savings.length;
+    const activeSavingAccounts = savings.filter(s => getEffectiveSavingStatus(s.status) === 'ACTIVE').length;
+    const closedSavingAccounts = totalSavingAccounts - activeSavingAccounts;
+
+    let activeLoansCount = 0;
+    let maturedLoansCount = 0;
+    let closedLoansCount = 0;
+    allLoanAccountsForCounts.forEach(l => {
+      const eff = getEffectiveLoanStatus(l);
+      if (eff === 'CLOSED') closedLoansCount += 1;
+      else if (eff === 'MATURED') maturedLoansCount += 1;
+      else activeLoansCount += 1;
+    });
+    const totalLoanAccounts = activeLoansCount + maturedLoansCount + closedLoansCount;
+
+    const collectionSheetsCount = sheets.length;
+    const signatureSheetsCount = signatureSheets.length;
+    const meetingMinutesCount = meetingMinutes.length;
+    const idCardReadyCount = activeMembers;
+    const totalReportsCount = collectionSheetsCount + signatureSheetsCount + meetingMinutesCount;
+
+    return {
+      totalCenters,
+      activeCenters,
+      inactiveCenters,
+      todayMeetingCentersCount,
+      totalGroups,
+      activeSamuhs,
+      inactiveSamuhs,
+      totalMembers,
+      activeMembers,
+      inactiveMembers,
+      membersWithPhotoCount,
+      totalSavingAccounts,
+      activeSavingAccounts,
+      closedSavingAccounts,
+      totalLoanAccounts,
+      activeLoansCount,
+      maturedLoansCount,
+      closedLoansCount,
+      collectionSheetsCount,
+      signatureSheetsCount,
+      meetingMinutesCount,
+      idCardReadyCount,
+      totalReportsCount
+    };
+  }, [centers, groups, members, savings, allLoanAccountsForCounts, sheets, signatureSheets, meetingMinutes, currentBsDate.day]);
+
+  // Live Center-wise operational breakdown (ordered ascending by Meeting Day — counts only, NO monetary amounts)
+  const centerAnalytics = useMemo(() => {
+    const todayBsDayNum = parseInt(currentBsDate.day, 10) || 0;
+    const memberByIdMap = new Map<string, MFMember>();
+    members.forEach(m => {
+      const normId = normalizeMfMemberId(m.memberId);
+      if (normId && !memberByIdMap.has(normId)) memberByIdMap.set(normId, m);
+    });
+
+    return sortedCentersByMeetingDay.map(c => {
+      const normCenterName = normalizeMfText(c.name);
+      const centerGroups = groups.filter(
+        g => g.centerId === c.id || (normCenterName !== '' && normalizeMfText(g.centerName) === normCenterName)
+      );
+      const centerGroupNames = new Set(centerGroups.map(g => normalizeMfText(g.name)).filter(Boolean));
+      const centerMembers = members.filter(
+        m =>
+          m.centerId === c.id ||
+          (normCenterName !== '' && normalizeMfText(m.centerName) === normCenterName) ||
+          (m.samuhName && centerGroupNames.has(normalizeMfText(m.samuhName)))
+      );
+      const activeMembersCount = centerMembers.filter(m => getEffectiveMemberStatus(m.status) === 'ACTIVE').length;
+      const inactiveMembersCount = centerMembers.length - activeMembersCount;
+
+      const centerSavings = savings.filter(s => {
+        const linked = memberByIdMap.get(normalizeMfMemberId(s.memberId));
+        const matchMember = Boolean(
+          linked &&
+            (linked.centerId === c.id ||
+              (normCenterName !== '' && normalizeMfText(linked.centerName) === normCenterName))
+        );
+        const matchDirect =
+          (normCenterName !== '' && normalizeMfText(s.centerName) === normCenterName) ||
+          Boolean(s.groupName && centerGroupNames.has(normalizeMfText(s.groupName)));
+        return matchMember || matchDirect;
+      });
+      const activeSavingsCount = centerSavings.filter(s => getEffectiveSavingStatus(s.status) === 'ACTIVE').length;
+      const closedSavingsCount = centerSavings.length - activeSavingsCount;
+
+      const centerLoans = allLoanAccountsForCounts.filter(l => {
+        const linked = memberByIdMap.get(normalizeMfMemberId(l.memberId));
+        const matchMember = Boolean(
+          linked &&
+            (linked.centerId === c.id ||
+              (normCenterName !== '' && normalizeMfText(linked.centerName) === normCenterName))
+        );
+        const matchDirect =
+          (normCenterName !== '' && normalizeMfText(l.centerName) === normCenterName) ||
+          Boolean(l.groupName && centerGroupNames.has(normalizeMfText(l.groupName)));
+        return matchMember || matchDirect;
+      });
+      let activeLoansCount = 0;
+      let maturedLoansCount = 0;
+      let closedLoansCount = 0;
+      centerLoans.forEach(l => {
+        const eff = getEffectiveLoanStatus(l);
+        if (eff === 'CLOSED') closedLoansCount += 1;
+        else if (eff === 'MATURED') maturedLoansCount += 1;
+        else activeLoansCount += 1;
+      });
+
+      const meetingDayNum = extractMeetingDayNumber(c.meetingDay) ?? extractMeetingDayNumber(c.name);
+
+      return {
+        id: c.id,
+        code: c.code,
+        name: c.name,
+        shortName: c.code || c.name.split('(')[0].trim().slice(0, 14),
+        branch: c.branch,
+        meetingDay: c.meetingDay,
+        meetingDayNum,
+        isMeetingToday: meetingDayNum !== null && meetingDayNum === todayBsDayNum,
+        fieldOfficer: c.fieldOfficer || 'Unassigned',
+        status: c.status,
+        groupsCount: centerGroups.length,
+        membersCount: centerMembers.length,
+        activeMembersCount,
+        inactiveMembersCount,
+        activeSavingsCount,
+        closedSavingsCount,
+        activeLoansCount,
+        maturedLoansCount,
+        closedLoansCount,
+        openLoansCount: activeLoansCount + maturedLoansCount
+      };
+    });
+  }, [sortedCentersByMeetingDay, groups, members, savings, allLoanAccountsForCounts, currentBsDate.day]);
+
+  const filteredDashboardCenters = useMemo(() => {
+    const q = dashboardCenterSearch.trim().toLowerCase();
+    if (!q) return centerAnalytics;
+    return centerAnalytics.filter(
+      row =>
+        row.name.toLowerCase().includes(q) ||
+        row.code.toLowerCase().includes(q) ||
+        row.meetingDay.toLowerCase().includes(q) ||
+        row.branch.toLowerCase().includes(q)
+    );
+  }, [centerAnalytics, dashboardCenterSearch]);
+
+  const upcomingMeetingCenters = useMemo(() => {
+    const todayBsDayNum = parseInt(currentBsDate.day, 10) || 1;
+    const withDays = centerAnalytics.filter(c => c.meetingDayNum !== null);
+    if (withDays.length === 0) return centerAnalytics.slice(0, 4);
+    const ranked = [...withDays].sort((a, b) => {
+      const da = ((a.meetingDayNum || 0) - todayBsDayNum + 32) % 32;
+      const db = ((b.meetingDayNum || 0) - todayBsDayNum + 32) % 32;
+      if (da !== db) return da - db;
+      return a.name.localeCompare(b.name);
+    });
+    return ranked.slice(0, 4);
+  }, [centerAnalytics, currentBsDate.day]);
+
+  const recentGeneratedSheets = useMemo(() => {
+    const combined = [
+      ...sheets.map(s => ({
+        id: `col-${s.id}`,
+        kind: 'Collection' as const,
+        groupName: s.groupName || s.centerName || 'Collection Sheet',
+        centerName: s.centerName || '',
+        dateLabel: s.dateDisplay || `${s.year} ${s.month} ${s.day}`.trim(),
+        memberCount: s.memberCount || 0,
+        createdAt: s.createdAt || ''
+      })),
+      ...signatureSheets.map(s => ({
+        id: `sig-${s.id}`,
+        kind: 'Signature' as const,
+        groupName: s.groupName || s.centerName || 'Signature Sheet',
+        centerName: s.centerName || '',
+        dateLabel: s.dateBs || '',
+        memberCount: s.totalMembers || s.members?.length || 0,
+        createdAt: s.createdAt || ''
+      }))
+    ];
+    return combined
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+      .slice(0, 5);
+  }, [sheets, signatureSheets]);
+
+  // Live Loan Accounts Status Breakdown for Donut Chart (Counts only, NO NPR amounts)
+  const loanStatusChartData = useMemo(() => {
+    const items = [
+      { name: 'Active', value: dashboardStats.activeLoansCount, color: '#00593B' },
+      { name: 'Matured', value: dashboardStats.maturedLoansCount, color: '#D97706' },
+      { name: 'Closed', value: dashboardStats.closedLoansCount, color: '#64748B' }
+    ].filter(item => item.value > 0);
+    return items.length > 0 ? items : [{ name: 'No Loan Accounts', value: 1, color: '#E2E8F0' }];
+  }, [dashboardStats.activeLoansCount, dashboardStats.maturedLoansCount, dashboardStats.closedLoansCount]);
 
   // Filtered Centers
   const filteredCenters = useMemo(() => {
@@ -1750,9 +1896,6 @@ export const MicroFinanceManagement: React.FC = () => {
     );
   };
 
-  const getEffectiveMemberStatus = (status?: string): 'ACTIVE' | 'INACTIVE' => {
-    return String(status || 'ACTIVE').toUpperCase() === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE';
-  };
 
   // Filtered Members (before Active/Inactive split, for live tab counts)
   const baseFilteredMembers = useMemo(() => {
@@ -1877,16 +2020,6 @@ export const MicroFinanceManagement: React.FC = () => {
     return baseFilteredSavings.filter(s => getEffectiveSavingStatus(s.status) === savingStatusTab);
   }, [baseFilteredSavings, savingStatusTab]);
 
-  const getEffectiveLoanStatus = (loan: MFLoanRecord): 'ACTIVE' | 'MATURED' | 'CLOSED' => {
-    if (loan.status === 'CLOSED') return 'CLOSED';
-    if (loan.status === 'MATURED') return 'MATURED';
-    const matNorm = normalizeBsDate(loan.maturityDate);
-    const isBsDate = /^20[7-9]\d-/.test(matNorm);
-    if (loan.status === 'ACTIVE' && isBsDate && matNorm <= getTodayBsDate()) {
-      return 'MATURED';
-    }
-    return 'ACTIVE';
-  };
 
   const conflictingUnclosedLoan = useMemo(() => {
     return findUnclosedDuplicateLoan(loans, loanForm.memberId, loanForm.loanProduct);
@@ -3545,263 +3678,438 @@ export const MicroFinanceManagement: React.FC = () => {
       {/* SUB-MENU CONTENT SECTIONS */}
 
       {/* ============================================================== */}
-      {/* 1. DASHBOARD OVERVIEW (All Menus Summary - Strictly English) */}
+      {/* 1. DASHBOARD OVERVIEW (Operational Summary — No Saving Balance / Loan Portfolio) */}
       {/* ============================================================== */}
       {activeTab === 'dashboard' && canViewDashboard && (
         <div className="space-y-4">
-          {/* Clean Dashboard Header Bar (Removed Welcome back, ADMIN SYSTEM, and Quick Action) */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
-            <div>
-              <h2 className="text-xl font-black text-slate-900">Dashboard Overview</h2>
+          {/* Header Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white px-5 py-4 rounded-xl border border-slate-200">
+            <div className="space-y-0.5">
+              <h2 className="text-lg font-bold tracking-tight text-slate-900">Micro-Finance Overview</h2>
+              <p className="text-xs text-slate-500">
+                <span className="font-mono tabular-nums text-slate-700">
+                  {currentBsDate.year} {currentBsDate.month} {currentBsDate.day}
+                </span>
+                {' · '}
+                <span className="font-mono tabular-nums">{dashboardStats.activeCenters}</span> active centers
+                {dashboardStats.todayMeetingCentersCount > 0 && (
+                  <>
+                    {' · '}
+                    <span className="font-semibold text-[#00593B]">
+                      <span className="font-mono tabular-nums">{dashboardStats.todayMeetingCentersCount}</span> scheduled today
+                    </span>
+                  </>
+                )}
+              </p>
             </div>
 
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 bg-slate-50">
-                <Calendar className="w-3.5 h-3.5 text-slate-500" />
-                <span>{currentBsDate.year} {currentBsDate.month} {currentBsDate.day}</span>
-              </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {canViewIdCard && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('reports');
+                    setReportTab('id-card');
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+                >
+                  <CreditCard className="w-3.5 h-3.5 text-[#00593B]" />
+                  <span>Member ID Card</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={reloadData}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#00593B] hover:bg-[#00462e] text-xs font-semibold text-white whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Refresh</span>
+              </button>
             </div>
           </div>
 
-          {/* Row 1: 6 All-Menu Interactive KPI Cards */}
+          {/* Row 1: 6 Operational KPI Cards (Pure Counts & Statuses — Zero Saving Balance / Loan Portfolio) */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            {/* 1. CENTERS */}
+            {/* 1. Centers */}
             <button
               type="button"
-              onClick={() => setActiveTab('centers')}
-              className="bg-white p-3.5 rounded-2xl border border-slate-200 hover:border-blue-300 shadow-2xs space-y-2 text-left transition-all cursor-pointer group"
+              disabled={!canViewCenters}
+              onClick={() => canViewCenters && setActiveTab('centers')}
+              className="bg-white p-4 rounded-xl border border-slate-200 hover:border-slate-300 disabled:hover:border-slate-200 text-left transition-colors cursor-pointer disabled:cursor-default flex flex-col justify-between gap-2.5"
             >
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider">CENTERS</span>
-                <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <MapPin className="w-4 h-4" />
-                </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-500">Centers</span>
+                <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
               </div>
-              <div className="text-xl font-black text-slate-900">{dashboardStats.totalCenters}</div>
-            </button>
-
-            {/* 2. GROUPS */}
-            <button
-              type="button"
-              onClick={() => setActiveTab('groups')}
-              className="bg-white p-3.5 rounded-2xl border border-slate-200 hover:border-purple-300 shadow-2xs space-y-2 text-left transition-all cursor-pointer group"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider">GROUPS</span>
-                <div className="w-7 h-7 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <Building2 className="w-4 h-4" />
+              <div>
+                <div className="text-2xl font-bold font-mono tabular-nums text-slate-900">
+                  {dashboardStats.totalCenters}
                 </div>
-              </div>
-              <div className="text-xl font-black text-slate-900">{dashboardStats.totalGroups}</div>
-            </button>
-
-            {/* 3. MEMBERS */}
-            <button
-              type="button"
-              onClick={() => setActiveTab('members')}
-              className="bg-white p-3.5 rounded-2xl border border-slate-200 hover:border-indigo-300 shadow-2xs space-y-2 text-left transition-all cursor-pointer group"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider">MEMBERS</span>
-                <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <Users className="w-4 h-4" />
+                <div className="mt-1 text-[11px] text-slate-500 truncate">
+                  <span className="font-mono tabular-nums font-semibold text-emerald-700">{dashboardStats.activeCenters}</span> active
+                  {dashboardStats.inactiveCenters > 0 && (
+                    <>
+                      {' · '}
+                      <span className="font-mono tabular-nums">{dashboardStats.inactiveCenters}</span> inactive
+                    </>
+                  )}
                 </div>
-              </div>
-              <div className="text-xl font-black text-slate-900">{dashboardStats.totalMembers}</div>
-            </button>
-
-            {/* 4. SAVING */}
-            <button
-              type="button"
-              onClick={() => setActiveTab('saving')}
-              className="bg-white p-3.5 rounded-2xl border border-slate-200 hover:border-emerald-300 shadow-2xs space-y-2 text-left transition-all cursor-pointer group"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider">SAVING BALANCE</span>
-                <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <PiggyBank className="w-4 h-4" />
-                </div>
-              </div>
-              <div className="text-base font-black text-slate-900">
-                NPR {dashboardStats.savingBalance.toLocaleString()}
               </div>
             </button>
 
-            {/* 5. LOAN */}
+            {/* 2. Groups (Samuh) */}
             <button
               type="button"
-              onClick={() => setActiveTab('loan')}
-              className="bg-white p-3.5 rounded-2xl border border-slate-200 hover:border-amber-300 shadow-2xs space-y-2 text-left transition-all cursor-pointer group"
+              disabled={!canViewGroups}
+              onClick={() => canViewGroups && setActiveTab('groups')}
+              className="bg-white p-4 rounded-xl border border-slate-200 hover:border-slate-300 disabled:hover:border-slate-200 text-left transition-colors cursor-pointer disabled:cursor-default flex flex-col justify-between gap-2.5"
             >
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider">LOAN PORTFOLIO</span>
-                <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <HandCoins className="w-4 h-4" />
-                </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-500">Groups</span>
+                <Building2 className="w-4 h-4 text-slate-400 shrink-0" />
               </div>
-              <div className="text-base font-black text-slate-900">
-                NPR {dashboardStats.loanPortfolio.toLocaleString()}
+              <div>
+                <div className="text-2xl font-bold font-mono tabular-nums text-slate-900">
+                  {dashboardStats.totalGroups}
+                </div>
+                <div className="mt-1 text-[11px] text-slate-500 truncate">
+                  <span className="font-mono tabular-nums font-semibold text-emerald-700">{dashboardStats.activeSamuhs}</span> active
+                  {dashboardStats.inactiveSamuhs > 0 && (
+                    <>
+                      {' · '}
+                      <span className="font-mono tabular-nums">{dashboardStats.inactiveSamuhs}</span> inactive
+                    </>
+                  )}
+                </div>
               </div>
             </button>
 
-            {/* 6. REPORTS */}
+            {/* 3. Members */}
             <button
               type="button"
-              onClick={() => setActiveTab('reports')}
-              className="bg-white p-3.5 rounded-2xl border border-slate-200 hover:border-violet-300 shadow-2xs space-y-2 text-left transition-all cursor-pointer group"
+              disabled={!canViewMembers}
+              onClick={() => canViewMembers && setActiveTab('members')}
+              className="bg-white p-4 rounded-xl border border-slate-200 hover:border-slate-300 disabled:hover:border-slate-200 text-left transition-colors cursor-pointer disabled:cursor-default flex flex-col justify-between gap-2.5"
             >
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider">REPORTS</span>
-                <div className="w-7 h-7 rounded-lg bg-violet-50 text-violet-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <FileText className="w-4 h-4" />
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-500">Members</span>
+                <Users className="w-4 h-4 text-slate-400 shrink-0" />
+              </div>
+              <div>
+                <div className="text-2xl font-bold font-mono tabular-nums text-slate-900">
+                  {dashboardStats.totalMembers}
+                </div>
+                <div className="mt-1 text-[11px] text-slate-500 truncate">
+                  <span className="font-mono tabular-nums font-semibold text-emerald-700">{dashboardStats.activeMembers}</span> active
+                  {' · '}
+                  <span className="font-mono tabular-nums text-slate-600">{dashboardStats.inactiveMembers}</span> inactive
                 </div>
               </div>
-              <div className="text-xl font-black text-slate-900">{dashboardStats.totalReportsCount}</div>
+            </button>
+
+            {/* 4. Saving Accounts (Count Only — No Balance) */}
+            <button
+              type="button"
+              disabled={!canViewSaving}
+              onClick={() => canViewSaving && setActiveTab('saving')}
+              className="bg-white p-4 rounded-xl border border-slate-200 hover:border-slate-300 disabled:hover:border-slate-200 text-left transition-colors cursor-pointer disabled:cursor-default flex flex-col justify-between gap-2.5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-500">Saving Accounts</span>
+                <PiggyBank className="w-4 h-4 text-slate-400 shrink-0" />
+              </div>
+              <div>
+                <div className="text-2xl font-bold font-mono tabular-nums text-slate-900">
+                  {dashboardStats.totalSavingAccounts}
+                </div>
+                <div className="mt-1 text-[11px] text-slate-500 truncate">
+                  <span className="font-mono tabular-nums font-semibold text-emerald-700">{dashboardStats.activeSavingAccounts}</span> active
+                  {' · '}
+                  <span className="font-mono tabular-nums text-slate-600">{dashboardStats.closedSavingAccounts}</span> closed
+                </div>
+              </div>
+            </button>
+
+            {/* 5. Loan Accounts (Count Only — No Portfolio Amount) */}
+            <button
+              type="button"
+              disabled={!canViewLoan}
+              onClick={() => canViewLoan && setActiveTab('loan')}
+              className="bg-white p-4 rounded-xl border border-slate-200 hover:border-slate-300 disabled:hover:border-slate-200 text-left transition-colors cursor-pointer disabled:cursor-default flex flex-col justify-between gap-2.5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-500">Loan Accounts</span>
+                <HandCoins className="w-4 h-4 text-slate-400 shrink-0" />
+              </div>
+              <div>
+                <div className="text-2xl font-bold font-mono tabular-nums text-slate-900">
+                  {dashboardStats.totalLoanAccounts}
+                </div>
+                <div className="mt-1 text-[11px] text-slate-500 truncate">
+                  <span className="font-mono tabular-nums font-semibold text-emerald-700">{dashboardStats.activeLoansCount}</span> active
+                  {' · '}
+                  <span className="font-mono tabular-nums font-semibold text-amber-700">{dashboardStats.maturedLoansCount}</span> matured
+                </div>
+              </div>
+            </button>
+
+            {/* 6. Reports & ID Cards */}
+            <button
+              type="button"
+              disabled={!canViewReports}
+              onClick={() => canViewReports && setActiveTab('reports')}
+              className="bg-white p-4 rounded-xl border border-slate-200 hover:border-slate-300 disabled:hover:border-slate-200 text-left transition-colors cursor-pointer disabled:cursor-default flex flex-col justify-between gap-2.5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-500">Reports &amp; IDs</span>
+                <FileText className="w-4 h-4 text-slate-400 shrink-0" />
+              </div>
+              <div>
+                <div className="text-2xl font-bold font-mono tabular-nums text-slate-900">
+                  {dashboardStats.totalReportsCount}
+                </div>
+                <div className="mt-1 text-[11px] text-slate-500 truncate">
+                  <span className="font-mono tabular-nums font-semibold text-[#00593B]">{dashboardStats.idCardReadyCount}</span> IDs ready
+                </div>
+              </div>
             </button>
           </div>
 
-          {/* Row 2: Live Portfolio Analytics (Center-wise Comparison & Loan Status Breakdown) */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            {/* Center-wise Saving vs Loan (Real Center Data) */}
-            <div className="lg:col-span-2 bg-white p-4.5 rounded-2xl border border-slate-200 shadow-2xs space-y-3">
+          {/* Row 2: Operational Analytics (Center-wise Membership & Account Counts + Loan Accounts Status) */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-stretch">
+            {/* Left (2/3): Center-wise Members, Saving Accounts & Loan Accounts (Counts Only) */}
+            <div className="lg:col-span-2 bg-white p-5 rounded-xl border border-slate-200 flex flex-col justify-between gap-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <h3 className="text-sm font-black text-slate-800">Center-wise Saving &amp; Loan Portfolio</h3>
+                  <h3 className="text-sm font-bold text-slate-900">Center-wise Members &amp; Accounts</h3>
+                  <p className="text-xs text-slate-500">Ordered by meeting day · Active accounts count per center</p>
                 </div>
-                <div className="flex items-center gap-3 text-xs font-bold">
-                  <span className="flex items-center gap-1.5 text-emerald-700">
-                    <span className="w-2.5 h-2.5 rounded bg-emerald-500 inline-block"></span> Savings
+                <div className="flex items-center gap-4 text-xs font-medium text-slate-600">
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-xs bg-[#00593B] inline-block" />
+                    Active Members
                   </span>
-                  <span className="flex items-center gap-1.5 text-blue-700">
-                    <span className="w-2.5 h-2.5 rounded bg-blue-600 inline-block"></span> Total Loans
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-xs bg-blue-600 inline-block" />
+                    Saving A/Cs
                   </span>
-                  <span className="flex items-center gap-1.5 text-amber-600">
-                    <span className="w-2.5 h-2.5 rounded bg-amber-500 inline-block"></span> Outstanding
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-xs bg-amber-600 inline-block" />
+                    Loan A/Cs
                   </span>
                 </div>
               </div>
-              <div className="h-56 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={centerAnalytics}>
-                    <XAxis dataKey="shortName" stroke="#94a3b8" fontSize={11} tickLine={false} />
-                    <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} tickFormatter={(v) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : `${v}`} />
-                    <Tooltip formatter={(val: number | string | undefined) => [`NPR ${(Number(val) || 0).toLocaleString()}`, '']} />
-                    <Bar dataKey="savings" name="Total Savings" fill="#10b981" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="loans" name="Loan Disbursed" fill="#2563eb" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="outstanding" name="Outstanding" fill="#f59e0b" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+
+              {centerAnalytics.length > 0 ? (
+                <div className="h-60 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={centerAnalytics} barGap={3}>
+                      <XAxis dataKey="shortName" stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={{ stroke: '#e2e8f0' }} />
+                      <YAxis allowDecimals={false} stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
+                      <Tooltip
+                        contentStyle={{
+                          borderRadius: '8px',
+                          border: '1px solid #e2e8f0',
+                          fontSize: '12px',
+                          boxShadow: 'none'
+                        }}
+                        formatter={(val: number | string | undefined, name: string | undefined) => [
+                          `${Number(val) || 0}`,
+                          name || ''
+                        ]}
+                      />
+                      <Bar dataKey="activeMembersCount" name="Active Members" fill="#00593B" radius={[3, 3, 0, 0]} maxBarSize={26} />
+                      <Bar dataKey="activeSavingsCount" name="Active Saving A/Cs" fill="#2563EB" radius={[3, 3, 0, 0]} maxBarSize={26} />
+                      <Bar dataKey="openLoansCount" name="Open Loan A/Cs" fill="#D97706" radius={[3, 3, 0, 0]} maxBarSize={26} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <div className="h-60 flex flex-col items-center justify-center text-center gap-2 border border-dashed border-slate-200 rounded-lg">
+                  <p className="text-xs text-slate-500">No centers created yet to compare membership and account counts.</p>
+                  {canViewCenters && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('centers')}
+                      className="text-xs font-semibold text-[#00593B] hover:underline cursor-pointer"
+                    >
+                      Add First Center
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
-            {/* Loan Portfolio & PAR Status */}
-            <div className="bg-white p-4.5 rounded-2xl border border-slate-200 shadow-2xs space-y-3 flex flex-col justify-between">
-              <div className="flex items-center justify-between">
+            {/* Right (1/3): Loan Accounts Status & Operational Health */}
+            <div className="bg-white p-5 rounded-xl border border-slate-200 flex flex-col justify-between gap-3">
+              <div className="flex items-start justify-between gap-2">
                 <div>
-                  <h3 className="text-sm font-black text-slate-800">Loan Portfolio Status</h3>
+                  <h3 className="text-sm font-bold text-slate-900">Loan Accounts Status</h3>
+                  <p className="text-xs text-slate-500">Account lifecycle count breakdown</p>
                 </div>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${
-                  Number(dashboardStats.parRate) > 0
-                    ? 'bg-amber-50 text-amber-700 border-amber-200'
-                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                }`}>
-                  PAR: {dashboardStats.parRate}%
+                <span className="font-mono tabular-nums text-xs font-semibold text-slate-600">
+                  {dashboardStats.totalLoanAccounts} total
                 </span>
               </div>
 
-              <div className="h-44 w-full flex items-center justify-center">
+              <div className="relative h-44 w-full flex items-center justify-center">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
                       data={loanStatusChartData}
                       cx="50%"
                       cy="50%"
-                      innerRadius={45}
+                      innerRadius={48}
                       outerRadius={72}
-                      paddingAngle={4}
+                      paddingAngle={3}
                       dataKey="value"
                     >
                       {loanStatusChartData.map((entry, index) => (
                         <Cell key={`loan-cell-${index}`} fill={entry.color} />
                       ))}
                     </Pie>
-                    <Tooltip formatter={(v: number | string | undefined) => [`${v} Loans`, 'Count']} />
+                    <Tooltip
+                      contentStyle={{
+                        borderRadius: '8px',
+                        border: '1px solid #e2e8f0',
+                        fontSize: '12px',
+                        boxShadow: 'none'
+                      }}
+                      formatter={(v: number | string | undefined, name: string | undefined) => [`${v} accounts`, name || 'Status']}
+                    />
                   </PieChart>
                 </ResponsiveContainer>
+                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="text-xl font-bold font-mono tabular-nums text-slate-900">
+                    {dashboardStats.totalLoanAccounts}
+                  </span>
+                  <span className="text-[11px] text-slate-500">Accounts</span>
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100 text-center text-[11px]">
-                <div className="p-1.5 rounded-lg bg-blue-50/70">
-                  <div className="font-black text-blue-700">{dashboardStats.activeLoansCount}</div>
-                  <div className="text-[10px] font-bold text-slate-500">Active</div>
+              <div className="grid grid-cols-3 gap-2 pt-3 border-t border-slate-100 text-center">
+                <div>
+                  <div className="text-sm font-bold font-mono tabular-nums text-[#00593B]">
+                    {dashboardStats.activeLoansCount}
+                  </div>
+                  <div className="text-[11px] text-slate-500">Active</div>
                 </div>
-                <div className="p-1.5 rounded-lg bg-amber-50/70">
-                  <div className="font-black text-amber-700">{dashboardStats.maturedLoansCount}</div>
-                  <div className="text-[10px] font-bold text-slate-500">Matured</div>
+                <div className="border-x border-slate-100">
+                  <div className="text-sm font-bold font-mono tabular-nums text-amber-700">
+                    {dashboardStats.maturedLoansCount}
+                  </div>
+                  <div className="text-[11px] text-slate-500">Matured</div>
                 </div>
+                <div>
+                  <div className="text-sm font-bold font-mono tabular-nums text-slate-600">
+                    {dashboardStats.closedLoansCount}
+                  </div>
+                  <div className="text-[11px] text-slate-500">Closed</div>
+                </div>
+              </div>
+
+              <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
+                <span>ID Photo Coverage</span>
+                <span className="font-mono tabular-nums font-semibold text-slate-700">
+                  {dashboardStats.membersWithPhotoCount} / {dashboardStats.totalMembers}
+                </span>
               </div>
             </div>
           </div>
 
-          {/* Row 3: Centers & Groups Directory Table + Saving/Loan/Reports Hub */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            {/* Centers & Groups Overview Table */}
-            <div className="lg:col-span-2 bg-white p-4.5 rounded-2xl border border-slate-200 shadow-2xs space-y-3">
-              <div className="flex items-center justify-between">
+          {/* Row 3: Centers Directory Summary (2/3) + Reports, ID Cards & Meeting Schedule Hub (1/3) */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-stretch">
+            {/* Centers & Groups Operational Summary Table (Zero NPR Columns) */}
+            <div className="lg:col-span-2 bg-white p-5 rounded-xl border border-slate-200 flex flex-col gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                 <div>
-                  <h3 className="text-sm font-black text-slate-800">Centers &amp; Groups Summary</h3>
+                  <h3 className="text-sm font-bold text-slate-900">Centers &amp; Groups Summary</h3>
+                  <p className="text-xs text-slate-500">Sorted ascending by meeting day</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('centers')}
-                  className="text-xs font-bold text-blue-600 hover:underline cursor-pointer"
-                >
-                  View All Centers
-                </button>
+                <div className="flex items-center gap-2">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={dashboardCenterSearch}
+                      onChange={e => setDashboardCenterSearch(e.target.value)}
+                      placeholder="Filter centers..."
+                      className="pl-8 pr-2.5 py-1.5 w-44 rounded-lg border border-slate-200 text-xs text-slate-700 placeholder:text-slate-400 focus:outline-none focus:border-[#00593B]"
+                    />
+                  </div>
+                  {canViewCenters && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('centers')}
+                      className="text-xs font-semibold text-[#00593B] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      View All
+                    </button>
+                  )}
+                </div>
               </div>
+
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead>
-                    <tr className="border-b border-slate-200 text-slate-400 font-black uppercase text-[10px]">
-                      <th className="py-2 pr-2">CODE</th>
-                      <th className="py-2 px-2">CENTER NAME</th>
-                      <th className="py-2 px-2 text-center">GROUPS</th>
-                      <th className="py-2 px-2 text-center">MEMBERS</th>
-                      <th className="py-2 px-2 text-right">SAVINGS</th>
-                      <th className="py-2 px-2 text-right">OUTSTANDING</th>
-                      <th className="py-2 pl-2 text-center">MEETING DAY</th>
+                    <tr className="border-b border-slate-200 text-slate-500 font-semibold">
+                      <th className="py-2.5 pr-3">Code</th>
+                      <th className="py-2.5 px-3">Center Name</th>
+                      <th className="py-2.5 px-3">Meeting Day</th>
+                      <th className="py-2.5 px-3 text-right">Groups</th>
+                      <th className="py-2.5 px-3 text-right">Members</th>
+                      <th className="py-2.5 px-3 text-right">Saving A/Cs</th>
+                      <th className="py-2.5 pl-3 text-right">Loan A/Cs</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 font-semibold text-slate-700">
-                    {centerAnalytics.map(row => (
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {filteredDashboardCenters.map(row => (
                       <tr
                         key={row.id}
-                        onClick={() => setActiveTab('centers')}
-                        className="hover:bg-slate-50 transition-colors cursor-pointer"
+                        onClick={() => canViewCenters && setActiveTab('centers')}
+                        className={`transition-colors ${canViewCenters ? 'hover:bg-slate-50 cursor-pointer' : ''}`}
                       >
-                        <td className="py-2.5 pr-2 font-mono font-bold text-blue-700">{row.code}</td>
-                        <td className="py-2.5 px-2">
-                          <div className="font-extrabold text-slate-900">{row.name}</div>
+                        <td className="py-2.5 pr-3 font-mono tabular-nums font-semibold text-slate-700 whitespace-nowrap">
+                          {row.code}
                         </td>
-                        <td className="py-2.5 px-2 text-center font-bold">{row.groupsCount}</td>
-                        <td className="py-2.5 px-2 text-center font-bold">{row.membersCount}</td>
-                        <td className="py-2.5 px-2 text-right font-mono text-emerald-700">
-                          NPR {row.savings.toLocaleString()}
+                        <td className="py-2.5 px-3">
+                          <div className="font-semibold text-slate-900">{row.name}</div>
                         </td>
-                        <td className="py-2.5 px-2 text-right font-mono text-amber-700">
-                          NPR {row.outstanding.toLocaleString()}
-                        </td>
-                        <td className="py-2.5 pl-2 text-center">
-                          <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700">
-                            {row.meetingDay}
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <span className={row.isMeetingToday ? 'font-semibold text-[#00593B]' : 'text-slate-600'}>
+                            {row.meetingDay || '—'}
+                            {row.isMeetingToday ? ' · Today' : ''}
                           </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums font-medium">
+                          {row.groupsCount}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                          <span className="font-semibold text-slate-900">{row.activeMembersCount}</span>
+                          {row.inactiveMembersCount > 0 && (
+                            <span className="text-slate-400"> / {row.inactiveMembersCount}</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                          <span className="font-semibold text-emerald-700">{row.activeSavingsCount}</span>
+                          {row.closedSavingsCount > 0 && (
+                            <span className="text-slate-400"> / {row.closedSavingsCount}</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 pl-3 text-right font-mono tabular-nums whitespace-nowrap">
+                          <span className="font-semibold text-slate-900">{row.activeLoansCount}</span>
+                          {row.maturedLoansCount > 0 && (
+                            <span className="text-amber-700"> · {row.maturedLoansCount} mat</span>
+                          )}
                         </td>
                       </tr>
                     ))}
-                    {centerAnalytics.length === 0 && (
+                    {filteredDashboardCenters.length === 0 && (
                       <tr>
-                        <td colSpan={7} className="py-6 text-center text-slate-400">
-                          No centers available
+                        <td colSpan={7} className="py-8 text-center text-slate-400">
+                          {dashboardCenterSearch.trim()
+                            ? 'No centers match your search filter.'
+                            : 'No centers registered yet.'}
                         </td>
                       </tr>
                     )}
@@ -3810,164 +4118,270 @@ export const MicroFinanceManagement: React.FC = () => {
               </div>
             </div>
 
-            {/* Reports & Financial Health Summary Card */}
-            <div className="bg-white p-4.5 rounded-2xl border border-slate-200 shadow-2xs space-y-4 flex flex-col justify-between">
+            {/* Right (1/3): Reports & ID Card Hub + Upcoming Meetings */}
+            <div className="bg-white p-5 rounded-xl border border-slate-200 flex flex-col justify-between gap-4">
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-black text-slate-800">Reports &amp; Financial Summary</h3>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('reports')}
-                    className="text-xs font-bold text-blue-600 hover:underline cursor-pointer"
-                  >
-                    Open Reports
-                  </button>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">Reports &amp; Documents</h3>
+                    <p className="text-xs text-slate-500">All 4 Micro-Finance report modules</p>
+                  </div>
+                  {canViewReports && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('reports')}
+                      className="text-xs font-semibold text-[#00593B] hover:underline cursor-pointer"
+                    >
+                      Open
+                    </button>
+                  )}
                 </div>
 
-                {/* Reports 3 Sub-Menu Links */}
-                <div className="space-y-2">
-                  <button
-                    type="button"
-                    onClick={() => { setActiveTab('reports'); setReportTab('collection'); }}
-                    className="w-full p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50/70 border border-slate-200 flex items-center justify-between text-xs transition-colors cursor-pointer"
-                  >
-                    <div className="flex items-center gap-2 font-bold text-slate-800">
-                      <FileSpreadsheet className="w-4 h-4 text-blue-600" />
-                      <span>Collection Sheet</span>
-                    </div>
-                    <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 font-mono font-bold text-[11px] text-slate-700">
-                      {dashboardStats.collectionSheetsCount} records
-                    </span>
-                  </button>
+                <div className="divide-y divide-slate-100 border-t border-slate-100">
+                  {canViewCollectionReport && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTab('reports');
+                        setReportTab('collection');
+                      }}
+                      className="w-full py-2.5 flex items-center justify-between gap-2 text-left hover:bg-slate-50 px-1.5 -mx-1.5 rounded-lg transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center gap-2.5 text-xs font-semibold text-slate-800">
+                        <FileSpreadsheet className="w-4 h-4 text-blue-600 shrink-0" />
+                        <span>Collection Sheet</span>
+                      </span>
+                      <span className="font-mono tabular-nums text-xs text-slate-600">
+                        {dashboardStats.collectionSheetsCount} sheets
+                      </span>
+                    </button>
+                  )}
 
-                  <button
-                    type="button"
-                    onClick={() => { setActiveTab('reports'); setReportTab('signature'); }}
-                    className="w-full p-2.5 rounded-xl bg-slate-50 hover:bg-emerald-50/70 border border-slate-200 flex items-center justify-between text-xs transition-colors cursor-pointer"
-                  >
-                    <div className="flex items-center gap-2 font-bold text-slate-800">
-                      <Printer className="w-4 h-4 text-emerald-600" />
-                      <span>Signature Sheet</span>
-                    </div>
-                    <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 font-mono font-bold text-[11px] text-slate-700">
-                      {dashboardStats.signatureSheetsCount} records
-                    </span>
-                  </button>
+                  {canViewSignatureReport && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTab('reports');
+                        setReportTab('signature');
+                      }}
+                      className="w-full py-2.5 flex items-center justify-between gap-2 text-left hover:bg-slate-50 px-1.5 -mx-1.5 rounded-lg transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center gap-2.5 text-xs font-semibold text-slate-800">
+                        <Printer className="w-4 h-4 text-emerald-700 shrink-0" />
+                        <span>Signature Sheet</span>
+                      </span>
+                      <span className="font-mono tabular-nums text-xs text-slate-600">
+                        {dashboardStats.signatureSheetsCount} sheets
+                      </span>
+                    </button>
+                  )}
 
-                  <button
-                    type="button"
-                    onClick={() => { setActiveTab('reports'); setReportTab('meeting-minutes'); }}
-                    className="w-full p-2.5 rounded-xl bg-slate-50 hover:bg-violet-50/70 border border-slate-200 flex items-center justify-between text-xs transition-colors cursor-pointer"
-                  >
-                    <div className="flex items-center gap-2 font-bold text-slate-800">
-                      <FileText className="w-4 h-4 text-violet-600" />
-                      <span>Meeting Minute</span>
+                  {canViewMeetingMinutes && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTab('reports');
+                        setReportTab('meeting-minutes');
+                      }}
+                      className="w-full py-2.5 flex items-center justify-between gap-2 text-left hover:bg-slate-50 px-1.5 -mx-1.5 rounded-lg transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center gap-2.5 text-xs font-semibold text-slate-800">
+                        <FileText className="w-4 h-4 text-violet-600 shrink-0" />
+                        <span>Meeting Minute</span>
+                      </span>
+                      <span className="font-mono tabular-nums text-xs text-slate-600">
+                        {dashboardStats.meetingMinutesCount} records
+                      </span>
+                    </button>
+                  )}
+
+                  {canViewIdCard && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTab('reports');
+                        setReportTab('id-card');
+                      }}
+                      className="w-full py-2.5 flex items-center justify-between gap-2 text-left hover:bg-slate-50 px-1.5 -mx-1.5 rounded-lg transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center gap-2.5 text-xs font-semibold text-slate-800">
+                        <CreditCard className="w-4 h-4 text-[#00593B] shrink-0" />
+                        <span>Member ID Card</span>
+                      </span>
+                      <span className="font-mono tabular-nums text-xs text-slate-600">
+                        {dashboardStats.idCardReadyCount} ready
+                      </span>
+                    </button>
+                  )}
+
+                  {!canViewReports && (
+                    <div className="py-4 text-center text-xs text-slate-400">
+                      No report modules assigned to your role.
                     </div>
-                    <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 font-mono font-bold text-[11px] text-slate-700">
-                      {dashboardStats.meetingMinutesCount} records
-                    </span>
-                  </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Upcoming Center Meeting Schedule */}
+              <div className="pt-3 border-t border-slate-100 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Meeting Schedule</span>
+                  </span>
+                  <span className="text-[11px] font-mono tabular-nums text-slate-400">
+                    Day {currentBsDate.day}
+                  </span>
+                </div>
+                <div className="divide-y divide-slate-100 text-xs">
+                  {upcomingMeetingCenters.map(c => (
+                    <div key={`sched-${c.id}`} className="py-1.5 flex items-center justify-between gap-2">
+                      <span className="font-medium text-slate-800 truncate">{c.name}</span>
+                      <span
+                        className={`font-mono tabular-nums shrink-0 ${
+                          c.isMeetingToday ? 'font-semibold text-[#00593B]' : 'text-slate-500'
+                        }`}
+                      >
+                        {c.isMeetingToday ? 'Today' : c.meetingDay}
+                      </span>
+                    </div>
+                  ))}
+                  {upcomingMeetingCenters.length === 0 && (
+                    <div className="py-2 text-slate-400 text-xs">No scheduled centers</div>
+                  )}
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Row 4: Recent Records Across Saving, Loan & Meeting Minutes (Strictly English) */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            {/* Recent Savings */}
-            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs space-y-2.5">
+          {/* Row 4: Recent Operational Activity (Members, Meeting Minutes & Generated Sheets — ZERO Monetary Values) */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-stretch">
+            {/* 1. Recent Members */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col gap-2.5">
               <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                <h4 className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                  <PiggyBank className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Recent Savings</span>
+                <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5 text-[#00593B]" />
+                  <span>Recent Members</span>
                 </h4>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('saving')}
-                  className="text-[11px] font-bold text-blue-600 hover:underline cursor-pointer"
-                >
-                  View All
-                </button>
+                {canViewMembers && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('members')}
+                    className="text-xs font-semibold text-[#00593B] hover:underline cursor-pointer"
+                  >
+                    View All
+                  </button>
+                )}
               </div>
               <div className="divide-y divide-slate-100 text-xs">
-                {savings.slice(0, 4).map(s => (
-                  <div key={s.id} className="py-2 flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="font-bold text-slate-900 truncate">{s.name}</div>
+                {members.slice(0, 5).map(m => {
+                  const isActive = getEffectiveMemberStatus(m.status) === 'ACTIVE';
+                  return (
+                    <div key={m.id} className="py-2 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-semibold text-slate-900 truncate">{m.name}</div>
+                        <div className="text-[11px] text-slate-500 truncate">
+                          {m.samuhName || m.centerName || 'Unassigned'}
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className={`text-[11px] font-semibold ${isActive ? 'text-emerald-700' : 'text-slate-400'}`}>
+                          {isActive ? 'Active' : 'Inactive'}
+                        </div>
+                        <div className="font-mono tabular-nums text-[10px] text-slate-400">{m.memberId}</div>
+                      </div>
                     </div>
-                    <div className="text-right shrink-0">
-                      <div className="font-mono font-black text-emerald-700">NPR {s.amount.toLocaleString()}</div>
-                    </div>
-                  </div>
-                ))}
-                {savings.length === 0 && (
-                  <div className="py-6 text-center text-slate-400 text-xs">No saving records</div>
+                  );
+                })}
+                {members.length === 0 && (
+                  <div className="py-6 text-center text-slate-400 text-xs">No member records yet</div>
                 )}
               </div>
             </div>
 
-            {/* Active Loans */}
-            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs space-y-2.5">
+            {/* 2. Recent Meeting Minutes */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col gap-2.5">
               <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                <h4 className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                  <HandCoins className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Loan Accounts</span>
-                </h4>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('loan')}
-                  className="text-[11px] font-bold text-blue-600 hover:underline cursor-pointer"
-                >
-                  View All
-                </button>
-              </div>
-              <div className="divide-y divide-slate-100 text-xs">
-                {loans.slice(0, 4).map(l => (
-                  <div key={l.id} className="py-2 flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="font-bold text-slate-900 truncate">{l.name}</div>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <div className="font-mono font-black text-slate-900">NPR {l.loanAmount.toLocaleString()}</div>
-                    </div>
-                  </div>
-                ))}
-                {loans.length === 0 && (
-                  <div className="py-6 text-center text-slate-400 text-xs">No loan records</div>
-                )}
-              </div>
-            </div>
-
-            {/* Recent Meeting Minutes & Sheets */}
-            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs space-y-2.5">
-              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                <h4 className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                   <Clock className="w-3.5 h-3.5 text-violet-600" />
                   <span>Recent Meeting Minutes</span>
                 </h4>
-                <button
-                  type="button"
-                  onClick={() => { setActiveTab('reports'); setReportTab('meeting-minutes'); }}
-                  className="text-[11px] font-bold text-blue-600 hover:underline cursor-pointer"
-                >
-                  View All
-                </button>
+                {canViewMeetingMinutes && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('reports');
+                      setReportTab('meeting-minutes');
+                    }}
+                    className="text-xs font-semibold text-[#00593B] hover:underline cursor-pointer"
+                  >
+                    View All
+                  </button>
+                )}
               </div>
               <div className="divide-y divide-slate-100 text-xs">
-                {meetingMinutes.slice(0, 4).map(m => (
-                  <div key={m.id} className="py-2 flex items-center justify-between gap-2">
+                {meetingMinutes.slice(0, 5).map(m => (
+                  <div key={m.id} className="py-2 flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="font-bold text-slate-900 truncate">{m.groupName}</div>
+                      <div className="font-semibold text-slate-900 truncate">{m.groupName}</div>
+                      <div className="text-[11px] font-mono tabular-nums text-slate-500 truncate">
+                        {m.meetingDateBs || '—'}
+                      </div>
                     </div>
                     <div className="text-right shrink-0">
-                      <div className="text-[11px] font-bold text-slate-700">
-                        {m.presentCount}/{m.totalMembersCount} Present
+                      <div className="font-mono tabular-nums text-xs font-semibold text-slate-700">
+                        {m.presentCount}/{m.totalMembersCount}
                       </div>
+                      <div className="text-[10px] text-slate-400">Present</div>
                     </div>
                   </div>
                 ))}
                 {meetingMinutes.length === 0 && (
-                  <div className="py-6 text-center text-slate-400 text-xs">No meeting records</div>
+                  <div className="py-6 text-center text-slate-400 text-xs">No meeting minutes recorded</div>
+                )}
+              </div>
+            </div>
+
+            {/* 3. Recent Collection & Signature Sheets */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col gap-2.5">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Recent Generated Sheets</span>
+                </h4>
+                {(canViewCollectionReport || canViewSignatureReport) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('reports');
+                      setReportTab(canViewCollectionReport ? 'collection' : 'signature');
+                    }}
+                    className="text-xs font-semibold text-[#00593B] hover:underline cursor-pointer"
+                  >
+                    View All
+                  </button>
+                )}
+              </div>
+              <div className="divide-y divide-slate-100 text-xs">
+                {recentGeneratedSheets.map(item => (
+                  <div key={item.id} className="py-2 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-slate-900 truncate">{item.groupName}</div>
+                      <div className="text-[11px] text-slate-500 truncate">
+                        {item.kind} Sheet
+                        {item.dateLabel ? ` · ${item.dateLabel}` : ''}
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="font-mono tabular-nums text-xs font-semibold text-slate-700">
+                        {item.memberCount}
+                      </div>
+                      <div className="text-[10px] text-slate-400">Members</div>
+                    </div>
+                  </div>
+                ))}
+                {recentGeneratedSheets.length === 0 && (
+                  <div className="py-6 text-center text-slate-400 text-xs">No sheets generated yet</div>
                 )}
               </div>
             </div>
