@@ -1536,6 +1536,36 @@ export const MicroFinanceManagement: React.FC = () => {
     }).catch(() => {});
   }, []);
 
+  const clearAllSubMenuSearchFilters = () => {
+    setDashboardCenterSearch('');
+    setCenterSearch('');
+    setGroupSearch('');
+    setMemberSearch('');
+    setMemberCenterFilterId('');
+    setMemberGroupFilterId('');
+    setAppliedMemberCenterId('');
+    setAppliedMemberGroupId('');
+    setSavingSearch('');
+    setSavingCenterFilterId('');
+    setSavingGroupFilterId('');
+    setAppliedSavingCenterId('');
+    setAppliedSavingGroupId('');
+    setLoanSearch('');
+    setLoanCenterFilterId('');
+    setLoanGroupFilterId('');
+    setAppliedLoanCenterId('');
+    setAppliedLoanGroupId('');
+  };
+
+  const handleSelectSubMenuTab = (tab: SubMenuTab) => {
+    clearAllSubMenuSearchFilters();
+    setActiveTab(tab);
+  };
+
+  useEffect(() => {
+    clearAllSubMenuSearchFilters();
+  }, [activeTab]);
+
   useEffect(() => {
     if (activeTab === 'dashboard') {
       setMeetingMinutes(meetingMinutesService.getMeetings());
@@ -3597,7 +3627,7 @@ export const MicroFinanceManagement: React.FC = () => {
             {canViewDashboard && (
               <button
                 type="button"
-                onClick={() => setActiveTab('dashboard')}
+                onClick={() => handleSelectSubMenuTab('dashboard')}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   activeTab === 'dashboard'
                     ? 'bg-[#00593B] text-white shadow-xs'
@@ -3613,7 +3643,7 @@ export const MicroFinanceManagement: React.FC = () => {
             {canViewCenters && (
               <button
                 type="button"
-                onClick={() => setActiveTab('centers')}
+                onClick={() => handleSelectSubMenuTab('centers')}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   activeTab === 'centers'
                     ? 'bg-[#00593B] text-white shadow-xs'
@@ -3629,7 +3659,7 @@ export const MicroFinanceManagement: React.FC = () => {
             {canViewGroups && (
               <button
                 type="button"
-                onClick={() => setActiveTab('groups')}
+                onClick={() => handleSelectSubMenuTab('groups')}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   activeTab === 'groups'
                     ? 'bg-[#00593B] text-white shadow-xs'
@@ -3645,7 +3675,7 @@ export const MicroFinanceManagement: React.FC = () => {
             {canViewMembers && (
               <button
                 type="button"
-                onClick={() => setActiveTab('members')}
+                onClick={() => handleSelectSubMenuTab('members')}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   activeTab === 'members'
                     ? 'bg-[#00593B] text-white shadow-xs'
@@ -3661,7 +3691,7 @@ export const MicroFinanceManagement: React.FC = () => {
             {canViewSaving && (
               <button
                 type="button"
-                onClick={() => setActiveTab('saving')}
+                onClick={() => handleSelectSubMenuTab('saving')}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   activeTab === 'saving'
                     ? 'bg-[#00593B] text-white shadow-xs'
@@ -3677,7 +3707,7 @@ export const MicroFinanceManagement: React.FC = () => {
             {canViewLoan && (
               <button
                 type="button"
-                onClick={() => setActiveTab('loan')}
+                onClick={() => handleSelectSubMenuTab('loan')}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   activeTab === 'loan'
                     ? 'bg-[#00593B] text-white shadow-xs'
@@ -3693,7 +3723,7 @@ export const MicroFinanceManagement: React.FC = () => {
             {canViewReports && (
               <button
                 type="button"
-                onClick={() => setActiveTab('reports')}
+                onClick={() => handleSelectSubMenuTab('reports')}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   activeTab === 'reports'
                     ? 'bg-[#00593B] text-white shadow-xs'
