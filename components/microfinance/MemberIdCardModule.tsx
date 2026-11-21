@@ -16,10 +16,12 @@ import {
   Camera,
   FileCheck2,
   Layers,
+  Save,
   X
 } from 'lucide-react';
 import {
   MFCenter,
+  MFIdCardSettings,
   MFSamuhGroup,
   MFMember,
   MFSavingsRecord,
@@ -377,31 +379,53 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
 
   const fallbackIssueDate = defaultIssueDate || new Date().toISOString().split('T')[0];
 
+  const initialSavedSettings = useMemo(() => microFinanceService.getIdCardSettings(), []);
+
   const [mode, setMode] = useState<'single' | 'bulk'>('single');
-  const [selectedTemplateId, setSelectedTemplateId] = useState<IdCardTemplateId>('single-card-official');
-  const [cardSide, setCardSide] = useState<IdCardSideMode>('front');
-  const [customPrimaryColor, setCustomPrimaryColor] = useState<string>('');
+  const [selectedTemplateId, setSelectedTemplateId] = useState<IdCardTemplateId>(
+    (initialSavedSettings?.selectedTemplateId as IdCardTemplateId) || 'single-card-official'
+  );
+  const [cardSide, setCardSide] = useState<IdCardSideMode>(
+    initialSavedSettings?.cardSide || 'front'
+  );
+  const [customPrimaryColor, setCustomPrimaryColor] = useState<string>(
+    initialSavedSettings?.customPrimaryColor || ''
+  );
   const [showSettingsPanel, setShowSettingsPanel] = useState<boolean>(false);
+  const [isSavingSettings, setIsSavingSettings] = useState<boolean>(false);
 
   // Official Letterhead & Card Branding Settings
-  const [regdNo, setRegdNo] = useState<string>(registrationNo || '421/054/055');
-  const [panNumber, setPanNumber] = useState<string>(panNo || '302488825');
+  const [regdNo, setRegdNo] = useState<string>(
+    initialSavedSettings?.regdNo ?? (registrationNo || '421/054/055')
+  );
+  const [panNumber, setPanNumber] = useState<string>(
+    initialSavedSettings?.panNumber ?? (panNo || '302488825')
+  );
   const [orgNameNp, setOrgNameNp] = useState<string>(
-    organizationNameNp || 'रतौली बचत तथा ऋण सहकारी संस्था लिमिटेड'
+    initialSavedSettings?.orgNameNp ?? (organizationNameNp || 'रतौली बचत तथा ऋण सहकारी संस्था लिमिटेड')
   );
   const [orgName, setOrgName] = useState<string>(
-    (organizationName || 'RATAULI SAVING & CREDIT CO-OPERATIVE LIMITED').toUpperCase()
+    initialSavedSettings?.orgName ?? (organizationName || 'RATAULI SAVING & CREDIT CO-OPERATIVE LIMITED').toUpperCase()
   );
   const [orgAddress, setOrgAddress] = useState<string>(
-    organizationAddress || 'पिपरा गाउँपालिका -६, रतौली, महोत्तरी'
+    initialSavedSettings?.orgAddress ?? (organizationAddress || 'पिपरा गाउँपालिका -६, रतौली, महोत्तरी')
   );
   const [orgPhone, setOrgPhone] = useState<string>(
-    organizationPhone || '+977-044-000000'
+    initialSavedSettings?.orgPhone ?? (organizationPhone || '+977-044-000000')
   );
-  const [orgWebsite, setOrgWebsite] = useState<string>('www.rataulisaccos.org.np');
-  const [cardTitle, setCardTitle] = useState<string>('MEMBER IDENTITY CARD');
-  const [isManualDateOverride, setIsManualDateOverride] = useState<boolean>(false);
+  const [orgWebsite, setOrgWebsite] = useState<string>(
+    initialSavedSettings?.orgWebsite ?? 'www.rataulisaccos.org.np'
+  );
+  const [cardTitle, setCardTitle] = useState<string>(
+    initialSavedSettings?.cardTitle ?? 'MEMBER IDENTITY CARD'
+  );
+  const [isManualDateOverride, setIsManualDateOverride] = useState<boolean>(
+    Boolean(initialSavedSettings?.isManualDateOverride)
+  );
   const [issueDate, setIssueDate] = useState<string>(() => {
+    if (initialSavedSettings?.isManualDateOverride && initialSavedSettings?.issueDate) {
+      return initialSavedSettings.issueDate;
+    }
     const firstSavingDate = findMemberSavingOpenDateBs(
       savings !== undefined ? savings : microFinanceService.getSavings(),
       members[0]
@@ -409,14 +433,22 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
     return firstSavingDate || fallbackIssueDate;
   });
   const [validUntil, setValidUntil] = useState<string>(() => {
+    if (initialSavedSettings?.isManualDateOverride && initialSavedSettings?.validUntil) {
+      return initialSavedSettings.validUntil;
+    }
     const firstSavingDate = findMemberSavingOpenDateBs(
       savings !== undefined ? savings : microFinanceService.getSavings(),
       members[0]
     );
     return addYearsToDateString(firstSavingDate || fallbackIssueDate, 6);
   });
-  const [signatoryTitle, setSignatoryTitle] = useState<string>('Authorized Signatory');
+  const [signatoryTitle, setSignatoryTitle] = useState<string>(
+    initialSavedSettings?.signatoryTitle ?? 'Authorized Signatory'
+  );
   const [signatoryPhotoUrl, setSignatoryPhotoUrl] = useState<string>(() => {
+    if (typeof initialSavedSettings?.signatoryPhotoUrl === 'string') {
+      return initialSavedSettings.signatoryPhotoUrl;
+    }
     try {
       return localStorage.getItem(SIGNATORY_STORAGE_KEY) || '';
     } catch {
@@ -426,12 +458,75 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
   const signatoryPhotoInputRef = useRef<HTMLInputElement | null>(null);
 
   // Visible Field Toggles
-  const [showMobile, setShowMobile] = useState<boolean>(true);
-  const [showCitizenship, setShowCitizenship] = useState<boolean>(true);
-  const [showBranch, setShowBranch] = useState<boolean>(true);
-  const [showBarcode, setShowBarcode] = useState<boolean>(true);
-  const [showQrCode, setShowQrCode] = useState<boolean>(true);
-  const [showCutMarks, setShowCutMarks] = useState<boolean>(true);
+  const [showMobile, setShowMobile] = useState<boolean>(
+    initialSavedSettings?.showMobile !== undefined ? initialSavedSettings.showMobile : true
+  );
+  const [showCitizenship, setShowCitizenship] = useState<boolean>(
+    initialSavedSettings?.showCitizenship !== undefined ? initialSavedSettings.showCitizenship : true
+  );
+  const [showBranch, setShowBranch] = useState<boolean>(
+    initialSavedSettings?.showBranch !== undefined ? initialSavedSettings.showBranch : true
+  );
+  const [showBarcode, setShowBarcode] = useState<boolean>(
+    initialSavedSettings?.showBarcode !== undefined ? initialSavedSettings.showBarcode : true
+  );
+  const [showQrCode, setShowQrCode] = useState<boolean>(
+    initialSavedSettings?.showQrCode !== undefined ? initialSavedSettings.showQrCode : true
+  );
+  const [showCutMarks, setShowCutMarks] = useState<boolean>(
+    initialSavedSettings?.showCutMarks !== undefined ? initialSavedSettings.showCutMarks : true
+  );
+
+  // Hydrate Card Settings from Supabase on mount so settings stay synced across sessions & devices
+  useEffect(() => {
+    let active = true;
+    microFinanceService
+      .fetchIdCardSettingsFromSupabase()
+      .then(remote => {
+        if (!active || !remote) return;
+        if (remote.selectedTemplateId) setSelectedTemplateId(remote.selectedTemplateId as IdCardTemplateId);
+        if (remote.cardSide) setCardSide(remote.cardSide);
+        if (remote.customPrimaryColor !== undefined) setCustomPrimaryColor(remote.customPrimaryColor);
+        if (remote.regdNo !== undefined) setRegdNo(remote.regdNo);
+        if (remote.panNumber !== undefined) setPanNumber(remote.panNumber);
+        if (remote.orgNameNp !== undefined) setOrgNameNp(remote.orgNameNp);
+        if (remote.orgName !== undefined) setOrgName(remote.orgName);
+        if (remote.orgAddress !== undefined) setOrgAddress(remote.orgAddress);
+        if (remote.orgPhone !== undefined) setOrgPhone(remote.orgPhone);
+        if (remote.orgWebsite !== undefined) setOrgWebsite(remote.orgWebsite);
+        if (remote.cardTitle !== undefined) setCardTitle(remote.cardTitle);
+        if (typeof remote.isManualDateOverride === 'boolean') {
+          setIsManualDateOverride(remote.isManualDateOverride);
+          if (remote.isManualDateOverride) {
+            if (remote.issueDate) setIssueDate(remote.issueDate);
+            if (remote.validUntil) setValidUntil(remote.validUntil);
+          }
+        }
+        if (remote.signatoryTitle !== undefined) setSignatoryTitle(remote.signatoryTitle);
+        if (remote.signatoryPhotoUrl !== undefined) {
+          setSignatoryPhotoUrl(remote.signatoryPhotoUrl);
+          try {
+            if (remote.signatoryPhotoUrl) {
+              localStorage.setItem(SIGNATORY_STORAGE_KEY, remote.signatoryPhotoUrl);
+            } else {
+              localStorage.removeItem(SIGNATORY_STORAGE_KEY);
+            }
+          } catch {
+            // Ignore storage quota errors
+          }
+        }
+        if (typeof remote.showMobile === 'boolean') setShowMobile(remote.showMobile);
+        if (typeof remote.showCitizenship === 'boolean') setShowCitizenship(remote.showCitizenship);
+        if (typeof remote.showBranch === 'boolean') setShowBranch(remote.showBranch);
+        if (typeof remote.showBarcode === 'boolean') setShowBarcode(remote.showBarcode);
+        if (typeof remote.showQrCode === 'boolean') setShowQrCode(remote.showQrCode);
+        if (typeof remote.showCutMarks === 'boolean') setShowCutMarks(remote.showCutMarks);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Single Mode State
   const [singleCenterId, setSingleCenterId] = useState<string>('');
@@ -733,6 +828,116 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
     setSelectedBulkIds(new Set());
   };
 
+  const buildCurrentSettingsPayload = (
+    overrides?: Partial<MFIdCardSettings>
+  ): MFIdCardSettings => ({
+    selectedTemplateId,
+    cardSide,
+    customPrimaryColor,
+    regdNo,
+    panNumber,
+    orgNameNp,
+    orgName,
+    orgAddress,
+    orgPhone,
+    orgWebsite,
+    cardTitle,
+    isManualDateOverride,
+    issueDate,
+    validUntil,
+    signatoryTitle,
+    signatoryPhotoUrl,
+    showMobile,
+    showCitizenship,
+    showBranch,
+    showBarcode,
+    showQrCode,
+    showCutMarks,
+    ...overrides
+  });
+
+  const handleSaveCardSettings = async () => {
+    setIsSavingSettings(true);
+    try {
+      const payload = buildCurrentSettingsPayload();
+      const { syncedToCloud, cloudError } = await microFinanceService.saveIdCardSettingsAsync(payload);
+      try {
+        if (payload.signatoryPhotoUrl) {
+          localStorage.setItem(SIGNATORY_STORAGE_KEY, payload.signatoryPhotoUrl);
+        } else {
+          localStorage.removeItem(SIGNATORY_STORAGE_KEY);
+        }
+      } catch {
+        // Ignore storage quota errors
+      }
+      if (syncedToCloud) {
+        onToast('Card Settings सफलतापूर्वक सुरक्षित गरियो ।');
+        setShowSettingsPanel(false);
+      } else {
+        onToast(`Local मा सुरक्षित भयो तर Supabase sync असफल भयो: ${cloudError || 'Unknown error'}`);
+      }
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
+  const handleResetCardSettings = async () => {
+    const defaultRegd = registrationNo || '421/054/055';
+    const defaultPan = panNo || '302488825';
+    const defaultOrgNp = organizationNameNp || 'रतौली बचत तथा ऋण सहकारी संस्था लिमिटेड';
+    const defaultOrgEn = (organizationName || 'RATAULI SAVING & CREDIT CO-OPERATIVE LIMITED').toUpperCase();
+    const defaultAddr = organizationAddress || 'पिपरा गाउँपालिका -६, रतौली, महोत्तरी';
+    const defaultPhone = organizationPhone || '+977-044-000000';
+    const defaultWeb = 'www.rataulisaccos.org.np';
+    const defaultTitle = 'MEMBER IDENTITY CARD';
+    const defaultSigTitle = 'Authorized Signatory';
+
+    setSelectedTemplateId('single-card-official');
+    setCardSide('front');
+    setCustomPrimaryColor('');
+    setRegdNo(defaultRegd);
+    setPanNumber(defaultPan);
+    setOrgNameNp(defaultOrgNp);
+    setOrgName(defaultOrgEn);
+    setOrgAddress(defaultAddr);
+    setOrgPhone(defaultPhone);
+    setOrgWebsite(defaultWeb);
+    setCardTitle(defaultTitle);
+    setIsManualDateOverride(false);
+    setSignatoryTitle(defaultSigTitle);
+    setShowMobile(true);
+    setShowCitizenship(true);
+    setShowBranch(true);
+    setShowBarcode(true);
+    setShowQrCode(true);
+    setShowCutMarks(true);
+
+    const payload: MFIdCardSettings = {
+      selectedTemplateId: 'single-card-official',
+      cardSide: 'front',
+      customPrimaryColor: '',
+      regdNo: defaultRegd,
+      panNumber: defaultPan,
+      orgNameNp: defaultOrgNp,
+      orgName: defaultOrgEn,
+      orgAddress: defaultAddr,
+      orgPhone: defaultPhone,
+      orgWebsite: defaultWeb,
+      cardTitle: defaultTitle,
+      isManualDateOverride: false,
+      signatoryTitle: defaultSigTitle,
+      signatoryPhotoUrl,
+      showMobile: true,
+      showCitizenship: true,
+      showBranch: true,
+      showBarcode: true,
+      showQrCode: true,
+      showCutMarks: true
+    };
+    await microFinanceService.saveIdCardSettingsAsync(payload);
+    onToast('Card Settings default मा reset गरियो ।');
+  };
+
   const handleSignatoryPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -741,7 +946,7 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
       return;
     }
     const reader = new FileReader();
-    reader.onloadend = () => {
+    reader.onloadend = async () => {
       const dataUrl = String(reader.result || '');
       setSignatoryPhotoUrl(dataUrl);
       try {
@@ -749,20 +954,30 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
       } catch {
         // Ignore storage quota errors
       }
-      onToast('Authorized signatory photo uploaded.');
+      const { syncedToCloud } = await microFinanceService.saveIdCardSettingsAsync(
+        buildCurrentSettingsPayload({ signatoryPhotoUrl: dataUrl })
+      );
+      onToast(
+        syncedToCloud
+          ? 'Authorized signatory photo uploaded & saved.'
+          : 'Authorized signatory photo uploaded locally.'
+      );
     };
     reader.readAsDataURL(file);
     e.target.value = '';
   };
 
-  const handleRemoveSignatoryPhoto = () => {
+  const handleRemoveSignatoryPhoto = async () => {
     setSignatoryPhotoUrl('');
     try {
       localStorage.removeItem(SIGNATORY_STORAGE_KEY);
     } catch {
       // Ignore storage errors
     }
-    onToast('Authorized signatory photo removed.');
+    await microFinanceService.saveIdCardSettingsAsync(
+      buildCurrentSettingsPayload({ signatoryPhotoUrl: '' })
+    );
+    onToast('Authorized signatory photo removed & saved.');
   };
 
   // Build self-contained printable HTML for CR80 cards (uses offscreen iframe, never window.open)
@@ -1992,6 +2207,37 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
               <input type="checkbox" checked={showCutMarks} onChange={e => setShowCutMarks(e.target.checked)} className="rounded" />
               <span>Show Print Cut Guides</span>
             </label>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100">
+            <button
+              type="button"
+              disabled={isSavingSettings}
+              onClick={() => void handleResetCardSettings()}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-lg text-xs font-bold cursor-pointer inline-flex items-center gap-1.5 transition-colors"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset Default</span>
+            </button>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowSettingsPanel(false)}
+                className="px-3.5 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-bold cursor-pointer transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSavingSettings}
+                onClick={() => void handleSaveCardSettings()}
+                className="px-4 py-1.5 bg-[#00593B] hover:bg-[#00472f] disabled:opacity-50 text-white rounded-lg text-xs font-bold cursor-pointer inline-flex items-center gap-1.5 shadow-xs transition-colors"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>{isSavingSettings ? 'Saving...' : 'Save Settings'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -157,6 +157,22 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
   const [recordFilterMonth, setRecordFilterMonth] = useState<string>('ALL');
   const [pendingDeleteSheet, setPendingDeleteSheet] = useState<MFDepositSheet | null>(null);
 
+  // Sync saved Deposit Sheets from Supabase on mount
+  useEffect(() => {
+    let active = true;
+    microFinanceService
+      .fetchDepositSheetsFromSupabase()
+      .then(remote => {
+        if (active && Array.isArray(remote)) {
+          setSavedSheets(remote);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
   // Per-member editable entry drafts keyed by memberId
   const [rowEntries, setRowEntries] = useState<Record<string, RowEntryDraft>>({});
 
@@ -348,8 +364,8 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
     });
   };
 
-  // Persist a single member row into the Deposit Sheet record
-  const handleSaveSingleRow = (mem: MFMember) => {
+  // Persist a single member row into the Deposit Sheet record (awaited to Supabase)
+  const handleSaveSingleRow = async (mem: MFMember) => {
     if (isDayEndedForBranch(branchId)) {
       onToast(getDayEndedBlockMessage());
       return;
@@ -398,7 +414,7 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
     const totalSaving = orderedRows.reduce((acc, r) => acc + (Number(r.savingAmount) || 0), 0);
     const totalLoan = orderedRows.reduce((acc, r) => acc + (Number(r.loanAmount) || 0), 0);
 
-    const { allSheets } = microFinanceService.upsertDepositSheet({
+    const { allSheets, syncedToCloud, cloudError } = await microFinanceService.upsertDepositSheetAsync({
       id: existingSheetForSelection?.id,
       sheetNo:
         existingSheetForSelection?.sheetNo ||
@@ -432,11 +448,16 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
         savedAt: nowIso
       }
     }));
-    onToast(`${mem.name} को जम्मा रु. ${formatAmount(totalAmount)} सुरक्षित गरियो ।`);
+
+    if (syncedToCloud) {
+      onToast(`${mem.name} को जम्मा रु. ${formatAmount(totalAmount)} सुरक्षित गरियो ।`);
+    } else {
+      onToast(`Local मा सुरक्षित भयो तर Supabase sync असफल भयो: ${cloudError || 'Unknown error'}`);
+    }
   };
 
-  // Persist ALL member rows at once
-  const handleSaveAllRows = () => {
+  // Persist ALL member rows at once (awaited to Supabase)
+  const handleSaveAllRows = async () => {
     if (isDayEndedForBranch(branchId)) {
       onToast(getDayEndedBlockMessage());
       return;
@@ -472,7 +493,7 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
     const totalSaving = allRows.reduce((acc, r) => acc + r.savingAmount, 0);
     const totalLoan = allRows.reduce((acc, r) => acc + r.loanAmount, 0);
 
-    const { savedSheet, allSheets } = microFinanceService.upsertDepositSheet({
+    const { savedSheet, allSheets, syncedToCloud, cloudError } = await microFinanceService.upsertDepositSheetAsync({
       id: existingSheetForSelection?.id,
       sheetNo:
         existingSheetForSelection?.sheetNo ||
@@ -507,9 +528,14 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
       };
     });
     setRowEntries(nextEntries);
-    onToast(
-      `Deposit Sheet (${savedSheet.sheetNo}) को सबै ${allRows.length} सदस्यको विवरण सुरक्षित गरियो (कुल जम्मा: रु. ${formatAmount(totalSaving + totalLoan)}) ।`
-    );
+
+    if (syncedToCloud) {
+      onToast(
+        `Deposit Sheet (${savedSheet.sheetNo}) को सबै ${allRows.length} सदस्यको विवरण सुरक्षित गरियो (कुल जम्मा: रु. ${formatAmount(totalSaving + totalLoan)}) ।`
+      );
+    } else {
+      onToast(`Local मा सुरक्षित भयो तर Supabase sync असफल भयो: ${cloudError || 'Unknown error'}`);
+    }
   };
 
   // Print clean A4 Deposit Sheet (uses offscreen iframe, never window.open; ONLY Employee signature in footer)
@@ -744,17 +770,23 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
     onToast(`${sheet.groupName} (${sheet.dateDisplay}) लोड गरियो ।`);
   };
 
-  const handleConfirmDeleteSheet = () => {
+  const handleConfirmDeleteSheet = async () => {
     if (!pendingDeleteSheet) return;
     if (isDayEndedForBranch(branchId)) {
       onToast(getDayEndedBlockMessage());
       setPendingDeleteSheet(null);
       return;
     }
-    const updated = microFinanceService.deleteDepositSheet(pendingDeleteSheet.id);
-    setSavedSheets(updated);
+    const { allSheets, syncedToCloud, cloudError } = await microFinanceService.deleteDepositSheetAsync(
+      pendingDeleteSheet.id
+    );
+    setSavedSheets(allSheets);
     setPendingDeleteSheet(null);
-    onToast('Deposit Sheet हटाइयो ।');
+    if (syncedToCloud) {
+      onToast('Deposit Sheet हटाइयो ।');
+    } else {
+      onToast(`Local बाट हटाइयो तर Supabase delete असफल भयो: ${cloudError || 'Unknown error'}`);
+    }
   };
 
   return (

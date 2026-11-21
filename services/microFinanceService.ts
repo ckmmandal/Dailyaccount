@@ -199,6 +199,32 @@ export interface MFSettings {
   fieldOfficers: string[];
 }
 
+export interface MFIdCardSettings {
+  selectedTemplateId?: string;
+  cardSide?: 'front' | 'back' | 'both';
+  customPrimaryColor?: string;
+  regdNo?: string;
+  panNumber?: string;
+  orgNameNp?: string;
+  orgName?: string;
+  orgAddress?: string;
+  orgPhone?: string;
+  orgWebsite?: string;
+  cardTitle?: string;
+  isManualDateOverride?: boolean;
+  issueDate?: string;
+  validUntil?: string;
+  signatoryTitle?: string;
+  signatoryPhotoUrl?: string;
+  showMobile?: boolean;
+  showCitizenship?: boolean;
+  showBranch?: boolean;
+  showBarcode?: boolean;
+  showQrCode?: boolean;
+  showCutMarks?: boolean;
+  updatedAt?: string;
+}
+
 const STORAGE_KEYS = {
   CENTERS: 'ratauli_mf_centers_v1',
   GROUPS: 'ratauli_mf_groups_v1',
@@ -210,6 +236,7 @@ const STORAGE_KEYS = {
   SIGNATURE_SHEETS: 'ratauli_mf_signature_sheets_v1',
   DEPOSIT_SHEETS: 'ratauli_mf_deposit_sheets_v1',
   SETTINGS: 'ratauli_mf_settings_v1',
+  ID_CARD_SETTINGS: 'ratauli_mf_id_card_settings_v1',
 };
 
 const NEPALI_MONTHS_EN = [
@@ -973,6 +1000,65 @@ const mapRowToSigSheet = (r: Record<string, unknown>): MFSignatureSheet => ({
   totalDue: r.total_due !== undefined && r.total_due !== null ? Number(r.total_due) : undefined,
   officerName: String(r.officer_name || ''),
   createdAt: String(r.created_at || '')
+});
+
+const parseDepositRows = (val: unknown): MFDepositSheetRow[] => {
+  if (Array.isArray(val)) return val as MFDepositSheetRow[];
+  if (typeof val === 'string' && val.trim()) {
+    try {
+      const parsed = JSON.parse(val);
+      return Array.isArray(parsed) ? (parsed as MFDepositSheetRow[]) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
+const mapDepositSheetToRow = (d: MFDepositSheet) => ({
+  id: d.id,
+  sheet_no: d.sheetNo,
+  year: d.year || '',
+  month: d.month || '',
+  day: d.day || '',
+  date_bs: d.dateBs || '',
+  date_display: d.dateDisplay || '',
+  center_id: d.centerId,
+  center_name: d.centerName || '',
+  group_id: d.groupId,
+  group_name: d.groupName || '',
+  location: d.location || '',
+  branch_name: d.branchName || '',
+  employee_name: d.employeeName || '',
+  rows: Array.isArray(d.rows) ? d.rows : [],
+  total_saving: Number(d.totalSaving) || 0,
+  total_loan: Number(d.totalLoan) || 0,
+  grand_total: Number(d.grandTotal) || 0,
+  created_at: d.createdAt || new Date().toISOString().split('T')[0],
+  updated_at: d.updatedAt || new Date().toISOString()
+});
+
+const mapRowToDepositSheet = (r: Record<string, unknown>): MFDepositSheet => ({
+  id: String(r.id),
+  sheetNo: String(r.sheet_no || ''),
+  year: String(r.year || ''),
+  month: String(r.month || ''),
+  day: String(r.day || ''),
+  dateBs: String(r.date_bs || ''),
+  dateDisplay: String(r.date_display || ''),
+  centerId: String(r.center_id || ''),
+  centerName: String(r.center_name || ''),
+  groupId: String(r.group_id || ''),
+  groupName: String(r.group_name || ''),
+  location: String(r.location || ''),
+  branchName: String(r.branch_name || ''),
+  employeeName: String(r.employee_name || ''),
+  rows: parseDepositRows(r.rows),
+  totalSaving: Number(r.total_saving) || 0,
+  totalLoan: Number(r.total_loan) || 0,
+  grandTotal: Number(r.grand_total) || 0,
+  createdAt: String(r.created_at || ''),
+  updatedAt: r.updated_at ? String(r.updated_at) : undefined
 });
 
 const safeSetLocalStorage = (key: string, value: unknown): void => {
@@ -2119,10 +2205,41 @@ export const microFinanceService = {
 
   saveDepositSheets: (sheets: MFDepositSheet[]): void => {
     safeSetLocalStorage(STORAGE_KEYS.DEPOSIT_SHEETS, sheets);
+    void bgUpsert('mf_deposit_sheets', sheets.map(mapDepositSheetToRow));
+  },
+
+  upsertDepositSheetAsync: async (
+    sheet: Omit<MFDepositSheet, 'id' | 'createdAt'> & { id?: string; createdAt?: string }
+  ): Promise<{
+    savedSheet: MFDepositSheet;
+    allSheets: MFDepositSheet[];
+    syncedToCloud: boolean;
+    cloudError?: string;
+  }> => {
+    const { savedSheet, allSheets } = microFinanceService.upsertDepositSheet(sheet, { skipBgSync: true });
+    if (!supabase) {
+      return { savedSheet, allSheets, syncedToCloud: false, cloudError: 'Supabase client is not configured.' };
+    }
+    try {
+      const row = mapDepositSheetToRow(savedSheet);
+      const { error } = await supabase
+        .from('mf_deposit_sheets')
+        .upsert([row], { onConflict: 'id' });
+      if (error) {
+        console.error('Supabase mf_deposit_sheets upsert error:', error);
+        return { savedSheet, allSheets, syncedToCloud: false, cloudError: error.message };
+      }
+      return { savedSheet, allSheets, syncedToCloud: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('Supabase mf_deposit_sheets upsert exception:', err);
+      return { savedSheet, allSheets, syncedToCloud: false, cloudError: msg };
+    }
   },
 
   upsertDepositSheet: (
-    sheet: Omit<MFDepositSheet, 'id' | 'createdAt'> & { id?: string; createdAt?: string }
+    sheet: Omit<MFDepositSheet, 'id' | 'createdAt'> & { id?: string; createdAt?: string },
+    options?: { skipBgSync?: boolean }
   ): { savedSheet: MFDepositSheet; allSheets: MFDepositSheet[] } => {
     assertDayNotEnded();
     const existing = microFinanceService.getDepositSheets();
@@ -2145,6 +2262,9 @@ export const microFinanceService = {
       };
       const allSheets = existing.map((s, idx) => (idx === existingIdx ? updatedSheet : s));
       safeSetLocalStorage(STORAGE_KEYS.DEPOSIT_SHEETS, allSheets);
+      if (!options?.skipBgSync) {
+        void bgUpsert('mf_deposit_sheets', [mapDepositSheetToRow(updatedSheet)]);
+      }
       return { savedSheet: updatedSheet, allSheets };
     }
 
@@ -2156,14 +2276,70 @@ export const microFinanceService = {
     };
     const allSheets = [newSheet, ...existing];
     safeSetLocalStorage(STORAGE_KEYS.DEPOSIT_SHEETS, allSheets);
+    if (!options?.skipBgSync) {
+      void bgUpsert('mf_deposit_sheets', [mapDepositSheetToRow(newSheet)]);
+    }
     return { savedSheet: newSheet, allSheets };
   },
 
-  deleteDepositSheet: (id: string): MFDepositSheet[] => {
+  deleteDepositSheet: (id: string, options?: { skipBgSync?: boolean }): MFDepositSheet[] => {
     assertDayNotEnded();
     const sheets = microFinanceService.getDepositSheets().filter(s => s.id !== id);
     safeSetLocalStorage(STORAGE_KEYS.DEPOSIT_SHEETS, sheets);
+    if (!options?.skipBgSync) {
+      void bgDelete('mf_deposit_sheets', id);
+    }
     return sheets;
+  },
+
+  deleteDepositSheetAsync: async (
+    id: string
+  ): Promise<{ allSheets: MFDepositSheet[]; syncedToCloud: boolean; cloudError?: string }> => {
+    const allSheets = microFinanceService.deleteDepositSheet(id, { skipBgSync: true });
+    if (!supabase || !id) {
+      return { allSheets, syncedToCloud: false, cloudError: 'Supabase client is not configured.' };
+    }
+    try {
+      const { error } = await supabase.from('mf_deposit_sheets').delete().eq('id', id);
+      if (error) {
+        console.error('Supabase mf_deposit_sheets delete error:', error);
+        return { allSheets, syncedToCloud: false, cloudError: error.message };
+      }
+      return { allSheets, syncedToCloud: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { allSheets, syncedToCloud: false, cloudError: msg };
+    }
+  },
+
+  fetchDepositSheetsFromSupabase: async (): Promise<MFDepositSheet[]> => {
+    const localSheets = microFinanceService.getDepositSheets();
+    if (!supabase) return localSheets;
+    try {
+      const res = await fetchAllRowsPaginated('mf_deposit_sheets');
+      if (!res.error && Array.isArray(res.data)) {
+        const remoteSheets = res.data.map(mapRowToDepositSheet);
+        const remoteIds = new Set(remoteSheets.map(s => s.id));
+        const unsyncedLocal = localSheets.filter(s => s.id && !remoteIds.has(s.id));
+
+        // Automatically push any locally saved deposit sheets that are not yet in Supabase
+        if (unsyncedLocal.length > 0) {
+          const { error: pushErr } = await supabase
+            .from('mf_deposit_sheets')
+            .upsert(unsyncedLocal.map(mapDepositSheetToRow), { onConflict: 'id' });
+          if (pushErr) {
+            console.warn('Supabase mf_deposit_sheets auto-push warning:', pushErr.message);
+          }
+        }
+
+        const merged = [...unsyncedLocal, ...remoteSheets];
+        safeSetLocalStorage(STORAGE_KEYS.DEPOSIT_SHEETS, merged);
+        return merged;
+      }
+    } catch (err) {
+      console.warn('Supabase mf_deposit_sheets fetch failed, using local cache:', err);
+    }
+    return localSheets;
   },
 
   // Settings
@@ -2182,6 +2358,84 @@ export const microFinanceService = {
     assertDayNotEnded();
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
     void bgUpsert('mf_settings', [{ id: 'mf_general_settings', data: settings, updated_at: new Date().toISOString() }]);
+  },
+
+  // ID Card Settings (persisted to localStorage + Supabase mf_settings id='mf_id_card_settings')
+  getIdCardSettings: (): MFIdCardSettings | null => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.ID_CARD_SETTINGS);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          return parsed as MFIdCardSettings;
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return null;
+  },
+
+  saveIdCardSettingsAsync: async (
+    settings: MFIdCardSettings
+  ): Promise<{ saved: MFIdCardSettings; syncedToCloud: boolean; cloudError?: string }> => {
+    const nowIso = new Date().toISOString();
+    const payload: MFIdCardSettings = {
+      ...settings,
+      updatedAt: nowIso
+    };
+    safeSetLocalStorage(STORAGE_KEYS.ID_CARD_SETTINGS, payload);
+
+    if (!supabase) {
+      return { saved: payload, syncedToCloud: false, cloudError: 'Supabase client is not configured.' };
+    }
+    try {
+      const { error } = await supabase
+        .from('mf_settings')
+        .upsert(
+          [{ id: 'mf_id_card_settings', data: payload, updated_at: nowIso }],
+          { onConflict: 'id' }
+        );
+      if (error) {
+        console.error('Supabase mf_id_card_settings upsert error:', error);
+        return { saved: payload, syncedToCloud: false, cloudError: error.message };
+      }
+      return { saved: payload, syncedToCloud: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('Supabase mf_id_card_settings upsert exception:', err);
+      return { saved: payload, syncedToCloud: false, cloudError: msg };
+    }
+  },
+
+  fetchIdCardSettingsFromSupabase: async (): Promise<MFIdCardSettings | null> => {
+    const localSettings = microFinanceService.getIdCardSettings();
+    if (!supabase) return localSettings;
+    try {
+      const { data, error } = await supabase
+        .from('mf_settings')
+        .select('data')
+        .eq('id', 'mf_id_card_settings')
+        .maybeSingle();
+
+      if (!error && data?.data && typeof data.data === 'object') {
+        const remote = data.data as MFIdCardSettings;
+        safeSetLocalStorage(STORAGE_KEYS.ID_CARD_SETTINGS, remote);
+        return remote;
+      }
+
+      if (!error && !data && localSettings) {
+        await supabase
+          .from('mf_settings')
+          .upsert(
+            [{ id: 'mf_id_card_settings', data: localSettings, updated_at: localSettings.updatedAt || new Date().toISOString() }],
+            { onConflict: 'id' }
+          );
+      }
+    } catch (err) {
+      console.warn('Supabase mf_id_card_settings fetch failed, using local cache:', err);
+    }
+    return localSettings;
   },
 
   // Hydrate ALL Micro-Finance entities from Supabase (and seed local items if Supabase tables are empty)
@@ -2224,6 +2478,7 @@ export const microFinanceService = {
         sRes,
         shRes,
         sigRes,
+        depRes,
         setRes,
         loans
       ] = await Promise.all([
@@ -2233,6 +2488,7 @@ export const microFinanceService = {
         fetchAllRowsPaginated('mf_savings'),
         fetchAllRowsPaginated('mf_collection_sheets'),
         fetchAllRowsPaginated('mf_signature_sheets'),
+        fetchAllRowsPaginated('mf_deposit_sheets'),
         supabase.from('mf_settings').select('data').eq('id', 'mf_general_settings').maybeSingle(),
         microFinanceService.fetchActiveLoansFromSupabase()
       ]);
@@ -2292,6 +2548,18 @@ export const microFinanceService = {
       if (!sigRes.error && Array.isArray(sigRes.data)) {
         signatureSheets = sigRes.data.map(mapRowToSigSheet);
         safeSetLocalStorage(STORAGE_KEYS.SIGNATURE_SHEETS, signatureSheets);
+      }
+
+      // Sync mf_deposit_sheets with Supabase (merge & push any unsynced local sheets)
+      if (!depRes.error && Array.isArray(depRes.data)) {
+        const remoteDepositSheets = depRes.data.map(mapRowToDepositSheet);
+        const remoteDepIds = new Set(remoteDepositSheets.map(s => s.id));
+        const localDepositSheets = microFinanceService.getDepositSheets();
+        const unsyncedDepositSheets = localDepositSheets.filter(s => s.id && !remoteDepIds.has(s.id));
+        if (unsyncedDepositSheets.length > 0) {
+          void bgUpsert('mf_deposit_sheets', unsyncedDepositSheets.map(mapDepositSheetToRow));
+        }
+        safeSetLocalStorage(STORAGE_KEYS.DEPOSIT_SHEETS, [...unsyncedDepositSheets, ...remoteDepositSheets]);
       }
 
       let settings = localSettings;
