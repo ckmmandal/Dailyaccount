@@ -41,6 +41,8 @@ import { DateConverterModal } from './components/DateConverterModal';
 import { StaffChatDrawer } from './components/StaffChatDrawer';
 import { TeamsNotificationToast, TeamsToastData } from './components/TeamsNotificationToast';
 import { LoginPopupNoticeModal } from './components/LoginPopupNoticeModal';
+import { PWAInstallButton } from './components/PWAInstallButton';
+import { OfflineIndicator } from './components/OfflineIndicator';
 import { Permission, PayrollRecord, Employee, Branch, PopupNotice, ChatMessage } from './types';
 import { storageService } from './services/storageService';
 import { loanInsuranceService } from './services/loanInsuranceService';
@@ -1036,7 +1038,16 @@ const AppLayout: React.FC = () => {
     logout();
   };
 
-  if (!user) return < LoginPage />;
+  if (!user) {
+    return (
+      <>
+        <LoginPage />
+        <div className="fixed top-4 right-4 z-[9990] print:hidden">
+          <PWAInstallButton variant="login" />
+        </div>
+      </>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden text-slate-900">
@@ -1211,6 +1222,8 @@ const AppLayout: React.FC = () => {
           <div className="flex items-center space-x-3 md:space-x-4">
             {/* Quick Action Navigation Buttons */}
             <div className="flex items-center space-x-2 border-r border-white/20 pr-3 md:pr-4">
+              {/* In-App PWA Install Button (auto-hides when installed) */}
+              <PWAInstallButton variant="header" />
               {/* Alerts Dropdown Button (1-Day Period) */}
               {hasPermission('view_alerts') && (() => {
                 const canSeeBima = hasPermission('sub_alert_bima_maturity_view');
@@ -1854,6 +1867,7 @@ const Root: React.FC = () => {
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <AuthProvider>
         <AppLayout />
+        <OfflineIndicator />
       </AuthProvider>
     </BrowserRouter>
   );

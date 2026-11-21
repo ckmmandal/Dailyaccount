@@ -1,7 +1,9 @@
-
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { registerSW } from 'virtual:pwa-register';
 import Root from './App';
+
+registerSW({ immediate: true });
 
 // Suppress Recharts defaultProps warnings globally
 const originalError = console.error;
