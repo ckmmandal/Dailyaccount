@@ -1047,7 +1047,12 @@ const AppLayout: React.FC = () => {
       `}>
         {/* Bracket 1: Clean White Logo Area matching Header & Larger Logo */}
         <div className="flex items-center justify-center border-b border-emerald-900/30 h-20 shrink-0 bg-white px-3 py-2">
-          <div className="w-full h-full flex items-center justify-center">
+          <NavLink
+            to="/dashboard"
+            title="Go to Dashboard"
+            aria-label="Go to Dashboard"
+            className="w-full h-full flex items-center justify-center cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-emerald-600 rounded-lg"
+          >
             <img 
               src={(settings?.logoUrl && !settings.logoUrl.includes('picsum.photos')) ? settings.logoUrl : '/system_logo.png'} 
               alt="Logo" 
@@ -1059,7 +1064,7 @@ const AppLayout: React.FC = () => {
               }}
               className="h-16 max-h-[4.25rem] max-w-full object-contain filter drop-shadow-2xs transition-transform hover:scale-105" 
             />
-          </div>
+          </NavLink>
         </div>
 
         {/* Bracket 3: Sidebar Navigation Menu */}
