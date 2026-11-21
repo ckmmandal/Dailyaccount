@@ -588,9 +588,9 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
             <td class="tc bold">${escapeHtml(toNepaliDigits(idx + 1))}</td>
             <td class="tl bold">${escapeHtml(r.name)}</td>
             <td class="tc mono bold">${escapeHtml(r.memberId)}</td>
-            <td class="tr mono">${r.savingAmount > 0 ? escapeHtml(formatAmount(r.savingAmount)) : '-'}</td>
-            <td class="tr mono">${r.loanAmount > 0 ? escapeHtml(formatAmount(r.loanAmount)) : '-'}</td>
-            <td class="tr mono bold">${r.totalAmount > 0 ? escapeHtml(formatAmount(r.totalAmount)) : '-'}</td>
+            <td class="tc mono">${r.savingAmount > 0 ? escapeHtml(formatAmount(r.savingAmount)) : '-'}</td>
+            <td class="tc mono">${r.loanAmount > 0 ? escapeHtml(formatAmount(r.loanAmount)) : '-'}</td>
+            <td class="tc mono bold">${r.totalAmount > 0 ? escapeHtml(formatAmount(r.totalAmount)) : '-'}</td>
           </tr>
         `
       )
@@ -600,11 +600,12 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
 <html lang="ne">
 <head>
   <meta charset="UTF-8" />
-  <title>Deposit Sheet - ${escapeHtml(grpName)}</title>
+  <title></title>
   <style>
-    @page { size: A4 portrait; margin: 10mm; }
+    @page { size: A4 portrait; margin: 0; }
     * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-    body { margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; color: #0f172a; background: #fff; font-size: 11px; }
+    html, body { margin: 0; padding: 0; background: #fff; }
+    body { padding: 10mm 11mm; font-family: 'Segoe UI', Arial, sans-serif; color: #0f172a; font-size: 11px; }
     .header { display: flex; align-items: center; justify-content: center; gap: 14px; border-bottom: 1.5px solid #cbd5e1; padding-bottom: 8px; margin-bottom: 8px; position: relative; }
     .header img { width: 52px; height: 52px; object-fit: contain; position: absolute; left: 0; top: 0; }
     .header-text { text-align: center; }
@@ -614,10 +615,12 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
     .sheet-title { display: inline-block; margin-top: 4px; padding: 2px 12px; border: 1px solid #0f172a; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: 1px; text-transform: uppercase; }
     .meta { display: flex; justify-content: space-between; align-items: flex-end; gap: 10px; font-size: 11px; font-weight: 700; margin-bottom: 6px; }
     .meta-left div { line-height: 1.4; }
-    table { width: 100%; border-collapse: collapse; table-layout: fixed; border: 1.5px solid #0f172a; font-size: 11px; }
-    th, td { border: 1px solid #0f172a; padding: 4px 6px; }
-    thead th { background: #f1f5f9; font-weight: 900; font-size: 10.5px; }
-    tfoot td { background: #f1f5f9; font-weight: 900; border-top: 1.5px solid #0f172a; }
+    .table-wrap { width: 100%; padding-right: 1px; }
+    table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; border-top: 1.5px solid #0f172a; border-left: 1.5px solid #0f172a; font-size: 11px; }
+    th, td { border-right: 1px solid #0f172a; border-bottom: 1px solid #0f172a; padding: 4px 6px; }
+    thead th { background: #f1f5f9; font-weight: 900; font-size: 10.5px; border-bottom: 1.5px solid #0f172a; }
+    th:last-child, td:last-child { border-right: 1.5px solid #0f172a; }
+    tfoot td { background: #f1f5f9; font-weight: 900; border-top: 1px solid #0f172a; border-bottom: 1.5px solid #0f172a; }
     .tc { text-align: center; }
     .tl { text-align: left; }
     .tr { text-align: right; }
@@ -650,37 +653,39 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
     <div>स्थान: ${escapeHtml(locDisplay)}</div>
   </div>
 
-  <table>
-    <colgroup>
-      <col style="width: 7%;" />
-      <col style="width: 31%;" />
-      <col style="width: 18%;" />
-      <col style="width: 14%;" />
-      <col style="width: 15%;" />
-      <col style="width: 15%;" />
-    </colgroup>
-    <thead>
-      <tr>
-        <th class="tc">क्र.सं.</th>
-        <th class="tl">सदस्यको नाम</th>
-        <th class="tc">सदस्य नं.</th>
-        <th class="tr">बचत (रु.)</th>
-        <th class="tr">ऋण रकम (रु.)</th>
-        <th class="tr">जम्मा (रु.)</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${rowsHtml}
-    </tbody>
-    <tfoot>
-      <tr>
-        <td colspan="3" class="tc">कुल जम्मा (Total)</td>
-        <td class="tr mono">${escapeHtml(formatAmount(totalSav))}</td>
-        <td class="tr mono">${escapeHtml(formatAmount(totalLn))}</td>
-        <td class="tr mono">${escapeHtml(formatAmount(grandTot))}</td>
-      </tr>
-    </tfoot>
-  </table>
+  <div class="table-wrap">
+    <table>
+      <colgroup>
+        <col style="width: 7%;" />
+        <col style="width: 31%;" />
+        <col style="width: 18%;" />
+        <col style="width: 14%;" />
+        <col style="width: 15%;" />
+        <col style="width: 15%;" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th class="tc">क्र.सं.</th>
+          <th class="tl">सदस्यको नाम</th>
+          <th class="tc">सदस्य नं.</th>
+          <th class="tc">बचत (रु.)</th>
+          <th class="tc">ऋण रकम (रु.)</th>
+          <th class="tc">जम्मा (रु.)</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rowsHtml}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="3" class="tc">कुल जम्मा (Total)</td>
+          <td class="tc mono">${escapeHtml(formatAmount(totalSav))}</td>
+          <td class="tc mono">${escapeHtml(formatAmount(totalLn))}</td>
+          <td class="tc mono">${escapeHtml(formatAmount(grandTot))}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
 
   <div class="footer-sign">
     <div class="sign-box">
@@ -1261,12 +1266,12 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
                           onKeyDown={e => {
                             if (e.key === 'Enter') {
                               e.preventDefault();
-                              handleSaveSingleRow(mem);
+                              void handleSaveSingleRow(mem);
                             }
                           }}
                           placeholder="0"
                           aria-label={`Saving deposit for ${mem.name}`}
-                          className="w-full px-2 py-1 text-right font-mono tabular-nums font-bold text-xs text-slate-900 bg-white border border-slate-200 focus:border-[#00593B] focus:ring-1 focus:ring-[#00593B] rounded-md focus:outline-hidden disabled:bg-slate-100 print:border-0 print:bg-transparent print:px-1 print:py-0"
+                          className="w-full px-2 py-1 text-center font-mono tabular-nums font-bold text-xs text-slate-900 bg-white border border-slate-200 focus:border-[#00593B] focus:ring-1 focus:ring-[#00593B] rounded-md focus:outline-hidden disabled:bg-slate-100 print:border-0 print:bg-transparent print:px-1 print:py-0"
                         />
                       </td>
                       {/* ऋण रकम (रु.) editable input */}
@@ -1280,16 +1285,16 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
                           onKeyDown={e => {
                             if (e.key === 'Enter') {
                               e.preventDefault();
-                              handleSaveSingleRow(mem);
+                              void handleSaveSingleRow(mem);
                             }
                           }}
                           placeholder="0"
                           aria-label={`Loan deposit for ${mem.name}`}
-                          className="w-full px-2 py-1 text-right font-mono tabular-nums font-bold text-xs text-slate-900 bg-white border border-slate-200 focus:border-[#00593B] focus:ring-1 focus:ring-[#00593B] rounded-md focus:outline-hidden disabled:bg-slate-100 print:border-0 print:bg-transparent print:px-1 print:py-0"
+                          className="w-full px-2 py-1 text-center font-mono tabular-nums font-bold text-xs text-slate-900 bg-white border border-slate-200 focus:border-[#00593B] focus:ring-1 focus:ring-[#00593B] rounded-md focus:outline-hidden disabled:bg-slate-100 print:border-0 print:bg-transparent print:px-1 print:py-0"
                         />
                       </td>
                       {/* जम्मा (रु.) auto-calculated = बचत + ऋण */}
-                      <td className="py-1 px-2 border border-slate-900 text-right font-mono tabular-nums font-black text-slate-900 whitespace-nowrap bg-slate-50/70">
+                      <td className="py-1 px-2 border border-slate-900 text-center font-mono tabular-nums font-black text-slate-900 whitespace-nowrap bg-slate-50/70">
                         {formatAmount(rowTotal)}
                       </td>
                       {/* Row Save Icon Button (Hidden on Print) */}
@@ -1332,13 +1337,13 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
                   <td colSpan={3} className="py-1.5 px-2 border border-slate-900 text-center uppercase tracking-wider">
                     कुल जम्मा (Total)
                   </td>
-                  <td className="py-1.5 px-2 border border-slate-900 text-right font-mono tabular-nums text-xs">
+                  <td className="py-1.5 px-2 border border-slate-900 text-center font-mono tabular-nums text-xs">
                     {formatAmount(sheetTotals.totalSaving)}
                   </td>
-                  <td className="py-1.5 px-2 border border-slate-900 text-right font-mono tabular-nums text-xs">
+                  <td className="py-1.5 px-2 border border-slate-900 text-center font-mono tabular-nums text-xs">
                     {formatAmount(sheetTotals.totalLoan)}
                   </td>
-                  <td className="py-1.5 px-2 border border-slate-900 text-right font-mono tabular-nums text-xs text-[#00593B]">
+                  <td className="py-1.5 px-2 border border-slate-900 text-center font-mono tabular-nums text-xs text-[#00593B]">
                     {formatAmount(sheetTotals.grandTotal)}
                   </td>
                   <td className="py-1 px-1 border border-slate-900 text-center print:hidden">
