@@ -59,6 +59,18 @@ const fromNepaliDigits = (str: string) => {
   return String(str || '').replace(/[०-९]/g, d => String(np.indexOf(d)));
 };
 
+const extractMeetingDayNumber = (val?: string): number | null => {
+  if (!val) return null;
+  const normalized = fromNepaliDigits(val);
+  const match = normalized.match(/\d+/);
+  if (!match) return null;
+  const num = parseInt(match[0], 10);
+  return isNaN(num) ? null : num;
+};
+
+const normalizeText = (val?: string): string =>
+  String(val || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
 export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps> = ({
   groups,
   members,
@@ -163,24 +175,48 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
     });
   }, []);
 
-  // Set default center, group, employee
+  // Centers strictly filtered by selected DAY (e.g. Day 5 -> 5 gate centers)
+  const filteredCentersForTop = useMemo(() => {
+    const dayNum = parseInt(fromNepaliDigits(filterDay), 10);
+    if (isNaN(dayNum)) return centers;
+    return centers.filter(c => {
+      const centerDay = extractMeetingDayNumber(c.meetingDay) ?? extractMeetingDayNumber(c.name);
+      return centerDay === dayNum;
+    });
+  }, [centers, filterDay]);
+
+  // Sync selected center whenever Day or centers list changes
   useEffect(() => {
-    if (!filterCenterId && centers.length > 0) {
-      setFilterCenterId(centers[0].id);
+    if (filteredCentersForTop.length > 0) {
+      if (!filterCenterId || !filteredCentersForTop.some(c => c.id === filterCenterId)) {
+        setFilterCenterId(filteredCentersForTop[0].id);
+      }
+    } else if (filterCenterId !== '') {
+      setFilterCenterId('');
     }
-  }, [centers, filterCenterId]);
+  }, [filteredCentersForTop, filterCenterId]);
 
+  // Groups strictly inside the currently selected center
   const filteredGroupsForTop = useMemo(() => {
-    if (!filterCenterId || filterCenterId === 'ALL') return groups;
-    return groups.filter(g => g.centerId === filterCenterId);
-  }, [groups, filterCenterId]);
+    if (!filterCenterId) return [];
+    const selectedCenter =
+      filteredCentersForTop.find(c => c.id === filterCenterId) ||
+      centers.find(c => c.id === filterCenterId);
+    const centerNameNorm = normalizeText(selectedCenter?.name);
+    return groups.filter(
+      g =>
+        g.centerId === filterCenterId ||
+        (centerNameNorm !== '' && normalizeText(g.centerName) === centerNameNorm)
+    );
+  }, [groups, filterCenterId, filteredCentersForTop, centers]);
 
+  // Sync selected group whenever selected center or groups list changes
   useEffect(() => {
     if (filteredGroupsForTop.length > 0) {
       if (!filterGroupId || !filteredGroupsForTop.some(g => g.id === filterGroupId)) {
         setFilterGroupId(filteredGroupsForTop[0].id);
       }
-    } else {
+    } else if (filterGroupId !== '') {
       setFilterGroupId('');
     }
   }, [filteredGroupsForTop, filterGroupId]);
@@ -193,14 +229,16 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
     }
   }, [hrEmployees, filterEmployeeName]);
 
-  // Selected Group, Center & Members for generation
-  const activeSelectedGroup = useMemo(() => {
-    return groups.find(g => g.id === filterGroupId) || filteredGroupsForTop[0] || groups[0];
-  }, [groups, filterGroupId, filteredGroupsForTop]);
-
+  // Selected Center & Group for generation (strictly bound to current Day & Center filter)
   const activeSelectedCenter = useMemo(() => {
-    return centers.find(c => c.id === filterCenterId || c.id === activeSelectedGroup?.centerId) || centers[0];
-  }, [centers, filterCenterId, activeSelectedGroup]);
+    if (!filterCenterId) return filteredCentersForTop[0];
+    return filteredCentersForTop.find(c => c.id === filterCenterId);
+  }, [filteredCentersForTop, filterCenterId]);
+
+  const activeSelectedGroup = useMemo(() => {
+    if (!filterGroupId) return filteredGroupsForTop[0];
+    return filteredGroupsForTop.find(g => g.id === filterGroupId);
+  }, [filteredGroupsForTop, filterGroupId]);
 
   const activeSelectedBranch = useMemo(() => {
     const branchName = activeSelectedCenter?.branch;
@@ -209,6 +247,10 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
 
   // Handle clicking Top "View" button -> Open Minute Generation Modal
   const handleOpenMinuteGenerator = () => {
+    if (!activeSelectedCenter) {
+      onToast(`कृपया ${toNepaliDigits(filterDay)} गतेको मान्य केन्द्र चयन गर्नुहोस् ।`);
+      return;
+    }
     if (!activeSelectedGroup) {
       onToast('कृपया पहिले समूह चयन गर्नुहोस् ।');
       return;
@@ -282,7 +324,7 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
       onToast(getDayEndedBlockMessage());
       return;
     }
-    if (!activeSelectedGroup) return;
+    if (!activeSelectedGroup || !activeSelectedCenter) return;
 
     // Check at least one proposal is checked
     const checkedTemplates = templates.filter(t => selectedTemplateIds[t.id]);
@@ -667,7 +709,31 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
             <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5">DAY</label>
             <select
               value={filterDay}
-              onChange={e => setFilterDay(e.target.value)}
+              onChange={e => {
+                const nextDay = e.target.value;
+                setFilterDay(nextDay);
+                const dayNum = parseInt(fromNepaliDigits(nextDay), 10);
+                const matchingCenters = isNaN(dayNum)
+                  ? centers
+                  : centers.filter(c => {
+                      const cDay = extractMeetingDayNumber(c.meetingDay) ?? extractMeetingDayNumber(c.name);
+                      return cDay === dayNum;
+                    });
+                const nextCenter = matchingCenters[0];
+                const nextCenterId = nextCenter?.id || '';
+                setFilterCenterId(nextCenterId);
+                if (nextCenterId) {
+                  const centerNameNorm = normalizeText(nextCenter?.name);
+                  const matchingGroups = groups.filter(
+                    g =>
+                      g.centerId === nextCenterId ||
+                      (centerNameNorm !== '' && normalizeText(g.centerName) === centerNameNorm)
+                  );
+                  setFilterGroupId(matchingGroups[0]?.id || '');
+                } else {
+                  setFilterGroupId('');
+                }
+              }}
               className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
             >
               {Array.from({ length: 32 }, (_, i) => i + 1).map(d => (
@@ -676,21 +742,42 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
             </select>
           </div>
 
-          {/* SELECT CENTER */}
+          {/* SELECT CENTER (Filtered by selected DAY) */}
           <div className="flex-1 min-w-[130px]">
             <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5 truncate">SELECT CENTER</label>
             <select
               value={filterCenterId}
-              onChange={e => setFilterCenterId(e.target.value)}
+              onChange={e => {
+                const nextCenterId = e.target.value;
+                setFilterCenterId(nextCenterId);
+                if (nextCenterId) {
+                  const selectedCenter =
+                    filteredCentersForTop.find(c => c.id === nextCenterId) ||
+                    centers.find(c => c.id === nextCenterId);
+                  const centerNameNorm = normalizeText(selectedCenter?.name);
+                  const matchingGroups = groups.filter(
+                    g =>
+                      g.centerId === nextCenterId ||
+                      (centerNameNorm !== '' && normalizeText(g.centerName) === centerNameNorm)
+                  );
+                  setFilterGroupId(matchingGroups[0]?.id || '');
+                } else {
+                  setFilterGroupId('');
+                }
+              }}
               className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
             >
-              {centers.map(c => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
+              {filteredCentersForTop.length === 0 ? (
+                <option value="">No center on Day {filterDay}</option>
+              ) : (
+                filteredCentersForTop.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))
+              )}
             </select>
           </div>
 
-          {/* SELECT GROUP */}
+          {/* SELECT GROUP (Filtered strictly by selected CENTER) */}
           <div className="flex-1 min-w-[130px]">
             <label className="block text-[10px] font-black uppercase text-slate-400 mb-0.5 truncate">SELECT GROUP</label>
             <select
@@ -698,9 +785,13 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
               onChange={e => setFilterGroupId(e.target.value)}
               className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-hidden"
             >
-              {filteredGroupsForTop.map(g => (
-                <option key={g.id} value={g.id}>{g.name}</option>
-              ))}
+              {filteredGroupsForTop.length === 0 ? (
+                <option value="">No group in this center</option>
+              ) : (
+                filteredGroupsForTop.map(g => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))
+              )}
             </select>
           </div>
 

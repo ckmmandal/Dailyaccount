@@ -1,5 +1,6 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import QRCode from 'qrcode';
+import NepaliDate from 'nepali-date-converter';
 import {
   CreditCard,
   Printer,
@@ -21,7 +22,11 @@ import {
   MFCenter,
   MFSamuhGroup,
   MFMember,
-  microFinanceService
+  MFSavingsRecord,
+  isSavingStatusClosed,
+  microFinanceService,
+  normalizeBsDate,
+  normalizeDuplicateMemberId
 } from '../../services/microFinanceService';
 
 export type IdCardTemplateId =
@@ -142,12 +147,15 @@ interface CardData {
   savingsAccountNo: string;
   photoUrl: string;
   bloodGroup?: string;
+  issueDate?: string;
+  validUntil?: string;
 }
 
 interface MemberIdCardModuleProps {
   members: MFMember[];
   centers: MFCenter[];
   groups: MFSamuhGroup[];
+  savings?: MFSavingsRecord[];
   logoUrl: string;
   organizationNameNp?: string;
   organizationName: string;
@@ -189,6 +197,54 @@ const addYearsToDateString = (dateStr: string, years: number): string => {
     return `${nextYear}-${m[3].padStart(2, '0')}-${m[4].padStart(2, '0')}`;
   }
   return clean || '2029-12-31';
+};
+
+const resolveSavingOpenDateBsLocal = (saving: { dateBs?: string; date?: string }): string => {
+  const bsNorm = normalizeBsDate(saving.dateBs);
+  if (bsNorm && /^\d{4}-\d{2}-\d{2}$/.test(bsNorm)) return bsNorm;
+
+  const rawNorm = normalizeBsDate(saving.date);
+  if (rawNorm && /^20[5-9]\d-\d{2}-\d{2}$/.test(rawNorm)) return rawNorm;
+
+  if (saving.date) {
+    try {
+      const converted = new NepaliDate(new Date(saving.date)).format('YYYY-MM-DD');
+      return normalizeBsDate(converted);
+    } catch {
+      return rawNorm || '';
+    }
+  }
+  return '';
+};
+
+const findMemberSavingOpenDateBs = (
+  savingsList: MFSavingsRecord[],
+  member?: { memberId?: string; savingsAccountNo?: string } | null
+): string => {
+  if (!member || savingsList.length === 0) return '';
+  const memKey = normalizeDuplicateMemberId(member.memberId);
+  const accKey = normalizeDuplicateMemberId(member.savingsAccountNo);
+  if (!memKey && !accKey) return '';
+
+  const matched = savingsList.filter(s => {
+    const sMemKey = normalizeDuplicateMemberId(s.memberId);
+    const sAccKey = normalizeDuplicateMemberId(s.accountNo);
+    if (memKey && sMemKey && sMemKey === memKey) return true;
+    if (accKey && sAccKey && sAccKey === accKey) return true;
+    return false;
+  });
+
+  if (matched.length === 0) return '';
+
+  const activeMatched = matched.filter(s => !isSavingStatusClosed(s.status));
+  const pool = activeMatched.length > 0 ? activeMatched : matched;
+
+  const dates = pool
+    .map(s => resolveSavingOpenDateBsLocal(s))
+    .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+    .sort((a, b) => a.localeCompare(b));
+
+  return dates[0] || '';
 };
 
 // Deterministic pseudo-barcode bars from Member ID string
@@ -302,6 +358,7 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
   members,
   centers,
   groups,
+  savings,
   logoUrl,
   organizationNameNp,
   organizationName,
@@ -313,6 +370,13 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
   onMembersUpdated,
   onToast
 }) => {
+  const effectiveSavings = useMemo(
+    () => (savings !== undefined ? savings : microFinanceService.getSavings()),
+    [savings]
+  );
+
+  const fallbackIssueDate = defaultIssueDate || new Date().toISOString().split('T')[0];
+
   const [mode, setMode] = useState<'single' | 'bulk'>('single');
   const [selectedTemplateId, setSelectedTemplateId] = useState<IdCardTemplateId>('single-card-official');
   const [cardSide, setCardSide] = useState<IdCardSideMode>('front');
@@ -336,10 +400,21 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
   );
   const [orgWebsite, setOrgWebsite] = useState<string>('www.rataulisaccos.org.np');
   const [cardTitle, setCardTitle] = useState<string>('MEMBER IDENTITY CARD');
-  const [issueDate, setIssueDate] = useState<string>(defaultIssueDate || new Date().toISOString().split('T')[0]);
-  const [validUntil, setValidUntil] = useState<string>(
-    addYearsToDateString(defaultIssueDate || new Date().toISOString().split('T')[0], 3)
-  );
+  const [isManualDateOverride, setIsManualDateOverride] = useState<boolean>(false);
+  const [issueDate, setIssueDate] = useState<string>(() => {
+    const firstSavingDate = findMemberSavingOpenDateBs(
+      savings !== undefined ? savings : microFinanceService.getSavings(),
+      members[0]
+    );
+    return firstSavingDate || fallbackIssueDate;
+  });
+  const [validUntil, setValidUntil] = useState<string>(() => {
+    const firstSavingDate = findMemberSavingOpenDateBs(
+      savings !== undefined ? savings : microFinanceService.getSavings(),
+      members[0]
+    );
+    return addYearsToDateString(firstSavingDate || fallbackIssueDate, 6);
+  });
   const [signatoryTitle, setSignatoryTitle] = useState<string>('Authorized Signatory');
   const [signatoryPhotoUrl, setSignatoryPhotoUrl] = useState<string>(() => {
     try {
@@ -365,6 +440,11 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
   const [selectedSingleMemberId, setSelectedSingleMemberId] = useState<string>(members[0]?.id || '');
   const [singleDraft, setSingleDraft] = useState<CardData>(() => {
     const first = members[0];
+    const firstSavingDate = findMemberSavingOpenDateBs(
+      savings !== undefined ? savings : microFinanceService.getSavings(),
+      first
+    );
+    const resolvedIssue = firstSavingDate || fallbackIssueDate;
     return {
       id: first?.id || 'manual-1',
       memberId: first?.memberId || 'M-1001',
@@ -377,10 +457,47 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
       citizenshipNo: first?.citizenshipNo || '',
       savingsAccountNo: first?.savingsAccountNo || '',
       photoUrl: first?.photoUrl || '',
-      bloodGroup: ''
+      bloodGroup: '',
+      issueDate: resolvedIssue,
+      validUntil: addYearsToDateString(resolvedIssue, 6)
     };
   });
   const singlePhotoInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Keep Single Card's Issued & Valid (+6 years) dates synced with the selected member's Saving open date
+  useEffect(() => {
+    const savingOpenDate = findMemberSavingOpenDateBs(effectiveSavings, {
+      memberId: singleDraft.memberId,
+      savingsAccountNo: singleDraft.savingsAccountNo
+    });
+    const resolvedIssue = savingOpenDate || fallbackIssueDate;
+    const resolvedValid = addYearsToDateString(resolvedIssue, 6);
+
+    setSingleDraft(prev => {
+      if (prev.issueDate === resolvedIssue && prev.validUntil === resolvedValid) return prev;
+      return { ...prev, issueDate: resolvedIssue, validUntil: resolvedValid };
+    });
+
+    if (!isManualDateOverride) {
+      setIssueDate(resolvedIssue);
+      setValidUntil(resolvedValid);
+    }
+  }, [effectiveSavings, singleDraft.memberId, singleDraft.savingsAccountNo, fallbackIssueDate, isManualDateOverride]);
+
+  const resolveCardDates = (card: CardData): { cardIssueDate: string; cardValidUntil: string } => {
+    if (isManualDateOverride) {
+      return { cardIssueDate: issueDate, cardValidUntil: validUntil };
+    }
+    const savingOpenDate =
+      card.issueDate ||
+      findMemberSavingOpenDateBs(effectiveSavings, {
+        memberId: card.memberId,
+        savingsAccountNo: card.savingsAccountNo
+      });
+    const resolvedIssue = savingOpenDate || fallbackIssueDate;
+    const resolvedValid = card.validUntil || addYearsToDateString(resolvedIssue, 6);
+    return { cardIssueDate: resolvedIssue, cardValidUntil: resolvedValid };
+  };
 
   // Bulk Mode State
   const [bulkCenterId, setBulkCenterId] = useState<string>('');
@@ -480,23 +597,32 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
   const selectedBulkCards: CardData[] = useMemo(() => {
     return members
       .filter(m => selectedBulkIds.has(m.id))
-      .map(m => ({
-        id: m.id,
-        memberId: m.memberId || '',
-        name: m.name || '',
-        role: m.role || 'Member',
-        centerName: m.centerName || '',
-        groupName: m.samuhName || '',
-        branch: m.branch || '',
-        mobile: m.mobile || '',
-        citizenshipNo: m.citizenshipNo || '',
-        savingsAccountNo: m.savingsAccountNo || '',
-        photoUrl: m.photoUrl || ''
-      }));
-  }, [members, selectedBulkIds]);
+      .map(m => {
+        const savingOpenDate = findMemberSavingOpenDateBs(effectiveSavings, m);
+        const resolvedIssue = savingOpenDate || fallbackIssueDate;
+        return {
+          id: m.id,
+          memberId: m.memberId || '',
+          name: m.name || '',
+          role: m.role || 'Member',
+          centerName: m.centerName || '',
+          groupName: m.samuhName || '',
+          branch: m.branch || '',
+          mobile: m.mobile || '',
+          citizenshipNo: m.citizenshipNo || '',
+          savingsAccountNo: m.savingsAccountNo || '',
+          photoUrl: m.photoUrl || '',
+          issueDate: resolvedIssue,
+          validUntil: addYearsToDateString(resolvedIssue, 6)
+        };
+      });
+  }, [members, selectedBulkIds, effectiveSavings, fallbackIssueDate]);
 
   const handleSelectSingleMember = (member: MFMember) => {
     setSelectedSingleMemberId(member.id);
+    const savingOpenDate = findMemberSavingOpenDateBs(effectiveSavings, member);
+    const resolvedIssue = savingOpenDate || fallbackIssueDate;
+    const resolvedValid = addYearsToDateString(resolvedIssue, 6);
     setSingleDraft({
       id: member.id,
       memberId: member.memberId || '',
@@ -509,8 +635,14 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
       citizenshipNo: member.citizenshipNo || '',
       savingsAccountNo: member.savingsAccountNo || '',
       photoUrl: member.photoUrl || '',
-      bloodGroup: ''
+      bloodGroup: '',
+      issueDate: resolvedIssue,
+      validUntil: resolvedValid
     });
+    if (!isManualDateOverride) {
+      setIssueDate(resolvedIssue);
+      setValidUntil(resolvedValid);
+    }
   };
 
   const handleResetManualSingle = () => {
@@ -527,7 +659,9 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
       citizenshipNo: '',
       savingsAccountNo: '',
       photoUrl: '',
-      bloodGroup: ''
+      bloodGroup: '',
+      issueDate: fallbackIssueDate,
+      validUntil: addYearsToDateString(fallbackIssueDate, 6)
     });
   };
 
@@ -634,6 +768,7 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
   // Build self-contained printable HTML for CR80 cards (uses offscreen iframe, never window.open)
   const buildCardPrintHtml = (card: CardData, side: 'front' | 'back'): string => {
     const tpl = activeTemplate;
+    const { cardIssueDate, cardValidUntil } = resolveCardDates(card);
     const isVert = tpl.orientation === 'vertical';
     const wMm = isVert ? '54mm' : '85.6mm';
     const hMm = isVert ? '85.6mm' : '54mm';
@@ -679,8 +814,8 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
             </ul>
 
             <div style="margin-top:1.5mm;padding:1.6mm 2.2mm;background:#f8fafc;border:0.5pt solid #e2e8f0;border-radius:1.5mm;display:grid;grid-template-columns:1fr 1fr;gap:1.5mm;font-size:5.8pt;">
-              <div><span style="color:#64748b;display:block;font-size:5.2pt;text-transform:uppercase;">Issued Date</span><strong style="font-family:monospace;color:#0f172a;">${escapeHtml(issueDate)}</strong></div>
-              <div><span style="color:#64748b;display:block;font-size:5.2pt;text-transform:uppercase;">Valid Until</span><strong style="font-family:monospace;color:#0f172a;">${escapeHtml(validUntil)}</strong></div>
+              <div><span style="color:#64748b;display:block;font-size:5.2pt;text-transform:uppercase;">Issued Date</span><strong style="font-family:monospace;color:#0f172a;">${escapeHtml(cardIssueDate)}</strong></div>
+              <div><span style="color:#64748b;display:block;font-size:5.2pt;text-transform:uppercase;">Valid Until</span><strong style="font-family:monospace;color:#0f172a;">${escapeHtml(cardValidUntil)}</strong></div>
             </div>
 
             <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-top:2mm;gap:3mm;">
@@ -711,8 +846,8 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
       orgName,
       regdNo,
       panNumber,
-      issueDate,
-      validUntil,
+      issueDate: cardIssueDate,
+      validUntil: cardValidUntil,
       orgWebsite
     });
     const qrBoxHtml = showQrCode
@@ -776,8 +911,8 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
           </div>
 
           <div style="background:${tpl.primary};color:#ffffff;padding:1mm 2.5mm;display:flex;justify-content:space-between;font-size:4.6pt;font-weight:700;">
-            <span>ISS: ${escapeHtml(issueDate)}</span>
-            <span>VAL: ${escapeHtml(validUntil)}</span>
+            <span>ISS: ${escapeHtml(cardIssueDate)}</span>
+            <span>VAL: ${escapeHtml(cardValidUntil)}</span>
           </div>
         </div>
       `;
@@ -852,9 +987,9 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
         </div>
 
         <div style="background:${tpl.isLightHeader ? '#f1f5f9' : tpl.primary};color:${tpl.isLightHeader ? '#334155' : '#ffffff'};padding:0.85mm 2.8mm;display:flex;justify-content:space-between;align-items:center;font-size:4.8pt;font-weight:700;border-top:${tpl.isLightHeader ? '0.5pt solid #cbd5e1' : 'none'};">
-          <span>ISSUED: ${escapeHtml(issueDate)}</span>
+          <span>ISSUED: ${escapeHtml(cardIssueDate)}</span>
           ${orgWebsite ? `<span style="font-weight:700;">${escapeHtml(orgWebsite)}</span>` : ''}
-          <span>VALID: ${escapeHtml(validUntil)}</span>
+          <span>VALID: ${escapeHtml(cardValidUntil)}</span>
         </div>
       </div>
     `;
@@ -948,6 +1083,7 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
   // Interactive Live Card Preview Component (React JSX matching exact Print layout)
   const renderCardPreview = (card: CardData, side: 'front' | 'back', compact = false) => {
     const tpl = activeTemplate;
+    const { cardIssueDate, cardValidUntil } = resolveCardDates(card);
     const isVert = tpl.orientation === 'vertical';
     const initials = (card.name || 'M')
       .trim()
@@ -971,8 +1107,8 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
       orgName,
       regdNo,
       panNumber,
-      issueDate,
-      validUntil,
+      issueDate: cardIssueDate,
+      validUntil: cardValidUntil,
       orgWebsite
     });
     const qrSvg = showQrCode ? buildQrSvgData(qrPayload) : null;
@@ -1006,11 +1142,11 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
             <div className="grid grid-cols-2 gap-2 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[9px]">
               <div>
                 <div className="text-[8px] uppercase text-slate-400 font-bold">Issued Date</div>
-                <div className="font-mono tabular-nums font-bold text-slate-900">{issueDate}</div>
+                <div className="font-mono tabular-nums font-bold text-slate-900">{cardIssueDate}</div>
               </div>
               <div>
                 <div className="text-[8px] uppercase text-slate-400 font-bold">Valid Until</div>
-                <div className="font-mono tabular-nums font-bold text-slate-900">{validUntil}</div>
+                <div className="font-mono tabular-nums font-bold text-slate-900">{cardValidUntil}</div>
               </div>
             </div>
 
@@ -1178,8 +1314,8 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
             style={{ backgroundColor: tpl.primary }}
             className="px-3 py-1 text-white flex justify-between text-[7.2px] font-mono tabular-nums font-bold"
           >
-            <span>ISS: {issueDate}</span>
-            <span>VAL: {validUntil}</span>
+            <span>ISS: {cardIssueDate}</span>
+            <span>VAL: {cardValidUntil}</span>
           </div>
         </div>
       );
@@ -1403,9 +1539,9 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
             tpl.isLightHeader ? 'border-t border-slate-200' : ''
           }`}
         >
-          <span>ISSUED: {issueDate}</span>
+          <span>ISSUED: {cardIssueDate}</span>
           {orgWebsite && <span className="truncate mx-1.5 font-sans font-bold tracking-tight">{orgWebsite}</span>}
-          <span>VALID: {validUntil}</span>
+          <span>VALID: {cardValidUntil}</span>
         </div>
       </div>
     );
@@ -1752,20 +1888,39 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-[11px] font-bold text-slate-600 mb-1">Issued Date</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-[11px] font-bold text-slate-600">Issued Date</label>
+                  {isManualDateOverride && (
+                    <button
+                      type="button"
+                      onClick={() => setIsManualDateOverride(false)}
+                      className="text-[10px] font-bold text-blue-600 hover:underline cursor-pointer"
+                    >
+                      Auto (Saving Date)
+                    </button>
+                  )}
+                </div>
                 <input
                   type="text"
                   value={issueDate}
-                  onChange={e => setIssueDate(e.target.value)}
+                  onChange={e => {
+                    const nextVal = e.target.value;
+                    setIsManualDateOverride(true);
+                    setIssueDate(nextVal);
+                    setValidUntil(addYearsToDateString(nextVal, 6));
+                  }}
                   className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg font-mono text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-blue-600"
                 />
               </div>
               <div>
-                <label className="block text-[11px] font-bold text-slate-600 mb-1">Valid Until</label>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">Valid Until (+6 Yrs)</label>
                 <input
                   type="text"
                   value={validUntil}
-                  onChange={e => setValidUntil(e.target.value)}
+                  onChange={e => {
+                    setIsManualDateOverride(true);
+                    setValidUntil(e.target.value);
+                  }}
                   className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg font-mono text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-blue-600"
                 />
               </div>

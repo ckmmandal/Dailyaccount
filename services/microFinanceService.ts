@@ -123,6 +123,7 @@ export interface MFCollectionSheet {
 export interface MFSignatureSheetMember {
   memberId: string;
   name: string;
+  role?: string;
   savingsAmount: number;
   loanAmount: number;
   dueAmount?: number;
@@ -157,6 +158,38 @@ export interface MFSignatureSheet {
   createdAt: string;
 }
 
+export interface MFDepositSheetRow {
+  memberId: string;
+  name: string;
+  savingAmount: number;
+  loanAmount: number;
+  totalAmount: number;
+  savedAt?: string;
+}
+
+export interface MFDepositSheet {
+  id: string;
+  sheetNo: string;
+  year: string;
+  month: string;
+  day: string;
+  dateBs: string;
+  dateDisplay: string;
+  centerId: string;
+  centerName: string;
+  groupId: string;
+  groupName: string;
+  location: string;
+  branchName: string;
+  employeeName: string;
+  rows: MFDepositSheetRow[];
+  totalSaving: number;
+  totalLoan: number;
+  grandTotal: number;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface MFSettings {
   interestRateDefault: number;
   compulsorySavingDefault: number;
@@ -175,6 +208,7 @@ const STORAGE_KEYS = {
   CLOSED_LOANS: 'ratauli_mf_closed_loans_v1',
   SHEETS: 'ratauli_mf_sheets_v1',
   SIGNATURE_SHEETS: 'ratauli_mf_signature_sheets_v1',
+  DEPOSIT_SHEETS: 'ratauli_mf_deposit_sheets_v1',
   SETTINGS: 'ratauli_mf_settings_v1',
 };
 
@@ -237,12 +271,38 @@ export const normalizeLoanProductKey = (product?: string): string =>
     .trim()
     .toLowerCase();
 
-const normalizeDuplicateMemberId = (val?: string): string =>
+export const normalizeDuplicateMemberId = (val?: string): string =>
   toEnglishDigits(String(val || ''))
     .replace(/\s+/g, '')
     .trim()
     .toLowerCase()
     .replace(/^0+(?=\d)/, '');
+
+export const normalizeCitizenshipKey = (val?: string): string => {
+  const cleaned = toEnglishDigits(String(val || ''))
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+  if (!cleaned || cleaned.length < 4 || /^0+$/.test(cleaned) || cleaned === 'none' || cleaned === 'null') {
+    return '';
+  }
+  return cleaned;
+};
+
+export const findDuplicateMember = (
+  existingMembers: MFMember[],
+  candidate: { memberId?: string; citizenshipNo?: string },
+  excludeRecordId?: string
+): MFMember | undefined => {
+  const memKey = normalizeDuplicateMemberId(candidate.memberId);
+  const citKey = normalizeCitizenshipKey(candidate.citizenshipNo);
+  if (!memKey && !citKey) return undefined;
+  return existingMembers.find(m => {
+    if (excludeRecordId && m.id === excludeRecordId) return false;
+    if (memKey && normalizeDuplicateMemberId(m.memberId) === memKey) return true;
+    if (citKey && normalizeCitizenshipKey(m.citizenshipNo) === citKey) return true;
+    return false;
+  });
+};
 
 export const findUnclosedDuplicateLoan = (
   existingLoans: MFLoanRecord[],
@@ -257,6 +317,41 @@ export const findUnclosedDuplicateLoan = (
     const lMemKey = normalizeDuplicateMemberId(l.memberId);
     const lProdKey = normalizeLoanProductKey(l.loanProduct);
     return lMemKey === memKey && lProdKey === prodKey;
+  });
+};
+
+export const isSavingStatusClosed = (status?: string): boolean => {
+  const raw = String(status || '').toUpperCase();
+  return raw === 'CLOSED' || raw === 'INACTIVE' || raw === 'DUE' || raw === 'PENDING';
+};
+
+export const normalizeSavingProductKey = (savingTypeOrProduct?: string): string => {
+  const raw = String(savingTypeOrProduct || '').trim();
+  if (!raw) return '';
+  const typeWrapperMatch = raw.match(/^(?:normal saving|recurring saving)\s*\(([^)]+)\)\s*$/i);
+  const extracted = typeWrapperMatch ? typeWrapperMatch[1] : raw;
+  return extracted
+    .replace(/\s*\(\s*\d+(?:\.\d+)?%\s*\)\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+};
+
+export const findActiveDuplicateSaving = (
+  existingSavings: MFSavingsRecord[],
+  memberId: string,
+  savingTypeOrProduct: string,
+  excludeSavingId?: string
+): MFSavingsRecord | undefined => {
+  const memKey = normalizeDuplicateMemberId(memberId);
+  const prodKey = normalizeSavingProductKey(savingTypeOrProduct);
+  if (!memKey || !prodKey) return undefined;
+  return existingSavings.find(s => {
+    if (excludeSavingId && s.id === excludeSavingId) return false;
+    if (isSavingStatusClosed(s.status)) return false;
+    const sMemKey = normalizeDuplicateMemberId(s.memberId);
+    const sProdKey = normalizeSavingProductKey(s.savingType);
+    return sMemKey === memKey && sProdKey === prodKey;
   });
 };
 
@@ -1145,9 +1240,12 @@ export const microFinanceService = {
   addMember: (member: Omit<MFMember, 'id' | 'createdAt'>): MFMember => {
     assertDayNotEnded(member.branch);
     const members = microFinanceService.getMembers();
+    if (findDuplicateMember(members, { memberId: member.memberId, citizenshipNo: member.citizenshipNo })) {
+      throw new Error('This member is already registered in the system.');
+    }
     const newMember: MFMember = {
       ...member,
-      id: 'mem-' + Date.now(),
+      id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       createdAt: new Date().toISOString().split('T')[0]
     };
     const updated = [newMember, ...members];
@@ -1172,8 +1270,17 @@ export const microFinanceService = {
 
   updateMember: (id: string, updates: Partial<MFMember>): MFMember[] => {
     assertDayNotEnded(updates.branch);
+    const existing = microFinanceService.getMembers();
+    const target = existing.find(m => m.id === id);
+    if (target) {
+      const nextMemberId = updates.memberId !== undefined ? updates.memberId : target.memberId;
+      const nextCitizenshipNo = updates.citizenshipNo !== undefined ? updates.citizenshipNo : target.citizenshipNo;
+      if (findDuplicateMember(existing, { memberId: nextMemberId, citizenshipNo: nextCitizenshipNo }, id)) {
+        throw new Error('This member is already registered in the system.');
+      }
+    }
     let updatedItem: MFMember | null = null;
-    const members = microFinanceService.getMembers().map(m => {
+    const members = existing.map(m => {
       if (m.id === id) {
         updatedItem = { ...m, ...updates };
         return updatedItem;
@@ -1240,9 +1347,17 @@ export const microFinanceService = {
   addSaving: (saving: Omit<MFSavingsRecord, 'id' | 'createdAt'>): MFSavingsRecord => {
     assertDayNotEnded();
     const savings = microFinanceService.getSavings();
+    if (!isSavingStatusClosed(saving.status)) {
+      const conflict = findActiveDuplicateSaving(savings, saving.memberId, saving.savingType);
+      if (conflict) {
+        throw new Error(
+          `Cannot open saving account: Member (${saving.name} • ${saving.memberId}) already has an ACTIVE account (${conflict.accountNo}) under "${conflict.savingType}". Please close the existing account first before opening a new one in the same product.`
+        );
+      }
+    }
     const newSaving: MFSavingsRecord = {
       ...saving,
-      id: 'sav-' + Date.now(),
+      id: `sav-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       createdAt: new Date().toISOString().split('T')[0]
     };
     const updated = [newSaving, ...savings];
@@ -1712,11 +1827,33 @@ export const microFinanceService = {
     const existing = microFinanceService.getMembers();
     const today = new Date().toISOString().split('T')[0];
     const stamp = Date.now();
-    const created: MFMember[] = items.map((item, idx) => ({
-      ...item,
-      id: `mem-${stamp}-${idx}`,
-      createdAt: today
-    }));
+    const seenMemberIds = new Set<string>();
+    const seenCitizenships = new Set<string>();
+    const created: MFMember[] = [];
+
+    items.forEach((item, idx) => {
+      const memKey = normalizeDuplicateMemberId(item.memberId);
+      const citKey = normalizeCitizenshipKey(item.citizenshipNo);
+      if (
+        findDuplicateMember(existing, { memberId: item.memberId, citizenshipNo: item.citizenshipNo }) ||
+        (memKey && seenMemberIds.has(memKey)) ||
+        (citKey && seenCitizenships.has(citKey))
+      ) {
+        return;
+      }
+      if (memKey) seenMemberIds.add(memKey);
+      if (citKey) seenCitizenships.add(citKey);
+      created.push({
+        ...item,
+        id: `mem-${stamp}-${idx}`,
+        createdAt: today
+      });
+    });
+
+    if (created.length === 0) {
+      return existing;
+    }
+
     const updated = [...created, ...existing];
     microFinanceService.saveMembers(updated);
 
@@ -1739,11 +1876,27 @@ export const microFinanceService = {
     const existing = microFinanceService.getSavings();
     const today = new Date().toISOString().split('T')[0];
     const stamp = Date.now();
-    const created: MFSavingsRecord[] = items.map((item, idx) => ({
-      ...item,
-      id: `sav-${stamp}-${idx}`,
-      createdAt: today
-    }));
+    const created: MFSavingsRecord[] = [];
+    const seenBatchKeys = new Set<string>();
+    items.forEach((item, idx) => {
+      if (!isSavingStatusClosed(item.status)) {
+        const memKey = normalizeDuplicateMemberId(item.memberId);
+        const prodKey = normalizeSavingProductKey(item.savingType);
+        const batchKey = memKey && prodKey ? `${memKey}__${prodKey}` : '';
+        if (
+          findActiveDuplicateSaving(existing, item.memberId, item.savingType) ||
+          (batchKey && seenBatchKeys.has(batchKey))
+        ) {
+          return;
+        }
+        if (batchKey) seenBatchKeys.add(batchKey);
+      }
+      created.push({
+        ...item,
+        id: `sav-${stamp}-${idx}`,
+        createdAt: today
+      });
+    });
     const updated = [...created, ...existing];
     safeSetLocalStorage(STORAGE_KEYS.SAVINGS, updated);
     void bgUpsert('mf_savings', created.map(mapSavingToRow));
@@ -1947,6 +2100,69 @@ export const microFinanceService = {
     const sheets = microFinanceService.getSignatureSheets().filter(s => s.id !== id);
     localStorage.setItem(STORAGE_KEYS.SIGNATURE_SHEETS, JSON.stringify(sheets));
     void bgDelete('mf_signature_sheets', id);
+    return sheets;
+  },
+
+  // Deposit Sheets (Group member Saving & Loan deposit entry records)
+  getDepositSheets: (): MFDepositSheet[] => {
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.DEPOSIT_SHEETS);
+      if (data !== null) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) return parsed as MFDepositSheet[];
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return [];
+  },
+
+  saveDepositSheets: (sheets: MFDepositSheet[]): void => {
+    safeSetLocalStorage(STORAGE_KEYS.DEPOSIT_SHEETS, sheets);
+  },
+
+  upsertDepositSheet: (
+    sheet: Omit<MFDepositSheet, 'id' | 'createdAt'> & { id?: string; createdAt?: string }
+  ): { savedSheet: MFDepositSheet; allSheets: MFDepositSheet[] } => {
+    assertDayNotEnded();
+    const existing = microFinanceService.getDepositSheets();
+    const nowIso = new Date().toISOString();
+    const existingIdx = existing.findIndex(
+      s =>
+        (sheet.id && s.id === sheet.id) ||
+        (s.groupId === sheet.groupId && s.dateBs === sheet.dateBs)
+    );
+
+    if (existingIdx >= 0) {
+      const prev = existing[existingIdx];
+      const updatedSheet: MFDepositSheet = {
+        ...prev,
+        ...sheet,
+        id: prev.id,
+        sheetNo: prev.sheetNo || sheet.sheetNo,
+        createdAt: prev.createdAt,
+        updatedAt: nowIso
+      };
+      const allSheets = existing.map((s, idx) => (idx === existingIdx ? updatedSheet : s));
+      safeSetLocalStorage(STORAGE_KEYS.DEPOSIT_SHEETS, allSheets);
+      return { savedSheet: updatedSheet, allSheets };
+    }
+
+    const newSheet: MFDepositSheet = {
+      ...sheet,
+      id: sheet.id || `dep-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      createdAt: sheet.createdAt || nowIso.split('T')[0],
+      updatedAt: nowIso
+    };
+    const allSheets = [newSheet, ...existing];
+    safeSetLocalStorage(STORAGE_KEYS.DEPOSIT_SHEETS, allSheets);
+    return { savedSheet: newSheet, allSheets };
+  },
+
+  deleteDepositSheet: (id: string): MFDepositSheet[] => {
+    assertDayNotEnded();
+    const sheets = microFinanceService.getDepositSheets().filter(s => s.id !== id);
+    safeSetLocalStorage(STORAGE_KEYS.DEPOSIT_SHEETS, sheets);
     return sheets;
   },
 

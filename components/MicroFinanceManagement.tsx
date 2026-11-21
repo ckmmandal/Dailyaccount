@@ -28,7 +28,13 @@ import {
   buildBsDateFromParts,
   getTodayBsDate,
   normalizeLoanProductKey,
-  findUnclosedDuplicateLoan
+  findUnclosedDuplicateLoan,
+  isSavingStatusClosed,
+  normalizeSavingProductKey,
+  findActiveDuplicateSaving,
+  normalizeDuplicateMemberId,
+  normalizeCitizenshipKey,
+  findDuplicateMember
 } from '../services/microFinanceService';
 import { meetingMinutesService, GroupMeetingRecord } from '../services/meetingMinutesService';
 import { useAuth } from '../AuthContext';
@@ -38,6 +44,7 @@ import { productService } from '../services/productService';
 import NepaliDate from 'nepali-date-converter';
 import { GroupMeetingMinutesModule } from './microfinance/GroupMeetingMinutesModule';
 import { MemberIdCardModule } from './microfinance/MemberIdCardModule';
+import { DepositSheetModule } from './microfinance/DepositSheetModule';
 import { isBackDateBlockedForEntry, getBackDateBlockedMessage } from '../utils/backDateControl';
 import { isDayEndedForBranch, getDayEndedBlockMessage, useDayEndLock } from '../utils/dayEndLock';
 import { DayEndFieldset } from './DayEndFieldset';
@@ -348,10 +355,11 @@ export const MicroFinanceManagement: React.FC = () => {
   const canViewLoan = canMfAccess('mf_loan', 'view');
   const canViewCollectionReport = canMfAccess('mf_reports', 'view');
   const canViewSignatureReport = canMfAccess('mf_signature_sheet', 'view');
+  const canViewDepositSheet = canMfAccess('mf_deposit_sheet', 'view') || canViewSignatureReport;
   const canViewMeetingMinutes = canMfAccess('mf_meeting_minutes', 'view');
   const canViewIdCard = canMfAccess('mf_id_card', 'view');
   const canViewReports =
-    canViewCollectionReport || canViewSignatureReport || canViewMeetingMinutes || canViewIdCard;
+    canViewCollectionReport || canViewSignatureReport || canViewDepositSheet || canViewMeetingMinutes || canViewIdCard;
 
   useEffect(() => {
     storageService.getBranches().then(b => {
@@ -455,7 +463,7 @@ export const MicroFinanceManagement: React.FC = () => {
   }, []);
 
   // Reports state (Matching image_ff5945f2.png)
-  const [reportTab, setReportTab] = useState<'collection' | 'signature' | 'meeting-minutes' | 'id-card'>('collection');
+  const [reportTab, setReportTab] = useState<'collection' | 'signature' | 'deposit' | 'meeting-minutes' | 'id-card'>('collection');
   const [reportYear, setReportYear] = useState(currentBsDate.year);
   const [reportMonth, setReportMonth] = useState(currentBsDate.month);
   const [reportDay, setReportDay] = useState(currentBsDate.day);
@@ -487,9 +495,10 @@ export const MicroFinanceManagement: React.FC = () => {
   ]);
 
   useEffect(() => {
-    const allowedReportTabs: Array<'collection' | 'signature' | 'meeting-minutes' | 'id-card'> = [];
+    const allowedReportTabs: Array<'collection' | 'signature' | 'deposit' | 'meeting-minutes' | 'id-card'> = [];
     if (canViewCollectionReport) allowedReportTabs.push('collection');
     if (canViewSignatureReport) allowedReportTabs.push('signature');
+    if (canViewDepositSheet) allowedReportTabs.push('deposit');
     if (canViewMeetingMinutes) allowedReportTabs.push('meeting-minutes');
     if (canViewIdCard) allowedReportTabs.push('id-card');
     if (allowedReportTabs.length > 0 && !allowedReportTabs.includes(reportTab)) {
@@ -499,6 +508,7 @@ export const MicroFinanceManagement: React.FC = () => {
     reportTab,
     canViewCollectionReport,
     canViewSignatureReport,
+    canViewDepositSheet,
     canViewMeetingMinutes,
     canViewIdCard
   ]);
@@ -525,6 +535,7 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<MFSamuhGroup | null>(null);
+  const [selectedGroupForMembersList, setSelectedGroupForMembersList] = useState<MFSamuhGroup | null>(null);
   const [groupForm, setGroupForm] = useState({
     code: '',
     name: '',
@@ -538,6 +549,7 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const [isMemberModalOpen, setIsMemberModalOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<MFMember | null>(null);
+  const [memberFormError, setMemberFormError] = useState<string | null>(null);
   const [memberStatusTab, setMemberStatusTab] = useState<'ACTIVE' | 'INACTIVE'>('ACTIVE');
   const [selectedMemberToView, setSelectedMemberToView] = useState<MFMember | null>(null);
   const [isViewMemberModalOpen, setIsViewMemberModalOpen] = useState(false);
@@ -593,6 +605,7 @@ export const MicroFinanceManagement: React.FC = () => {
   const [memberSearchInput, setMemberSearchInput] = useState('');
   const [isMemberDropdownOpen, setIsMemberDropdownOpen] = useState(false);
   const [selectedSavingMemberId, setSelectedSavingMemberId] = useState('');
+  const [savingFormError, setSavingFormError] = useState<string | null>(null);
   const [savingDate, setSavingDate] = useState(() => getTodayBsDate());
   const [savingAccounts, setSavingAccounts] = useState<Array<{
     id: string;
@@ -812,6 +825,7 @@ export const MicroFinanceManagement: React.FC = () => {
     count: number;
     fileName?: string;
     skippedCount?: number;
+    skippedMessage?: string;
   } | null>(null);
   const [isBulkUploading, setIsBulkUploading] = useState<boolean>(false);
   const bulkFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1193,6 +1207,21 @@ export const MicroFinanceManagement: React.FC = () => {
         setGroups(updated);
         createdCount = items.length;
       } else if (bulkType === 'Members') {
+        const existingMembersList = microFinanceService.getMembers();
+        const usedAutoMemberIds = new Set(
+          existingMembersList.map(m => normalizeDuplicateMemberId(m.memberId)).filter(Boolean)
+        );
+        let autoMemberSeq = 1001 + existingMembersList.length;
+        const getNextUnusedAutoMemberId = (): string => {
+          while (usedAutoMemberIds.has(normalizeDuplicateMemberId(`M-${autoMemberSeq}`))) {
+            autoMemberSeq += 1;
+          }
+          const nextId = `M-${autoMemberSeq}`;
+          usedAutoMemberIds.add(normalizeDuplicateMemberId(nextId));
+          autoMemberSeq += 1;
+          return nextId;
+        };
+
         const items: Omit<MFMember, 'id' | 'createdAt'>[] = [];
         bulkParsedRows.forEach((row, idx) => {
           const name = getExcelCell(row, ['Name', 'Member Name', 'Full Name']);
@@ -1211,7 +1240,8 @@ export const MicroFinanceManagement: React.FC = () => {
               (matchedGroup && c.id === matchedGroup.centerId)
             ) || centers[0];
 
-          const memberId = getExcelCell(row, ['Member ID', 'Member Code', 'ID']) || `M-${1001 + members.length + idx}`;
+          const rawMemberId = getExcelCell(row, ['Member ID', 'Member Code', 'ID', 'सदस्य नं']);
+          const memberId = rawMemberId || getNextUnusedAutoMemberId();
           const genderRaw = getExcelCell(row, ['Gender']);
           const gender: 'Female' | 'Male' | 'Other' =
             genderRaw.toLowerCase() === 'male' ? 'Male' : genderRaw.toLowerCase() === 'other' ? 'Other' : 'Female';
@@ -1244,10 +1274,49 @@ export const MicroFinanceManagement: React.FC = () => {
           setBulkUploadError('No valid Members found. Ensure the "Name" column has values.');
           return;
         }
-        const updatedMembers = microFinanceService.bulkAddMembers(items);
+
+        const seenMemberIdKeys = new Set<string>();
+        const seenCitizenshipKeys = new Set<string>();
+        const filteredMemberItems = items.filter(item => {
+          const memKey = normalizeDuplicateMemberId(item.memberId);
+          const citKey = normalizeCitizenshipKey(item.citizenshipNo);
+          if (
+            findDuplicateMember(existingMembersList, { memberId: item.memberId, citizenshipNo: item.citizenshipNo }) ||
+            (memKey && seenMemberIdKeys.has(memKey)) ||
+            (citKey && seenCitizenshipKeys.has(citKey))
+          ) {
+            return false;
+          }
+          if (memKey) seenMemberIdKeys.add(memKey);
+          if (citKey) seenCitizenshipKeys.add(citKey);
+          return true;
+        });
+
+        const skippedDuplicateMembers = items.length - filteredMemberItems.length;
+        if (filteredMemberItems.length === 0) {
+          setBulkUploadError('This member is already registered in the system.');
+          return;
+        }
+
+        const updatedMembers = microFinanceService.bulkAddMembers(filteredMemberItems);
         setMembers(updatedMembers);
         setGroups(microFinanceService.getGroups());
-        createdCount = items.length;
+        createdCount = filteredMemberItems.length;
+        if (skippedDuplicateMembers > 0) {
+          const uploadedFileName = bulkFileName;
+          setIsBulkModalOpen(false);
+          setBulkUploadSuccess({
+            entityType: bulkType,
+            count: createdCount,
+            fileName: uploadedFileName,
+            skippedCount: skippedDuplicateMembers,
+            skippedMessage: `${skippedDuplicateMembers} duplicate row(s) skipped: This member is already registered in the system.`
+          });
+          showToast(
+            `Uploaded ${createdCount} member(s); skipped ${skippedDuplicateMembers} row(s) — This member is already registered in the system.`
+          );
+          return;
+        }
       } else if (bulkType === 'Savings') {
         const items: Omit<MFSavingsRecord, 'id' | 'createdAt'>[] = [];
         let missingIdentityCount = 0;
@@ -1359,10 +1428,48 @@ export const MicroFinanceManagement: React.FC = () => {
           );
           return;
         }
-        const updatedSavings = microFinanceService.bulkAddSavings(items);
+        const existingSavingsList = microFinanceService.getSavings();
+        const seenSavingBatchKeys = new Set<string>();
+        const filteredSavingItems = items.filter(item => {
+          if (isSavingStatusClosed(item.status)) return true;
+          const memKey = stripLeadingZerosId(item.memberId) || normalizeMfMemberId(item.memberId);
+          const prodKey = normalizeSavingProductKey(item.savingType);
+          const key = memKey && prodKey ? `${memKey}__${prodKey}` : '';
+          if (
+            findActiveDuplicateSaving(existingSavingsList, item.memberId, item.savingType) ||
+            (key && seenSavingBatchKeys.has(key))
+          ) {
+            return false;
+          }
+          if (key) seenSavingBatchKeys.add(key);
+          return true;
+        });
+        const skippedDuplicateSavings = items.length - filteredSavingItems.length;
+        if (filteredSavingItems.length === 0) {
+          setBulkUploadError(
+            'Saving upload failed: Selected member(s) already have an ACTIVE saving account under the same Saving Product. Close existing active account(s) before opening a new one in the same product.'
+          );
+          return;
+        }
+        const updatedSavings = microFinanceService.bulkAddSavings(filteredSavingItems);
         setSavings(updatedSavings);
         setMembers(microFinanceService.getMembers());
-        createdCount = items.length;
+        createdCount = filteredSavingItems.length;
+        if (skippedDuplicateSavings > 0) {
+          const uploadedFileName = bulkFileName;
+          setIsBulkModalOpen(false);
+          setBulkUploadSuccess({
+            entityType: bulkType,
+            count: createdCount,
+            fileName: uploadedFileName,
+            skippedCount: skippedDuplicateSavings,
+            skippedMessage: `${skippedDuplicateSavings} active duplicate saving row(s) skipped: This Account Has Already Been Opened.`
+          });
+          showToast(
+            `Data successfully uploaded: ${createdCount} saving account(s); skipped ${skippedDuplicateSavings} active duplicate product row(s).`
+          );
+          return;
+        }
       } else if (bulkType === 'Loans') {
         const items: Omit<MFLoanRecord, 'id' | 'createdAt'>[] = [];
         bulkParsedRows.forEach((row, idx) => {
@@ -2395,7 +2502,15 @@ export const MicroFinanceManagement: React.FC = () => {
   // Handlers for Member
   const handleOpenAddMember = () => {
     setEditingMember(null);
-    const genAccountNo = `SAV-${1000 + members.length + 1}`;
+    setMemberFormError(null);
+    const existingIdKeys = new Set(
+      members.map(m => normalizeDuplicateMemberId(m.memberId)).filter(Boolean)
+    );
+    let nextSeq = 1000 + members.length + 1;
+    while (existingIdKeys.has(normalizeDuplicateMemberId(`M-${nextSeq}`))) {
+      nextSeq += 1;
+    }
+    const genAccountNo = `SAV-${nextSeq}`;
     const defaultCenterId =
       appliedMemberCenterId ||
       sortedCentersByMeetingDay[0]?.id ||
@@ -2408,7 +2523,7 @@ export const MicroFinanceManagement: React.FC = () => {
         : centerGroups[0]?.id) || '';
 
     setMemberForm({
-      memberId: `M-${1000 + members.length + 1}`,
+      memberId: `M-${nextSeq}`,
       name: '',
       citizenshipNo: '',
       mobile: '',
@@ -2430,6 +2545,7 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const handleEditMember = (member: MFMember) => {
     setEditingMember(member);
+    setMemberFormError(null);
     const resolvedCenterId =
       (member.centerId && centers.some(c => c.id === member.centerId)
         ? member.centerId
@@ -2467,38 +2583,62 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleSaveMember = () => {
+    setMemberFormError(null);
     if (isDayEndedForBranch(branch?.id)) {
-      alert(getDayEndedBlockMessage());
+      setMemberFormError(getDayEndedBlockMessage());
       return;
     }
-    if (!memberForm.name) {
-      alert('Please enter member name');
+    if (!memberForm.name || !memberForm.name.trim()) {
+      setMemberFormError('Please enter member name.');
       return;
     }
+
+    const latestMembers = microFinanceService.getMembers();
+    const duplicateMember = findDuplicateMember(
+      latestMembers,
+      { memberId: memberForm.memberId, citizenshipNo: memberForm.citizenshipNo },
+      editingMember?.id
+    );
+    if (duplicateMember) {
+      setMemberFormError('This member is already registered in the system.');
+      return;
+    }
+
     const c = centers.find(item => item.id === memberForm.centerId);
     const g = groups.find(item => item.id === memberForm.samuhId);
 
     const safeAccNo = memberForm.savingsAccountNo || `SAV-${Date.now().toString().slice(-4)}`;
     const safeJoinedDate = memberForm.joinedDate || new Date().toISOString().split('T')[0];
 
-    if (editingMember) {
-      microFinanceService.updateMember(editingMember.id, {
-        ...memberForm,
-        savingsAccountNo: safeAccNo,
-        joinedDate: safeJoinedDate,
-        centerName: c ? c.name : 'N/A',
-        samuhName: g ? g.name : 'N/A'
-      });
-      showToast('Member updated successfully');
-    } else {
-      microFinanceService.addMember({
-        ...memberForm,
-        savingsAccountNo: safeAccNo,
-        joinedDate: safeJoinedDate,
-        centerName: c ? c.name : 'N/A',
-        samuhName: g ? g.name : 'N/A'
-      });
-      showToast('New member registered');
+    try {
+      if (editingMember) {
+        microFinanceService.updateMember(editingMember.id, {
+          ...memberForm,
+          memberId: memberForm.memberId.trim(),
+          name: memberForm.name.trim(),
+          citizenshipNo: memberForm.citizenshipNo.trim(),
+          savingsAccountNo: safeAccNo,
+          joinedDate: safeJoinedDate,
+          centerName: c ? c.name : 'N/A',
+          samuhName: g ? g.name : 'N/A'
+        });
+        showToast('Member updated successfully');
+      } else {
+        microFinanceService.addMember({
+          ...memberForm,
+          memberId: memberForm.memberId.trim(),
+          name: memberForm.name.trim(),
+          citizenshipNo: memberForm.citizenshipNo.trim(),
+          savingsAccountNo: safeAccNo,
+          joinedDate: safeJoinedDate,
+          centerName: c ? c.name : 'N/A',
+          samuhName: g ? g.name : 'N/A'
+        });
+        showToast('New member registered');
+      }
+    } catch (err) {
+      setMemberFormError(err instanceof Error ? err.message : 'Unable to save member.');
+      return;
     }
     setMembers(microFinanceService.getMembers());
     setGroups(microFinanceService.getGroups());
@@ -2592,6 +2732,23 @@ export const MicroFinanceManagement: React.FC = () => {
     }
     const currentStatus = getEffectiveSavingStatus(selectedSavingToToggleStatus.status);
     const nextStatus: 'ACTIVE' | 'CLOSED' = currentStatus === 'ACTIVE' ? 'CLOSED' : 'ACTIVE';
+    if (nextStatus === 'ACTIVE') {
+      const latestSavings = microFinanceService.getSavings();
+      const conflict = findActiveDuplicateSaving(
+        latestSavings,
+        selectedSavingToToggleStatus.memberId,
+        selectedSavingToToggleStatus.savingType,
+        selectedSavingToToggleStatus.id
+      );
+      if (conflict) {
+        setIsToggleSavingStatusModalOpen(false);
+        setSelectedSavingToToggleStatus(null);
+        showToast(
+          `Cannot activate: Member ${selectedSavingToToggleStatus.memberId} already has an ACTIVE account (${conflict.accountNo}) in "${conflict.savingType}".`
+        );
+        return;
+      }
+    }
     const updated = microFinanceService.updateSaving(selectedSavingToToggleStatus.id, { status: nextStatus });
     setSavings(updated);
     setMembers(microFinanceService.getMembers());
@@ -2700,6 +2857,7 @@ export const MicroFinanceManagement: React.FC = () => {
   const handleOpenAddSaving = () => {
     const defaultProduct = filteredMfSavingProducts[0]?.name || 'General Saving';
 
+    setSavingFormError(null);
     setSelectedSavingMemberId('');
     setMemberSearchInput('');
     setIsMemberDropdownOpen(false);
@@ -2718,6 +2876,7 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleSelectSavingMember = (member: MFMember) => {
+    setSavingFormError(null);
     setSelectedSavingMemberId(member.memberId);
     setMemberSearchInput(`${member.name} (${member.memberId})`);
     setIsMemberDropdownOpen(false);
@@ -2729,11 +2888,22 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleAddSavingAccount = () => {
+    setSavingFormError(null);
     const mem = members.find(m => m.memberId === selectedSavingMemberId);
     const base = mem?.savingsAccountNo || (selectedSavingMemberId ? `SAV-${selectedSavingMemberId.replace('M-', '')}` : 'SAV-1001');
     const nextIdx = savingAccounts.length + 1;
     const defaultType = 'Recurring Saving';
-    const defaultProduct = filteredMfSavingProducts[0]?.name || 'General Saving';
+    const usedProductKeys = new Set(
+      savingAccounts.map(a => normalizeSavingProductKey(a.product ? `${a.savingType} (${a.product})` : a.savingType))
+    );
+    const availableProduct =
+      filteredMfSavingProducts.find(p => {
+        const key = normalizeSavingProductKey(p.name);
+        if (usedProductKeys.has(key)) return false;
+        if (selectedSavingMemberId && findActiveDuplicateSaving(savings, selectedSavingMemberId, p.name)) return false;
+        return true;
+      }) || filteredMfSavingProducts[0];
+    const defaultProduct = availableProduct?.name || 'General Saving';
     const defaultAmt = 500;
 
     setSavingAccounts(prev => [
@@ -2750,68 +2920,93 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const handleRemoveSavingAccount = (id: string) => {
     if (savingAccounts.length <= 1) return;
+    setSavingFormError(null);
     setSavingAccounts(prev => prev.filter(a => a.id !== id));
   };
 
   const handleUpdateSavingAccount = (id: string, field: 'accountNo' | 'savingType' | 'product' | 'amount', value: string | number) => {
+    setSavingFormError(null);
     setSavingAccounts(prev => prev.map(a => a.id === id ? { ...a, [field]: value } : a));
   };
 
   const handleSaveSaving = () => {
+    setSavingFormError(null);
     if (isDayEndedForBranch(branch?.id)) {
-      alert(getDayEndedBlockMessage());
+      setSavingFormError(getDayEndedBlockMessage());
       return;
     }
     if (isBackDateBlockedForEntry(savingDate, systemSettings || authSettings)) {
-      alert(getBackDateBlockedMessage(savingDate));
+      setSavingFormError(getBackDateBlockedMessage(savingDate));
       return;
     }
     const mem = members.find(m => m.memberId === selectedSavingMemberId);
     if (!mem) {
-      alert('Please select a valid member.');
+      setSavingFormError('Please select a valid member.');
       return;
     }
 
     if (savingAccounts.length === 0) {
-      alert('Please add at least one saving account.');
+      setSavingFormError('Please add at least one saving account.');
       return;
     }
+
+    const latestSavings = microFinanceService.getSavings();
+    const seenProductKeys = new Set<string>();
 
     for (let i = 0; i < savingAccounts.length; i++) {
       const a = savingAccounts[i];
       if (!a.accountNo || !a.accountNo.trim()) {
-        alert(`Account #${i + 1}: Please enter a valid account number.`);
+        setSavingFormError(`Account #${i + 1}: Please enter a valid account number.`);
         return;
       }
       if (a.amount < 0 || isNaN(a.amount)) {
-        alert(`Account #${i + 1}: Please enter a valid deposit amount.`);
+        setSavingFormError(`Account #${i + 1}: Please enter a valid deposit amount.`);
         return;
       }
+
+      const typeLabel = a.product ? `${a.savingType} (${a.product})` : a.savingType;
+      const prodKey = normalizeSavingProductKey(typeLabel);
+      const conflict = findActiveDuplicateSaving(latestSavings, mem.memberId, typeLabel);
+      if (conflict || (prodKey && seenProductKeys.has(prodKey))) {
+        setSavingFormError('This Account Has Already Been Opened.');
+        return;
+      }
+      if (prodKey) seenProductKeys.add(prodKey);
     }
 
     const dynamicBsDate = normalizeBsDate(savingDate || getTodayBsDate());
     const todayAd = new Date().toISOString().split('T')[0];
 
-    // Save all accounts in a single batch
-    savingAccounts.forEach(acc => {
-      const typeLabel = acc.product ? `${acc.savingType} (${acc.product})` : acc.savingType;
-      microFinanceService.addSaving({
-        memberId: mem.memberId,
-        accountNo: acc.accountNo.trim(),
-        name: mem.name,
-        groupName: mem.samuhName,
-        centerName: mem.centerName,
-        date: todayAd,
-        dateBs: dynamicBsDate,
-        amount: Number(acc.amount) || 0,
-        savingType: typeLabel,
-        status: 'ACTIVE',
-        collectedBy: user?.fullName || '',
-        receiptNo: '',
-        createdBy: user?.id || user?.username || '',
-        createdByName: user?.fullName || user?.username || ''
+    try {
+      // Save all accounts in a single batch
+      savingAccounts.forEach(acc => {
+        const typeLabel = acc.product ? `${acc.savingType} (${acc.product})` : acc.savingType;
+        microFinanceService.addSaving({
+          memberId: mem.memberId,
+          accountNo: acc.accountNo.trim(),
+          name: mem.name,
+          groupName: mem.samuhName,
+          centerName: mem.centerName,
+          date: todayAd,
+          dateBs: dynamicBsDate,
+          amount: Number(acc.amount) || 0,
+          savingType: typeLabel,
+          status: 'ACTIVE',
+          collectedBy: user?.fullName || '',
+          receiptNo: '',
+          createdBy: user?.id || user?.username || '',
+          createdByName: user?.fullName || user?.username || ''
+        });
       });
-    });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      setSavingFormError(
+        msg.toLowerCase().includes('already has an active saving account')
+          ? 'This Account Has Already Been Opened.'
+          : msg || 'Unable to create saving account.'
+      );
+      return;
+    }
 
     setSavings(microFinanceService.getSavings());
     setMembers(microFinanceService.getMembers());
@@ -3361,6 +3556,7 @@ export const MicroFinanceManagement: React.FC = () => {
       return {
         memberId: m.memberId,
         name: m.name,
+        role: m.role || 'Member',
         savingsAmount: savingAmt,
         loanAmount: totalLoanAmt,
         dueAmount: dueAmt,
@@ -3490,6 +3686,7 @@ export const MicroFinanceManagement: React.FC = () => {
       return {
         memberId: m.memberId,
         name: m.name,
+        role: m.role || 'Member',
         savingsAmount: savingAmt,
         loanAmount: totalLoanAmt,
         dueAmount: manualDues[m.memberId] || 0,
@@ -4671,10 +4868,15 @@ export const MicroFinanceManagement: React.FC = () => {
                         {group.place || 'N/A'}
                       </td>
                       <td className="py-2 px-3">
-                        <span className="text-blue-600 font-bold flex items-center gap-1 cursor-pointer hover:underline">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedGroupForMembersList(group)}
+                          title="View members in this group"
+                          className="text-blue-600 font-bold inline-flex items-center gap-1 cursor-pointer hover:underline"
+                        >
                           <Users className="w-3.5 h-3.5" />
                           <span>{group.membersCount} Members</span>
-                        </span>
+                        </button>
                       </td>
                       <td className="py-2 px-3">
                         <div className="flex items-center gap-1.5 text-slate-600">
@@ -5688,6 +5890,21 @@ export const MicroFinanceManagement: React.FC = () => {
               </button>
             )}
 
+            {canViewDepositSheet && (
+              <button
+                type="button"
+                onClick={() => setReportTab('deposit')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
+                  reportTab === 'deposit'
+                    ? 'bg-white text-emerald-700 shadow-sm border border-slate-200'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                <span>Deposit Sheet</span>
+              </button>
+            )}
+
             {canViewMeetingMinutes && (
               <button
                 type="button"
@@ -6253,6 +6470,30 @@ export const MicroFinanceManagement: React.FC = () => {
             </div>
           )}
 
+          {/* TAB 2B: DEPOSIT SHEET */}
+          {reportTab === 'deposit' && canViewDepositSheet && (
+            <DepositSheetModule
+              centers={centers}
+              groups={groups}
+              members={members}
+              branches={adminBranches.length > 0 ? adminBranches : availableBranches}
+              hrEmployees={activeHrEmployees}
+              logoUrl={logoUrl}
+              organizationNameNp={
+                systemSettings?.systemNameNp ||
+                authSettings?.systemNameNp ||
+                'रतौली बचत तथा ऋण सहकारी संस्था लिमिटेड'
+              }
+              organizationName={
+                systemSettings?.systemName ||
+                authSettings?.systemName ||
+                'RATAULI SAVING AND CREDIT COOPERATIVE LTD'
+              }
+              branchId={branch?.id}
+              onToast={showToast}
+            />
+          )}
+
           {/* TAB 3: GROUP MEETING & MINUTES */}
           {reportTab === 'meeting-minutes' && canViewMeetingMinutes && (
             <GroupMeetingMinutesModule
@@ -6273,6 +6514,7 @@ export const MicroFinanceManagement: React.FC = () => {
               members={members}
               centers={centers}
               groups={groups}
+              savings={savings}
               logoUrl={logoUrl}
               organizationNameNp={
                 systemSettings?.systemNameNp ||
@@ -6552,6 +6794,122 @@ export const MicroFinanceManagement: React.FC = () => {
       )}
 
       {/* ============================================================== */}
+      {/* MODAL: GROUP MEMBERS LIST (COMPACT: S.N., NAME, POST) */}
+      {/* ============================================================== */}
+      {selectedGroupForMembersList && (() => {
+        const groupNameNorm = normalizeMfText(selectedGroupForMembersList.name);
+        const centerNameNorm = normalizeMfText(selectedGroupForMembersList.centerName);
+        const groupMembersList = sortByNameAZ(
+          members.filter(m => {
+            if (m.samuhId && selectedGroupForMembersList.id && m.samuhId === selectedGroupForMembersList.id) {
+              return true;
+            }
+            if (groupNameNorm && normalizeMfText(m.samuhName) === groupNameNorm) {
+              if (centerNameNorm && m.centerName && normalizeMfText(m.centerName) !== centerNameNorm) {
+                return false;
+              }
+              return true;
+            }
+            return false;
+          })
+        );
+
+        return (
+          <div
+            className="fixed inset-0 z-[9999] bg-slate-950/75 backdrop-blur-xs flex justify-center items-center p-3"
+            onClick={() => setSelectedGroupForMembersList(null)}
+          >
+            <div
+              className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden max-h-[88vh] flex flex-col"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Compact Header */}
+              <div className="bg-[#00593B] px-4 py-2.5 flex items-center justify-between gap-2 text-white shrink-0">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Users className="w-4 h-4 shrink-0" />
+                    <h3 className="text-xs font-extrabold tracking-wide truncate">
+                      {selectedGroupForMembersList.name}
+                    </h3>
+                  </div>
+                  <p className="text-[10px] text-emerald-100 truncate mt-0.5">
+                    {selectedGroupForMembersList.centerName || 'N/A'} • {groupMembersList.length} Members
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedGroupForMembersList(null)}
+                  className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer shrink-0"
+                  aria-label="Close group members list"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Ultra-compact Members Table */}
+              <div className="overflow-y-auto flex-1">
+                {groupMembersList.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-slate-400 font-semibold">
+                    No members found in this group.
+                  </div>
+                ) : (
+                  <table className="w-full text-left border-collapse text-[11px] leading-tight">
+                    <thead className="sticky top-0 bg-slate-50 border-b border-slate-200 z-10">
+                      <tr className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                        <th className="py-1.5 px-2.5 w-12 text-center border-r border-slate-100">S.N.</th>
+                        <th className="py-1.5 px-2.5 border-r border-slate-100">Name</th>
+                        <th className="py-1.5 px-2.5 w-28 text-center">Post</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {groupMembersList.map((mem, idx) => {
+                        const postLabel = mem.role || 'Member';
+                        const postColor =
+                          postLabel === 'Leader'
+                            ? 'text-blue-700 font-extrabold'
+                            : postLabel === 'Secretary'
+                              ? 'text-emerald-700 font-bold'
+                              : postLabel === 'Treasurer'
+                                ? 'text-amber-700 font-bold'
+                                : 'text-slate-600 font-semibold';
+                        return (
+                          <tr key={mem.id || mem.memberId || idx} className="hover:bg-slate-50/80">
+                            <td className="py-[3px] px-2.5 text-center font-mono tabular-nums text-slate-500 font-semibold border-r border-slate-100">
+                              {idx + 1}
+                            </td>
+                            <td className="py-[3px] px-2.5 font-bold text-slate-900 border-r border-slate-100">
+                              {mem.name}
+                            </td>
+                            <td className={`py-[3px] px-2.5 text-center whitespace-nowrap ${postColor}`}>
+                              {postLabel}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {/* Compact Footer */}
+              <div className="px-4 py-2 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
+                <span className="text-[11px] font-bold text-slate-500">
+                  Total: <span className="font-mono tabular-nums text-slate-800">{groupMembersList.length}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedGroupForMembersList(null)}
+                  className="px-3.5 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold cursor-pointer transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ============================================================== */}
       {/* MODAL: ADD / EDIT MEMBER */}
       {/* ============================================================== */}
       {isMemberModalOpen && (
@@ -6581,7 +6939,10 @@ export const MicroFinanceManagement: React.FC = () => {
                   <input
                     type="text"
                     value={memberForm.memberId}
-                    onChange={e => setMemberForm({ ...memberForm, memberId: e.target.value })}
+                    onChange={e => {
+                      setMemberFormError(null);
+                      setMemberForm({ ...memberForm, memberId: e.target.value });
+                    }}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold text-blue-700"
                   />
                 </div>
@@ -6606,7 +6967,10 @@ export const MicroFinanceManagement: React.FC = () => {
                   type="text"
                   placeholder="e.g. Sita Devi Chaudhary"
                   value={memberForm.name}
-                  onChange={e => setMemberForm({ ...memberForm, name: e.target.value })}
+                  onChange={e => {
+                    setMemberFormError(null);
+                    setMemberForm({ ...memberForm, name: e.target.value });
+                  }}
                   className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-extrabold text-slate-900"
                 />
               </div>
@@ -6618,7 +6982,10 @@ export const MicroFinanceManagement: React.FC = () => {
                     type="text"
                     placeholder="e.g. 18-01-75-01234"
                     value={memberForm.citizenshipNo}
-                    onChange={e => setMemberForm({ ...memberForm, citizenshipNo: e.target.value })}
+                    onChange={e => {
+                      setMemberFormError(null);
+                      setMemberForm({ ...memberForm, citizenshipNo: e.target.value });
+                    }}
                     className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-mono text-slate-800"
                   />
                 </div>
@@ -6628,7 +6995,10 @@ export const MicroFinanceManagement: React.FC = () => {
                     type="text"
                     placeholder="98XXXXXXXX"
                     value={memberForm.mobile}
-                    onChange={e => setMemberForm({ ...memberForm, mobile: e.target.value })}
+                    onChange={e => {
+                      setMemberFormError(null);
+                      setMemberForm({ ...memberForm, mobile: e.target.value });
+                    }}
                     className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-mono text-slate-800"
                   />
                 </div>
@@ -6727,13 +7097,22 @@ export const MicroFinanceManagement: React.FC = () => {
                   </div>
                 </div>
               </div>
+              {memberFormError && (
+                <div className="px-3.5 py-2.5 bg-rose-50 border border-rose-300 rounded-xl flex items-center gap-2 text-rose-700 text-xs font-bold">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{memberFormError}</span>
+                </div>
+              )}
               </DayEndFieldset>
             </div>
 
             <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2 shrink-0">
               <button
                 type="button"
-                onClick={() => setIsMemberModalOpen(false)}
+                onClick={() => {
+                  setMemberFormError(null);
+                  setIsMemberModalOpen(false);
+                }}
                 className="px-4 py-2 border border-slate-300 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 cursor-pointer"
               >
                 Cancel
@@ -6798,6 +7177,7 @@ export const MicroFinanceManagement: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => {
+                        setSavingFormError(null);
                         setMemberSearchInput('');
                         setSelectedSavingMemberId('');
                         setSavingAccounts(prev => prev.map(acc => ({ ...acc, accountNo: '' })));
@@ -6880,7 +7260,7 @@ export const MicroFinanceManagement: React.FC = () => {
                   {savingAccounts.map((acc, idx) => (
                     <div 
                       key={acc.id}
-                      className="bg-slate-50/80 p-3.5 rounded-2xl border border-slate-200 space-y-2.5 relative group hover:border-emerald-300/80 transition-all"
+                      className="p-3.5 bg-slate-50/80 rounded-2xl border border-slate-200 space-y-2.5 relative group hover:border-emerald-300/80 transition-all"
                     >
                       <div className="flex justify-between items-center border-b border-slate-200/60 pb-2">
                         <div className="flex items-center gap-2">
@@ -6980,20 +7360,34 @@ export const MicroFinanceManagement: React.FC = () => {
                   <input
                     type="text"
                     value={savingDate}
-                    onChange={e => setSavingDate(e.target.value)}
+                    onChange={e => {
+                      setSavingFormError(null);
+                      setSavingDate(e.target.value);
+                    }}
                     placeholder="YYYY-MM-DD"
                     maxLength={10}
                     className="w-32 px-3 py-2 bg-transparent font-mono text-slate-800 font-bold focus:outline-hidden"
                   />
                   <NepaliDatePicker
                     value={savingDate}
-                    onChange={val => setSavingDate(val)}
+                    onChange={val => {
+                      setSavingFormError(null);
+                      setSavingDate(val);
+                    }}
                     align="left"
                     iconOnly
                     disallowBackDateIfDisabled
                   />
                 </div>
               </div>
+
+              {/* Error message shown only after clicking Create Account */}
+              {savingFormError && (
+                <div className="px-3.5 py-2.5 bg-rose-50 border border-rose-300 rounded-xl flex items-center gap-2 text-rose-700 text-xs font-bold">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{savingFormError}</span>
+                </div>
+              )}
               </DayEndFieldset>
             </div>
 
@@ -8197,17 +8591,19 @@ export const MicroFinanceManagement: React.FC = () => {
                 <div className="overflow-x-auto pt-1">
                   <table className="w-full table-fixed border-collapse border-2 border-slate-900 text-xs">
                     <colgroup>
-                      <col style={{ width: '6%' }} />
-                      <col style={{ width: '29%' }} />
-                      <col style={{ width: '17%' }} />
+                      <col style={{ width: '5%' }} />
+                      <col style={{ width: '24%' }} />
+                      <col style={{ width: '11%' }} />
+                      <col style={{ width: '16%' }} />
+                      <col style={{ width: '11%' }} />
                       <col style={{ width: '12%' }} />
-                      <col style={{ width: '13%' }} />
-                      <col style={{ width: '23%' }} />
+                      <col style={{ width: '21%' }} />
                     </colgroup>
                     <thead>
                       <tr className="border-b-2 border-slate-900 bg-slate-50 font-black text-slate-900 text-[11px]">
                         <th className="py-1.5 px-1.5 border border-slate-900 text-center whitespace-nowrap">क्र.सं.</th>
                         <th className="py-1.5 px-2 border border-slate-900 text-left whitespace-nowrap">सदस्यको नाम</th>
+                        <th className="py-1.5 px-1.5 border border-slate-900 text-center whitespace-nowrap">पद</th>
                         <th className="py-1.5 px-1.5 border border-slate-900 text-center whitespace-nowrap">सदस्य नं.</th>
                         <th className="py-1.5 px-1.5 border border-slate-900 text-center whitespace-nowrap">बचत (रु.)</th>
                         <th className="py-1.5 px-1.5 border border-slate-900 text-center whitespace-nowrap">ऋण रकम (रु.)</th>
@@ -8215,13 +8611,26 @@ export const MicroFinanceManagement: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {sortByNameAZ(selectedSignatureSheetToPrint.members || []).map((mem, idx) => (
+                      {sortByNameAZ(selectedSignatureSheetToPrint.members || []).map((mem, idx) => {
+                        const matchedMember = members.find(
+                          m =>
+                            isSameMfMemberId(m.memberId, mem.memberId) ||
+                            (normalizeMfText(m.name) === normalizeMfText(mem.name) &&
+                              (!selectedSignatureSheetToPrint.groupId ||
+                                m.samuhId === selectedSignatureSheetToPrint.groupId ||
+                                normalizeMfText(m.samuhName) === normalizeMfText(selectedSignatureSheetToPrint.groupName)))
+                        );
+                        const memberPost = mem.role || matchedMember?.role || 'Member';
+                        return (
                         <tr key={mem.memberId || idx} className="border-b border-slate-800">
                           <td className="py-1.5 px-1.5 border border-slate-900 text-center font-bold text-slate-700 whitespace-nowrap">
                             {toNepaliDigits(idx + 1)}
                           </td>
                           <td className="py-1.5 px-2 border border-slate-900 font-bold text-slate-900 leading-tight break-words">
                             {mem.name}
+                          </td>
+                          <td className="py-1.5 px-1.5 border border-slate-900 text-center font-bold text-[11px] text-slate-800 whitespace-nowrap">
+                            {memberPost}
                           </td>
                           <td className="py-1.5 px-1.5 border border-slate-900 text-center font-mono tabular-nums font-bold text-[11px] text-slate-800 whitespace-nowrap">
                             {mem.memberId}
@@ -8233,11 +8642,12 @@ export const MicroFinanceManagement: React.FC = () => {
                           {/* हस्ताक्षर - Compact height for neat single-page print */}
                           <td className="py-1 px-2 border border-slate-900 text-center h-8"></td>
                         </tr>
-                      ))}
+                        );
+                      })}
 
                       {/* Total summary row (Center aligned) */}
                       <tr className="border-t-2 border-slate-900 bg-slate-100 font-black text-slate-900">
-                        <td colSpan={3} className="py-1.5 px-2 border border-slate-900 text-center uppercase tracking-wider">
+                        <td colSpan={4} className="py-1.5 px-2 border border-slate-900 text-center uppercase tracking-wider">
                           कुल जम्मा (Total)
                         </td>
                         <td className="py-1.5 px-1.5 border border-slate-900 text-center font-mono text-xs"></td>
@@ -9502,7 +9912,8 @@ export const MicroFinanceManagement: React.FC = () => {
               </p>
               {bulkUploadSuccess.skippedCount && bulkUploadSuccess.skippedCount > 0 && (
                 <div className="mt-2 p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-800 font-semibold">
-                  {bulkUploadSuccess.skippedCount} duplicate / unclosed loan row(s) were skipped.
+                  {bulkUploadSuccess.skippedMessage ||
+                    `${bulkUploadSuccess.skippedCount} duplicate / unclosed loan row(s) were skipped.`}
                 </div>
               )}
             </div>

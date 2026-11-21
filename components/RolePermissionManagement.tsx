@@ -646,6 +646,17 @@ export const MENU_HIERARCHY: MainMenuGroup[] = [
         coarseDelete: 'delete_transaction'
       },
       {
+        id: 'mf_deposit_sheet',
+        name: 'Reports: Deposit Sheets',
+        description: 'Enter, save, view, print, and delete monthly Samuh member saving & loan deposit sheets.',
+        viewPerm: 'sub_mf_deposit_sheet_view',
+        editPerm: 'sub_mf_deposit_sheet_edit',
+        deletePerm: 'sub_mf_deposit_sheet_delete',
+        coarseView: 'view_microfinance',
+        coarseEdit: 'edit_transaction',
+        coarseDelete: 'delete_transaction'
+      },
+      {
         id: 'mf_meeting_minutes',
         name: 'Reports: Group Meeting Minutes',
         description: 'Record, edit, view, print, and delete official monthly Samuh group meeting minutes.',
@@ -1412,7 +1423,7 @@ export const RolePermissionManagement: React.FC = () => {
         'sub_hr_leaves_view', 'sub_hr_payroll_view',
         'sub_ins_dashboard_view', 'sub_ins_report_view', 'sub_ins_alerts_view',
         'sub_mf_dashboard_view', 'sub_mf_centers_view', 'sub_mf_groups_view', 'sub_mf_members_view', 'sub_mf_saving_view', 'sub_mf_loan_view',
-        'sub_mf_reports_view', 'sub_mf_signature_sheet_view', 'sub_mf_meeting_minutes_view', 'sub_mf_id_card_view',
+        'sub_mf_reports_view', 'sub_mf_signature_sheet_view', 'sub_mf_deposit_sheet_view', 'sub_mf_meeting_minutes_view', 'sub_mf_id_card_view',
         'sub_dep_dashboard_view', 'sub_dep_assets_view', 'sub_dep_reports_view',
         'sub_alert_bima_maturity_view', 'sub_alert_loan_maturity_view', 'sub_alert_notice_view',
         'sub_tool_remit_view', 'sub_tool_messages_view', 'sub_tool_calculator_view', 'sub_tool_fd_cert_view', 'sub_tool_emi_view', 'sub_tool_date_converter_view'
@@ -1448,7 +1459,7 @@ export const RolePermissionManagement: React.FC = () => {
         'sub_office_expenses_view', 'sub_office_exp_registry_view',
         'sub_member_accounts_view', 'sub_loan_accounts_view',
         'sub_ins_dashboard_view', 'sub_ins_report_view',
-        'sub_mf_dashboard_view', 'sub_mf_reports_view', 'sub_mf_signature_sheet_view', 'sub_mf_meeting_minutes_view',
+        'sub_mf_dashboard_view', 'sub_mf_reports_view', 'sub_mf_signature_sheet_view', 'sub_mf_deposit_sheet_view', 'sub_mf_meeting_minutes_view',
         'sub_dep_dashboard_view', 'sub_dep_reports_view', 'sub_dep_accounting_view',
         'sub_admin_logs_view'
       ];
