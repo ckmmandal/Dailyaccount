@@ -18,6 +18,13 @@ const DEFAULT_BRANCH_LIST: { id: string; name: string }[] = [
   { id: 'parsa', name: 'Parsa Branch' }
 ];
 
+const isImeRemitProfile = (name?: string, displayOrder?: number): boolean => {
+  const n = (name || '').trim().toLowerCase();
+  if (n.includes('ime')) return true;
+  if (!n && Number(displayOrder) === 1) return true;
+  return false;
+};
+
 export const RemitPage: React.FC = () => {
   const { user, branch, isSuperAdmin, branches: authBranches } = useAuth();
 
@@ -80,8 +87,9 @@ export const RemitPage: React.FC = () => {
       } else {
         setToastMessage(`⚠️ Supabase notice: ${res.error || 'Connection restricted'}`);
       }
-    } catch (err: any) {
-      setToastMessage(`⚠️ Sync error: ${err?.message || 'Failed'}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed';
+      setToastMessage(`⚠️ Sync error: ${msg}`);
     } finally {
       setIsSyncing(false);
       setTimeout(() => setToastMessage(null), 3500);
@@ -95,6 +103,7 @@ export const RemitPage: React.FC = () => {
     logoUrl: '',
     displayOrder: 1,
     branchId: 'all',
+    selectedBranches: [] as string[],
     username: '',
     password: '',
     accessId: '',
@@ -105,6 +114,8 @@ export const RemitPage: React.FC = () => {
     portalUrl: '',
     status: 'Active' as 'Active' | 'Inactive' | 'Maintenance'
   });
+  const [isMultiBranchEditMode, setIsMultiBranchEditMode] = useState<boolean>(true);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Branch operator quick password update state
   const [branchNewPassword, setBranchNewPassword] = useState('');
@@ -160,6 +171,23 @@ export const RemitPage: React.FC = () => {
     }));
   };
 
+  const getAssignedBranchesForCompany = (companyName: string): string[] => {
+    const key = companyName.trim().toLowerCase();
+    const allIds = availableBranches.map(b => b.id.toLowerCase());
+    const matched = companies.filter(c => c.name.trim().toLowerCase() === key);
+    if (matched.some(c => (c.branchId || '').toLowerCase() === 'all')) {
+      return allIds;
+    }
+    const found = new Set<string>();
+    matched.forEach(c => {
+      const bId = (!c.branchId || c.branchId === 'headoffice' || c.branchId === 'head_office')
+        ? 'main'
+        : c.branchId.toLowerCase();
+      if (allIds.includes(bId)) found.add(bId);
+    });
+    return allIds.filter(id => found.has(id));
+  };
+
   const openAddModal = () => {
     if (!isSuperAdmin) {
       setToastMessage('Only Super Admin can add new remittance partners.');
@@ -167,15 +195,23 @@ export const RemitPage: React.FC = () => {
       return;
     }
     setEditingCompany(null);
-    const nextOrder = companies.length > 0 
-      ? Math.max(...companies.map(c => Number(c.displayOrder || 0))) + 1 
+    setFormError(null);
+    setIsMultiBranchEditMode(true);
+    const nextOrder = companies.length > 0
+      ? Math.max(...companies.map(c => Number(c.displayOrder || 0))) + 1
       : 1;
+
+    const allBranchIds = availableBranches.map(b => b.id.toLowerCase());
+    const initialBranches = selectedBranchFilter !== 'all'
+      ? [selectedBranchFilter.toLowerCase()]
+      : allBranchIds;
 
     setFormData({
       name: '',
       logoUrl: '',
       displayOrder: nextOrder,
-      branchId: selectedBranchFilter !== 'all' ? selectedBranchFilter : 'all',
+      branchId: initialBranches.length === 1 ? initialBranches[0] : 'all',
+      selectedBranches: initialBranches,
       username: '',
       password: '',
       accessId: '',
@@ -191,11 +227,7 @@ export const RemitPage: React.FC = () => {
 
   const openEditModal = (comp: RemittanceCompany) => {
     setEditingCompany(comp);
-
-    // Determine target branch context: if viewing All Branches, keep 'all' mode to update template
-    const targetBranch = selectedBranchFilter !== 'all' 
-      ? selectedBranchFilter 
-      : (comp.branchId && comp.branchId !== 'main' ? comp.branchId : 'all');
+    setFormError(null);
 
     if (!isSuperAdmin) {
       // Non-Super-Admin branch user can ONLY change password
@@ -204,30 +236,105 @@ export const RemitPage: React.FC = () => {
       return;
     }
 
-    // Head Office / Super Admin can edit all fields
+    const editingFromAllView = selectedBranchFilter === 'all';
+    setIsMultiBranchEditMode(editingFromAllView);
+
+    const assignedBranches = editingFromAllView
+      ? getAssignedBranchesForCompany(comp.name)
+      : [selectedBranchFilter.toLowerCase()];
+
+    const effectiveSelectedBranches = assignedBranches.length > 0
+      ? assignedBranches
+      : [((!comp.branchId || comp.branchId === 'all') ? 'main' : comp.branchId).toLowerCase()];
+
+    // If exactly 1 branch is selected, load that specific branch's existing record if available
+    const singleBranchRecord = effectiveSelectedBranches.length === 1
+      ? (companies.find(
+          c => c.name.trim().toLowerCase() === comp.name.trim().toLowerCase() &&
+               (c.branchId || 'main').toLowerCase() === effectiveSelectedBranches[0]
+        ) || comp)
+      : comp;
+
+    const isIme = isImeRemitProfile(singleBranchRecord.name, singleBranchRecord.displayOrder);
+
     setFormData({
-      name: comp.name || '',
-      logoUrl: comp.logoUrl || '',
-      displayOrder: comp.displayOrder !== undefined ? comp.displayOrder : 1,
-      branchId: targetBranch,
-      username: comp.username || '',
-      password: comp.password || '',
-      accessId: comp.accessId || '',
-      hasPin: comp.hasPin !== undefined ? comp.hasPin : !!comp.txnPin,
-      txnPin: comp.txnPin || '',
-      contactPhone: comp.contactPhone || '',
-      code: comp.code || '',
-      portalUrl: comp.portalUrl || '',
-      status: comp.status || 'Active'
+      name: singleBranchRecord.name || '',
+      logoUrl: singleBranchRecord.logoUrl || '',
+      displayOrder: singleBranchRecord.displayOrder !== undefined ? singleBranchRecord.displayOrder : 1,
+      branchId: effectiveSelectedBranches.length === 1 ? effectiveSelectedBranches[0] : 'all',
+      selectedBranches: effectiveSelectedBranches,
+      username: singleBranchRecord.username || '',
+      password: singleBranchRecord.password || '',
+      accessId: singleBranchRecord.accessId || '',
+      hasPin: isIme ? true : (singleBranchRecord.hasPin !== undefined ? singleBranchRecord.hasPin : !!singleBranchRecord.txnPin),
+      txnPin: singleBranchRecord.txnPin || '',
+      contactPhone: singleBranchRecord.contactPhone || '',
+      code: singleBranchRecord.code || '',
+      portalUrl: singleBranchRecord.portalUrl || '',
+      status: singleBranchRecord.status || 'Active'
     });
     setIsModalOpen(true);
+  };
+
+  const toggleFormBranch = (branchId: string) => {
+    const normalized = branchId.toLowerCase();
+    setFormError(null);
+    setFormData(prev => {
+      const exists = prev.selectedBranches.includes(normalized);
+      const next = exists
+        ? prev.selectedBranches.filter(id => id !== normalized)
+        : [...prev.selectedBranches, normalized];
+
+      // If transitioning down to a single branch while editing, prefill that branch's existing credentials
+      let nextUsername = prev.username;
+      let nextPassword = prev.password;
+      let nextAccessId = prev.accessId;
+      let nextTxnPin = prev.txnPin;
+      if (next.length === 1 && (editingCompany || prev.name.trim())) {
+        const lookupName = (editingCompany?.name || prev.name).trim().toLowerCase();
+        const existingRec = companies.find(
+          c => c.name.trim().toLowerCase() === lookupName &&
+               (c.branchId || 'main').toLowerCase() === next[0]
+        );
+        if (existingRec) {
+          nextUsername = existingRec.username || '';
+          nextPassword = existingRec.password || '';
+          nextAccessId = existingRec.accessId || '';
+          nextTxnPin = existingRec.txnPin || '';
+        }
+      }
+
+      return {
+        ...prev,
+        selectedBranches: next,
+        branchId: next.length === 1 ? next[0] : 'all',
+        username: nextUsername,
+        password: nextPassword,
+        accessId: nextAccessId,
+        txnPin: nextTxnPin
+      };
+    });
+  };
+
+  const toggleAllFormBranches = () => {
+    const allIds = availableBranches.map(b => b.id.toLowerCase());
+    setFormError(null);
+    setFormData(prev => {
+      const allSelected = allIds.every(id => prev.selectedBranches.includes(id));
+      const next = allSelected ? [] : allIds;
+      return {
+        ...prev,
+        selectedBranches: next,
+        branchId: next.length === 1 ? next[0] : 'all'
+      };
+    });
   };
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > 2 * 1024 * 1024) {
-        alert('File size exceeds 2MB limit. Please choose a smaller image.');
+        setFormError('File size exceeds 2MB limit. Please choose a smaller image.');
         return;
       }
       const reader = new FileReader();
@@ -253,44 +360,49 @@ export const RemitPage: React.FC = () => {
     }
   };
 
-  // Full save for Head Office / Super Admin
+  // Full save for Super Admin
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
+
     if (!formData.name.trim()) {
-      alert('Please enter company name.');
+      setFormError('Please enter company name.');
       return;
     }
 
+    const targetBranches = Array.from(new Set(formData.selectedBranches.map(b => b.toLowerCase())));
+    if (targetBranches.length === 0) {
+      setFormError('Please select at least 1 branch for this remit.');
+      return;
+    }
+
+    const isIme = isImeRemitProfile(formData.name, formData.displayOrder);
+    const effectiveHasPin = isIme ? true : formData.hasPin;
     const todayDate = new Date().toISOString().split('T')[0];
+    const normalizedNewName = formData.name.trim().toLowerCase();
+    const normalizedOldName = editingCompany ? editingCompany.name.trim().toLowerCase() : normalizedNewName;
 
-    // CASE 1: All Branches (Common Template Mode) selected
-    // Creates or updates company name, S.N., logo, and contact across EVERY branch!
-    // Preserves each branch's existing username, password, access ID, PIN.
-    if (formData.branchId === 'all') {
-      const branchesToSync = availableBranches.length > 0 
-        ? availableBranches 
-        : DEFAULT_BRANCH_LIST;
-
-      for (const b of branchesToSync) {
-        // Find existing record for this branch by matching name or existing edited ID
-        const existing = companies.find(c => 
-          (c.branchId || 'main').toLowerCase() === b.id.toLowerCase() &&
-          (c.name.trim().toLowerCase() === formData.name.trim().toLowerCase() ||
-           (editingCompany && c.name.trim().toLowerCase() === editingCompany.name.trim().toLowerCase()))
+    // CASE 1: Multiple Branches Selected (2, 3, or All Branches)
+    if (targetBranches.length > 1) {
+      for (const bId of targetBranches) {
+        const existing = companies.find(c =>
+          (c.branchId || 'main').toLowerCase() === bId &&
+          (c.name.trim().toLowerCase() === normalizedNewName ||
+           (editingCompany && c.name.trim().toLowerCase() === normalizedOldName))
         );
 
         const payload: RemittanceCompany = {
-          id: existing ? existing.id : `remit_${b.id}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          id: existing ? existing.id : `remit_${bId}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
           name: formData.name.trim(),
           logoUrl: formData.logoUrl.trim() || undefined,
           displayOrder: Number(formData.displayOrder) || 1,
-          branchId: b.id,
+          branchId: bId,
           code: formData.code.trim() || undefined,
           username: existing ? existing.username : '',
           password: existing ? existing.password : '',
           accessId: existing ? existing.accessId : '',
-          hasPin: formData.hasPin,
-          txnPin: formData.hasPin ? (existing ? existing.txnPin : undefined) : undefined,
+          hasPin: effectiveHasPin,
+          txnPin: effectiveHasPin ? (existing ? existing.txnPin : undefined) : undefined,
           contactPhone: formData.contactPhone.trim() || undefined,
           portalUrl: formData.portalUrl.trim() || undefined,
           status: formData.status,
@@ -302,60 +414,126 @@ export const RemitPage: React.FC = () => {
         await storageService.saveRemittanceCompany(payload);
       }
 
+      // If editing in Multi-Branch mode, remove records for branches that were unchecked (and legacy 'all' records)
+      if (editingCompany && isMultiBranchEditMode) {
+        const toRemove = companies.filter(c => {
+          const matchesName =
+            c.name.trim().toLowerCase() === normalizedOldName ||
+            c.name.trim().toLowerCase() === normalizedNewName;
+          if (!matchesName) return false;
+          const recBranch = (c.branchId || 'main').toLowerCase();
+          return recBranch === 'all' || !targetBranches.includes(recBranch);
+        });
+        for (const rec of toRemove) {
+          await storageService.deleteRemittanceCompany(rec.id);
+        }
+      }
+
       const syncResult = await storageService.syncAllRemittanceToSupabase();
       setIsModalOpen(false);
+      const isAllSelected = availableBranches.every(b => targetBranches.includes(b.id.toLowerCase()));
+      const branchScopeText = isAllSelected
+        ? 'all branches'
+        : `${targetBranches.length} selected branch${targetBranches.length > 1 ? 'es' : ''}`;
       if (syncResult.success) {
-        setToastMessage('Saved & synced across all branches in Supabase!');
+        setToastMessage(`Saved & synced for ${branchScopeText} in Supabase!`);
       } else {
-        setToastMessage(`Saved locally! Supabase note: ${syncResult.error || 'Check project status'}`);
+        setToastMessage(`Saved locally for ${branchScopeText}! Supabase note: ${syncResult.error || 'Check project status'}`);
       }
       setTimeout(() => setToastMessage(null), 3500);
       loadCompanies();
       return;
     }
 
-    // CASE 2: Specific Branch Selected (e.g. main, sahodba, pipra, parsa)
-    // Username, Password, Access ID, and PIN are required for that specific branch!
-    if (!formData.username.trim()) {
-      alert('Please enter username for this branch.');
-      return;
-    }
-    if (!formData.password.trim()) {
-      alert('Please enter password for this branch.');
-      return;
-    }
-    if (!formData.accessId.trim()) {
-      alert('Please enter access ID for this branch.');
-      return;
-    }
-    if (formData.hasPin && !formData.txnPin.trim()) {
-      alert('Please enter the PIN or set Require PIN to No.');
-      return;
+    // CASE 2: Single Specific Branch Selected (1 branch)
+    const singleBranchId = targetBranches[0];
+    if (isIme) {
+      if (!formData.accessId.trim()) {
+        setFormError('Please enter Agent ID for this branch.');
+        return;
+      }
+      if (!formData.txnPin.trim()) {
+        setFormError('Please enter Employee ID for this branch.');
+        return;
+      }
+      if (!formData.username.trim()) {
+        setFormError('Please enter Username for this branch.');
+        return;
+      }
+      if (!formData.password.trim()) {
+        setFormError('Please enter Password for this branch.');
+        return;
+      }
+    } else {
+      if (!formData.username.trim()) {
+        setFormError('Please enter Username for this branch.');
+        return;
+      }
+      if (!formData.password.trim()) {
+        setFormError('Please enter Password for this branch.');
+        return;
+      }
+      if (!formData.accessId.trim()) {
+        setFormError('Please enter Access ID for this branch.');
+        return;
+      }
+      if (effectiveHasPin && !formData.txnPin.trim()) {
+        setFormError('Please enter the PIN or set Require PIN to No.');
+        return;
+      }
     }
 
-    const isPasswordChanged = !editingCompany || editingCompany.password !== formData.password;
+    const existingForBranch =
+      (editingCompany && (editingCompany.branchId || 'main').toLowerCase() === singleBranchId
+        ? editingCompany
+        : companies.find(c =>
+            (c.branchId || 'main').toLowerCase() === singleBranchId &&
+            (c.name.trim().toLowerCase() === normalizedNewName ||
+             (editingCompany && c.name.trim().toLowerCase() === normalizedOldName))
+          )) || null;
+
+    const isPasswordChanged = !existingForBranch || existingForBranch.password !== formData.password;
 
     const payload: RemittanceCompany = {
-      id: editingCompany ? editingCompany.id : `remit_${formData.branchId}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: existingForBranch
+        ? existingForBranch.id
+        : `remit_${singleBranchId}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       name: formData.name.trim(),
       logoUrl: formData.logoUrl.trim() || undefined,
       displayOrder: Number(formData.displayOrder) || 1,
-      branchId: formData.branchId,
+      branchId: singleBranchId,
       code: formData.code.trim() || undefined,
       accessId: formData.accessId.trim(),
       username: formData.username.trim(),
       password: formData.password.trim(),
-      hasPin: formData.hasPin,
-      txnPin: formData.hasPin ? formData.txnPin.trim() : undefined,
+      hasPin: effectiveHasPin,
+      txnPin: effectiveHasPin ? formData.txnPin.trim() : undefined,
       contactPhone: formData.contactPhone.trim() || undefined,
       portalUrl: formData.portalUrl.trim() || undefined,
       status: formData.status,
-      lastPasswordChanged: isPasswordChanged ? todayDate : (editingCompany?.lastPasswordChanged || todayDate),
-      createdAt: editingCompany ? editingCompany.createdAt : Date.now(),
+      lastPasswordChanged: isPasswordChanged ? todayDate : (existingForBranch?.lastPasswordChanged || todayDate),
+      createdAt: existingForBranch ? existingForBranch.createdAt : Date.now(),
       updatedAt: Date.now()
     };
 
     const res = await storageService.saveRemittanceCompany(payload);
+
+    // If editing in Multi-Branch mode and narrowed down to 1 branch, remove unchecked branches
+    if (editingCompany && isMultiBranchEditMode) {
+      const toRemove = companies.filter(c => {
+        if (c.id === payload.id) return false;
+        const matchesName =
+          c.name.trim().toLowerCase() === normalizedOldName ||
+          c.name.trim().toLowerCase() === normalizedNewName;
+        if (!matchesName) return false;
+        const recBranch = (c.branchId || 'main').toLowerCase();
+        return recBranch === 'all' || recBranch !== singleBranchId;
+      });
+      for (const rec of toRemove) {
+        await storageService.deleteRemittanceCompany(rec.id);
+      }
+    }
+
     setIsModalOpen(false);
     if (res.supabaseSynced) {
       setToastMessage('Branch credentials updated and saved to Supabase!');
@@ -371,7 +549,8 @@ export const RemitPage: React.FC = () => {
     e.preventDefault();
     if (!editingCompany) return;
     if (!branchNewPassword.trim()) {
-      alert('Please enter the new password.');
+      setToastMessage('Please enter the new password.');
+      setTimeout(() => setToastMessage(null), 2500);
       return;
     }
 
@@ -412,7 +591,28 @@ export const RemitPage: React.FC = () => {
     }
   };
 
-  // Filter and sort companies so EVERY branch has all companies
+  // Map company name -> list of assigned branch IDs (for Super Admin overview)
+  const companyBranchMap = useMemo(() => {
+    const map = new Map<string, string[]>();
+    const allIds = availableBranches.map(b => b.id.toLowerCase());
+    companies.forEach(c => {
+      const key = c.name.trim().toLowerCase();
+      const bId = (!c.branchId || c.branchId === 'headoffice' || c.branchId === 'head_office')
+        ? 'main'
+        : c.branchId.toLowerCase();
+      if (bId === 'all') {
+        map.set(key, [...allIds]);
+      } else if (allIds.includes(bId)) {
+        const cur = map.get(key) || [];
+        if (!cur.includes(bId)) {
+          map.set(key, [...cur, bId]);
+        }
+      }
+    });
+    return map;
+  }, [companies, availableBranches]);
+
+  // Filter and sort companies strictly by branch assignment (no fabricated cards for unassigned branches)
   const filteredAndSortedCompanies = useMemo(() => {
     let list = [...companies];
     const targetBranch = (isSuperAdmin ? selectedBranchFilter : loggedInBranchId).toLowerCase();
@@ -422,39 +622,45 @@ export const RemitPage: React.FC = () => {
       const uniqueMap = new Map<string, RemittanceCompany>();
       list.forEach(c => {
         const key = c.name.trim().toLowerCase();
-        if (!uniqueMap.has(key) || (c.branchId || 'main').toLowerCase() === 'main') {
+        const existing = uniqueMap.get(key);
+        const cBranch = (c.branchId || 'main').toLowerCase();
+        const cHasCreds = Boolean(c.username || c.accessId || c.password);
+        const existingHasCreds = Boolean(existing?.username || existing?.accessId || existing?.password);
+        if (
+          !existing ||
+          (cBranch === 'main' && (existing.branchId || 'main').toLowerCase() !== 'main') ||
+          (!existingHasCreds && cHasCreds && (existing.branchId || 'main').toLowerCase() !== 'main')
+        ) {
           uniqueMap.set(key, c);
         }
       });
       list = Array.from(uniqueMap.values());
     } else {
-      // When a specific branch is selected (e.g. main, sahodba, pipra, parsa):
-      // 1. Get records existing specifically for this branch
-      const branchItems = list.filter(c => (c.branchId || 'main').toLowerCase() === targetBranch);
+      // Strictly show ONLY partners explicitly assigned to this branch (or legacy 'all')
+      const uniqueBranchMap = new Map<string, RemittanceCompany>();
+      list.forEach(c => {
+        const recBranch = (!c.branchId || c.branchId === 'headoffice' || c.branchId === 'head_office')
+          ? 'main'
+          : c.branchId.toLowerCase();
+        if (recBranch !== targetBranch && recBranch !== 'all') return;
 
-      // 2. Ensure any company created in other branches/all is also visible in this branch
-      const allCompanyNames = Array.from(new Set(list.map(c => c.name.trim())));
-      const branchCompanyNames = new Set(branchItems.map(c => c.name.trim()));
+        const key = c.name.trim().toLowerCase();
+        const existing = uniqueBranchMap.get(key);
+        const cIsExact = recBranch === targetBranch;
+        const existingIsExact = existing ? (existing.branchId || 'main').toLowerCase() === targetBranch : false;
+        const cHasCreds = Boolean(c.username || c.accessId || c.password);
+        const existingHasCreds = Boolean(existing?.username || existing?.accessId || existing?.password);
 
-      const missingForBranch: RemittanceCompany[] = [];
-      allCompanyNames.forEach(name => {
-        if (!branchCompanyNames.has(name)) {
-          const master = list.find(c => c.name.trim() === name);
-          if (master) {
-            missingForBranch.push({
-              ...master,
-              id: `remit_${targetBranch}_${master.name.toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
-              branchId: targetBranch,
-              username: '',
-              password: '',
-              accessId: '',
-              txnPin: undefined
-            });
-          }
+        if (
+          !existing ||
+          (cIsExact && !existingIsExact) ||
+          (cIsExact === existingIsExact && cHasCreds && !existingHasCreds) ||
+          (cIsExact === existingIsExact && cHasCreds === existingHasCreds && Number(c.displayOrder ?? 999) < Number(existing.displayOrder ?? 999))
+        ) {
+          uniqueBranchMap.set(key, c);
         }
       });
-
-      list = [...branchItems, ...missingForBranch];
+      list = Array.from(uniqueBranchMap.values());
     }
 
     // Sort by internal S.N. (displayOrder)
@@ -557,7 +763,7 @@ export const RemitPage: React.FC = () => {
               className="px-3.5 py-1.5 rounded-lg bg-rose-700 hover:bg-rose-800 text-white text-xs font-black uppercase tracking-wider flex items-center space-x-1.5 transition-all shadow-xs cursor-pointer active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Plus size={14} strokeWidth={2.5} />
-              <span>Add Remittance Partner</span>
+              <span>Add Remit</span>
             </button>
           </div>
         )}
@@ -585,7 +791,7 @@ export const RemitPage: React.FC = () => {
                 title={isDayEnded ? getDayEndedBlockMessage() : undefined}
                 className="mt-3 px-4 py-1.5 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Add First Company
+                Add Remit
               </button>
             )}
           </div>
@@ -595,7 +801,13 @@ export const RemitPage: React.FC = () => {
               // Passwords are SHOWN by default; hidden ONLY if user explicitly toggled it
               const isPwdVisible = !hiddenPasswords[comp.id];
               const initialColor = getCompanyInitialColor(comp.name);
-              const usesPin = comp.hasPin === true || (comp.hasPin === undefined && !!comp.txnPin);
+              const isImeCard = isImeRemitProfile(comp.name, comp.displayOrder);
+              const usesPin = !isImeCard && (comp.hasPin === true || (comp.hasPin === undefined && !!comp.txnPin));
+              const assignedIds = companyBranchMap.get(comp.name.trim().toLowerCase()) || [];
+              const assignedAll = availableBranches.length > 0 && assignedIds.length >= availableBranches.length;
+              const assignedBranchSummary = assignedAll
+                ? `All Branches (${availableBranches.length})`
+                : assignedIds.map(id => getBranchLabel(id)).join(', ');
 
               return (
                 <div 
@@ -626,6 +838,14 @@ export const RemitPage: React.FC = () => {
                         <h3 className="text-xs font-black text-slate-900 truncate tracking-tight leading-tight" title={comp.name}>
                           {comp.name}
                         </h3>
+                        {isSuperAdmin && selectedBranchFilter === 'all' && assignedBranchSummary && (
+                          <p
+                            className="text-[10px] font-semibold text-slate-400 truncate leading-tight mt-0.5"
+                            title={assignedBranchSummary}
+                          >
+                            {assignedBranchSummary}
+                          </p>
+                        )}
                       </div>
                     </div>
 
@@ -639,7 +859,7 @@ export const RemitPage: React.FC = () => {
                             ? 'text-slate-400 hover:text-slate-800 hover:bg-slate-100' 
                             : 'text-rose-700 hover:bg-rose-50 border border-rose-200 px-1.5 py-0.5 flex items-center space-x-1'
                         }`}
-                        title={isDayEnded ? getDayEndedBlockMessage() : (isSuperAdmin ? "Edit Remittance Details" : "Change Password")}
+                        title={isDayEnded ? getDayEndedBlockMessage() : (isSuperAdmin ? "Edit Remit Details" : "Change Password")}
                       >
                         <Edit3 size={12} />
                         {!isSuperAdmin && <span className="text-[9px] font-bold">Password</span>}
@@ -651,7 +871,7 @@ export const RemitPage: React.FC = () => {
                           onClick={() => handleDelete(comp)}
                           disabled={isDayEnded}
                           className="p-1 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                          title={isDayEnded ? getDayEndedBlockMessage() : "Delete Partner"}
+                          title={isDayEnded ? getDayEndedBlockMessage() : "Delete Remit"}
                         >
                           <Trash2 size={12} />
                         </button>
@@ -660,123 +880,230 @@ export const RemitPage: React.FC = () => {
                   </div>
 
                   {/* Card Body: Compact uniform rows with zero wasted vertical gap */}
-                  {/* Order: 1. Username, 2. Password, 3. Access ID, 4. PIN (if Yes), 5. Contact */}
                   <div className="space-y-1 text-xs">
-                    {/* 1. Username */}
-                    <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
-                      <div className="flex items-center space-x-1.5 min-w-0 flex-1">
-                        <span className="text-[11px] font-bold text-slate-500 w-16 shrink-0">Username:</span>
-                        <span className="font-mono font-bold text-slate-900 truncate select-all text-xs">
-                          {comp.username ? comp.username : <span className="text-slate-400 font-normal italic text-[11px]">Not configured</span>}
-                        </span>
-                      </div>
-                      {comp.username && (
-                        <button
-                          onClick={() => handleCopy(comp.username, 'Username', `${comp.id}_user`)}
-                          className={`p-0.5 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
-                            copiedKey === `${comp.id}_user`
-                              ? 'bg-emerald-600 text-white'
-                              : 'text-slate-400 hover:text-slate-800 hover:bg-white'
-                          }`}
-                          title="Copy Username"
-                        >
-                          {copiedKey === `${comp.id}_user` ? <Check size={12} /> : <Copy size={12} />}
-                        </button>
-                      )}
-                    </div>
-
-                    {/* 2. Password (SHOWS BY DEFAULT; HIDES ON EYE CLICK) */}
-                    <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
-                      <div className="flex items-center space-x-1.5 min-w-0 flex-1">
-                        <span className="text-[11px] font-bold text-slate-500 w-16 shrink-0">Password:</span>
-                        <span className="font-mono font-bold text-slate-900 truncate select-all text-xs tracking-wider">
-                          {!comp.password ? (
-                            <span className="text-slate-400 font-normal italic text-[11px]">Not configured</span>
-                          ) : isPwdVisible ? (
-                            comp.password
-                          ) : (
-                            '••••••••••••'
+                    {isImeCard ? (
+                      <>
+                        {/* IME Remit Order: 1. Agent ID, 2. Employee ID, 3. Username, 4. Password */}
+                        <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
+                          <div className="flex items-center space-x-1.5 min-w-0 flex-1">
+                            <span className="text-[11px] font-bold text-slate-500 w-20 shrink-0">Agent ID:</span>
+                            <span className="font-mono font-bold text-slate-900 truncate select-all text-xs">
+                              {comp.accessId ? comp.accessId : <span className="text-slate-400 font-normal italic text-[11px]">Not configured</span>}
+                            </span>
+                          </div>
+                          {comp.accessId && (
+                            <button
+                              onClick={() => handleCopy(comp.accessId, 'Agent ID', `${comp.id}_agent`)}
+                              className={`p-0.5 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
+                                copiedKey === `${comp.id}_agent`
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'text-slate-400 hover:text-slate-800 hover:bg-white'
+                              }`}
+                              title="Copy Agent ID"
+                            >
+                              {copiedKey === `${comp.id}_agent` ? <Check size={12} /> : <Copy size={12} />}
+                            </button>
                           )}
-                        </span>
-                      </div>
-                      {comp.password && (
-                        <div className="flex items-center space-x-0.5 shrink-0 ml-1">
-                          <button
-                            type="button"
-                            onClick={() => togglePasswordVisibility(comp.id)}
-                            className="p-0.5 rounded text-slate-400 hover:text-slate-800 hover:bg-white transition-all cursor-pointer"
-                            title={isPwdVisible ? 'Hide Password' : 'Show Password'}
-                          >
-                            {isPwdVisible ? <EyeOff size={12} /> : <Eye size={12} />}
-                          </button>
-                          <button
-                            onClick={() => handleCopy(comp.password, 'Password', `${comp.id}_pwd`)}
-                            className={`p-0.5 rounded text-xs transition-all cursor-pointer ${
-                              copiedKey === `${comp.id}_pwd`
-                                ? 'bg-emerald-600 text-white'
-                                : 'text-slate-400 hover:text-slate-800 hover:bg-white'
-                            }`}
-                            title="Copy Password"
-                          >
-                            {copiedKey === `${comp.id}_pwd` ? <Check size={12} /> : <Copy size={12} />}
-                          </button>
                         </div>
-                      )}
-                    </div>
 
-                    {/* 3. Access ID */}
-                    <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
-                      <div className="flex items-center space-x-1.5 min-w-0 flex-1">
-                        <span className="text-[11px] font-bold text-slate-500 w-16 shrink-0">Access ID:</span>
-                        <span className="font-mono font-bold text-slate-900 truncate select-all text-xs">
-                          {comp.accessId ? comp.accessId : <span className="text-slate-400 font-normal italic text-[11px]">Not configured</span>}
-                        </span>
-                      </div>
-                      {comp.accessId && (
-                        <button
-                          onClick={() => handleCopy(comp.accessId, 'Access ID', `${comp.id}_acc`)}
-                          className={`p-0.5 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
-                            copiedKey === `${comp.id}_acc`
-                              ? 'bg-emerald-600 text-white'
-                              : 'text-slate-400 hover:text-slate-800 hover:bg-white'
-                          }`}
-                          title="Copy Access ID"
-                        >
-                          {copiedKey === `${comp.id}_acc` ? <Check size={12} /> : <Copy size={12} />}
-                        </button>
-                      )}
-                    </div>
-
-                    {/* 4. PIN (Only shown if usesPin / Has PIN is Yes) */}
-                    {usesPin && (
-                      <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
-                        <div className="flex items-center space-x-1.5 min-w-0 flex-1">
-                          <span className="text-[11px] font-bold text-slate-500 w-16 shrink-0">PIN:</span>
-                          <span className="font-mono font-bold text-slate-900 truncate select-all text-xs">
-                            {comp.txnPin ? (isPwdVisible ? comp.txnPin : '••••') : <span className="text-slate-400 font-normal italic text-[11px]">Not configured</span>}
-                          </span>
+                        <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
+                          <div className="flex items-center space-x-1.5 min-w-0 flex-1">
+                            <span className="text-[11px] font-bold text-slate-500 w-20 shrink-0">Employee ID:</span>
+                            <span className="font-mono font-bold text-slate-900 truncate select-all text-xs">
+                              {comp.txnPin ? comp.txnPin : <span className="text-slate-400 font-normal italic text-[11px]">Not configured</span>}
+                            </span>
+                          </div>
+                          {comp.txnPin && (
+                            <button
+                              onClick={() => handleCopy(comp.txnPin || '', 'Employee ID', `${comp.id}_emp`)}
+                              className={`p-0.5 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
+                                copiedKey === `${comp.id}_emp`
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'text-slate-400 hover:text-slate-800 hover:bg-white'
+                              }`}
+                              title="Copy Employee ID"
+                            >
+                              {copiedKey === `${comp.id}_emp` ? <Check size={12} /> : <Copy size={12} />}
+                            </button>
+                          )}
                         </div>
-                        {comp.txnPin && (
-                          <button
-                            onClick={() => handleCopy(comp.txnPin || '', 'PIN', `${comp.id}_pin`)}
-                            className={`p-0.5 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
-                              copiedKey === `${comp.id}_pin`
-                                ? 'bg-emerald-600 text-white'
-                                : 'text-slate-400 hover:text-slate-800 hover:bg-white'
-                            }`}
-                            title="Copy PIN"
-                          >
-                            {copiedKey === `${comp.id}_pin` ? <Check size={12} /> : <Copy size={12} />}
-                          </button>
+
+                        <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
+                          <div className="flex items-center space-x-1.5 min-w-0 flex-1">
+                            <span className="text-[11px] font-bold text-slate-500 w-20 shrink-0">Username:</span>
+                            <span className="font-mono font-bold text-slate-900 truncate select-all text-xs">
+                              {comp.username ? comp.username : <span className="text-slate-400 font-normal italic text-[11px]">Not configured</span>}
+                            </span>
+                          </div>
+                          {comp.username && (
+                            <button
+                              onClick={() => handleCopy(comp.username, 'Username', `${comp.id}_user`)}
+                              className={`p-0.5 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
+                                copiedKey === `${comp.id}_user`
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'text-slate-400 hover:text-slate-800 hover:bg-white'
+                              }`}
+                              title="Copy Username"
+                            >
+                              {copiedKey === `${comp.id}_user` ? <Check size={12} /> : <Copy size={12} />}
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
+                          <div className="flex items-center space-x-1.5 min-w-0 flex-1">
+                            <span className="text-[11px] font-bold text-slate-500 w-20 shrink-0">Password:</span>
+                            <span className="font-mono font-bold text-slate-900 truncate select-all text-xs tracking-wider">
+                              {!comp.password ? (
+                                <span className="text-slate-400 font-normal italic text-[11px]">Not configured</span>
+                              ) : isPwdVisible ? (
+                                comp.password
+                              ) : (
+                                '••••••••••••'
+                              )}
+                            </span>
+                          </div>
+                          {comp.password && (
+                            <div className="flex items-center space-x-0.5 shrink-0 ml-1">
+                              <button
+                                type="button"
+                                onClick={() => togglePasswordVisibility(comp.id)}
+                                className="p-0.5 rounded text-slate-400 hover:text-slate-800 hover:bg-white transition-all cursor-pointer"
+                                title={isPwdVisible ? 'Hide Password' : 'Show Password'}
+                              >
+                                {isPwdVisible ? <EyeOff size={12} /> : <Eye size={12} />}
+                              </button>
+                              <button
+                                onClick={() => handleCopy(comp.password, 'Password', `${comp.id}_pwd`)}
+                                className={`p-0.5 rounded text-xs transition-all cursor-pointer ${
+                                  copiedKey === `${comp.id}_pwd`
+                                    ? 'bg-emerald-600 text-white'
+                                    : 'text-slate-400 hover:text-slate-800 hover:bg-white'
+                                }`}
+                                title="Copy Password"
+                              >
+                                {copiedKey === `${comp.id}_pwd` ? <Check size={12} /> : <Copy size={12} />}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        {/* Standard Remit Order: 1. Username, 2. Password, 3. Access ID, 4. PIN (if Yes) */}
+                        <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
+                          <div className="flex items-center space-x-1.5 min-w-0 flex-1">
+                            <span className="text-[11px] font-bold text-slate-500 w-16 shrink-0">Username:</span>
+                            <span className="font-mono font-bold text-slate-900 truncate select-all text-xs">
+                              {comp.username ? comp.username : <span className="text-slate-400 font-normal italic text-[11px]">Not configured</span>}
+                            </span>
+                          </div>
+                          {comp.username && (
+                            <button
+                              onClick={() => handleCopy(comp.username, 'Username', `${comp.id}_user`)}
+                              className={`p-0.5 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
+                                copiedKey === `${comp.id}_user`
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'text-slate-400 hover:text-slate-800 hover:bg-white'
+                              }`}
+                              title="Copy Username"
+                            >
+                              {copiedKey === `${comp.id}_user` ? <Check size={12} /> : <Copy size={12} />}
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
+                          <div className="flex items-center space-x-1.5 min-w-0 flex-1">
+                            <span className="text-[11px] font-bold text-slate-500 w-16 shrink-0">Password:</span>
+                            <span className="font-mono font-bold text-slate-900 truncate select-all text-xs tracking-wider">
+                              {!comp.password ? (
+                                <span className="text-slate-400 font-normal italic text-[11px]">Not configured</span>
+                              ) : isPwdVisible ? (
+                                comp.password
+                              ) : (
+                                '••••••••••••'
+                              )}
+                            </span>
+                          </div>
+                          {comp.password && (
+                            <div className="flex items-center space-x-0.5 shrink-0 ml-1">
+                              <button
+                                type="button"
+                                onClick={() => togglePasswordVisibility(comp.id)}
+                                className="p-0.5 rounded text-slate-400 hover:text-slate-800 hover:bg-white transition-all cursor-pointer"
+                                title={isPwdVisible ? 'Hide Password' : 'Show Password'}
+                              >
+                                {isPwdVisible ? <EyeOff size={12} /> : <Eye size={12} />}
+                              </button>
+                              <button
+                                onClick={() => handleCopy(comp.password, 'Password', `${comp.id}_pwd`)}
+                                className={`p-0.5 rounded text-xs transition-all cursor-pointer ${
+                                  copiedKey === `${comp.id}_pwd`
+                                    ? 'bg-emerald-600 text-white'
+                                    : 'text-slate-400 hover:text-slate-800 hover:bg-white'
+                                }`}
+                                title="Copy Password"
+                              >
+                                {copiedKey === `${comp.id}_pwd` ? <Check size={12} /> : <Copy size={12} />}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
+                          <div className="flex items-center space-x-1.5 min-w-0 flex-1">
+                            <span className="text-[11px] font-bold text-slate-500 w-16 shrink-0">Access ID:</span>
+                            <span className="font-mono font-bold text-slate-900 truncate select-all text-xs">
+                              {comp.accessId ? comp.accessId : <span className="text-slate-400 font-normal italic text-[11px]">Not configured</span>}
+                            </span>
+                          </div>
+                          {comp.accessId && (
+                            <button
+                              onClick={() => handleCopy(comp.accessId, 'Access ID', `${comp.id}_acc`)}
+                              className={`p-0.5 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
+                                copiedKey === `${comp.id}_acc`
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'text-slate-400 hover:text-slate-800 hover:bg-white'
+                              }`}
+                              title="Copy Access ID"
+                            >
+                              {copiedKey === `${comp.id}_acc` ? <Check size={12} /> : <Copy size={12} />}
+                            </button>
+                          )}
+                        </div>
+
+                        {usesPin && (
+                          <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
+                            <div className="flex items-center space-x-1.5 min-w-0 flex-1">
+                              <span className="text-[11px] font-bold text-slate-500 w-16 shrink-0">PIN:</span>
+                              <span className="font-mono font-bold text-slate-900 truncate select-all text-xs">
+                                {comp.txnPin ? (isPwdVisible ? comp.txnPin : '••••') : <span className="text-slate-400 font-normal italic text-[11px]">Not configured</span>}
+                              </span>
+                            </div>
+                            {comp.txnPin && (
+                              <button
+                                onClick={() => handleCopy(comp.txnPin || '', 'PIN', `${comp.id}_pin`)}
+                                className={`p-0.5 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
+                                  copiedKey === `${comp.id}_pin`
+                                    ? 'bg-emerald-600 text-white'
+                                    : 'text-slate-400 hover:text-slate-800 hover:bg-white'
+                                }`}
+                                title="Copy PIN"
+                              >
+                                {copiedKey === `${comp.id}_pin` ? <Check size={12} /> : <Copy size={12} />}
+                              </button>
+                            )}
+                          </div>
                         )}
-                      </div>
+                      </>
                     )}
 
-                    {/* 5. Contact Phone */}
+                    {/* Contact Phone */}
                     {comp.contactPhone && (
                       <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
                         <div className="flex items-center space-x-1.5 min-w-0 flex-1">
-                          <span className="text-[11px] font-bold text-slate-500 w-16 shrink-0">Contact:</span>
+                          <span className={`text-[11px] font-bold text-slate-500 ${isImeCard ? 'w-20' : 'w-16'} shrink-0`}>Contact:</span>
                           <span className="font-semibold text-slate-800 truncate text-xs">
                             {comp.contactPhone}
                           </span>
@@ -811,13 +1138,21 @@ export const RemitPage: React.FC = () => {
       )}
 
       {/* Full Add / Edit Modal (Super Admin Only) */}
-      {isModalOpen && isSuperAdmin && (
+      {isModalOpen && isSuperAdmin && (() => {
+        const isImeForm = isImeRemitProfile(formData.name, formData.displayOrder);
+        const allBranchIds = availableBranches.map(b => b.id.toLowerCase());
+        const isAllBranchesSelected = allBranchIds.length > 0 && allBranchIds.every(id => formData.selectedBranches.includes(id));
+        const selectedCount = formData.selectedBranches.length;
+        const singleSelectedBranch = selectedCount === 1 ? formData.selectedBranches[0] : null;
+        const selectedBranchNames = formData.selectedBranches.map(id => getBranchLabel(id)).join(', ');
+
+        return (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-[9000] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-150">
           <div className="bg-white w-full max-w-md rounded-2xl border border-slate-200 shadow-xl overflow-hidden my-auto animate-in zoom-in-95 duration-150">
             {/* Modal Header */}
             <div className="px-5 py-3.5 border-b border-slate-100 bg-slate-900 text-white flex items-center justify-between">
               <h3 className="text-xs font-black uppercase tracking-wider">
-                {editingCompany ? 'UPDATE REMITTANCE PARTNER' : 'ADD REMITTANCE PARTNER'}
+                {editingCompany ? 'UPDATE REMIT' : 'ADD REMIT'}
               </h3>
               <button
                 onClick={() => setIsModalOpen(false)}
@@ -828,13 +1163,19 @@ export const RemitPage: React.FC = () => {
             </div>
 
             {/* Modal Form */}
-            <form onSubmit={handleSave} className="p-5 space-y-3">
-              <DayEndFieldset branchId={formData.branchId === 'all' ? undefined : formData.branchId} className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                {/* Internal S.N. (Serial Order) */}
-                <div>
+            <form onSubmit={handleSave} className="p-5 space-y-3 max-h-[82vh] overflow-y-auto">
+              <DayEndFieldset branchId={singleSelectedBranch || undefined} className="space-y-3">
+              {formError && (
+                <div className="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold">
+                  {formError}
+                </div>
+              )}
+
+              {/* S.N. + Company Name */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-1">
                   <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
-                    S.N. (SERIAL ORDER) *
+                    S.N. *
                   </label>
                   <input
                     type="number"
@@ -847,38 +1188,87 @@ export const RemitPage: React.FC = () => {
                   />
                 </div>
 
-                {/* Target Branch */}
-                <div>
+                <div className="col-span-2">
                   <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
-                    TARGET BRANCH *
+                    COMPANY NAME *
                   </label>
-                  <select
-                    value={formData.branchId}
-                    onChange={(e) => setFormData(prev => ({ ...prev, branchId: e.target.value }))}
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. IME Remit, Prabhu Remit"
+                    value={formData.name}
+                    onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900 outline-none focus:bg-white focus:border-rose-600"
-                  >
-                    <option value="all">All Branches (Common)</option>
-                    <option value="main">Head Office</option>
-                    {availableBranches.filter(b => b.id !== 'main').map(b => (
-                      <option key={b.id} value={b.id}>{b.name}</option>
-                    ))}
-                  </select>
+                  />
                 </div>
               </div>
 
-              {/* Company Name */}
+              {/* Target Branches Selection (All / 1 / 2 / 3+ Branches) */}
               <div>
-                <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
-                  COMPANY NAME *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Prabhu Remit, IME Remit"
-                  value={formData.name}
-                  onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-900 outline-none focus:bg-white focus:border-rose-600"
-                />
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[11px] font-black uppercase tracking-wider text-slate-700">
+                    {isMultiBranchEditMode ? 'SELECT BRANCHES *' : 'TARGET BRANCH *'}
+                  </label>
+                  {isMultiBranchEditMode ? (
+                    <button
+                      type="button"
+                      onClick={toggleAllFormBranches}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wide border transition-all cursor-pointer ${
+                        isAllBranchesSelected
+                          ? 'bg-rose-700 text-white border-rose-700'
+                          : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                      }`}
+                    >
+                      {isAllBranchesSelected ? 'All Branches ✓' : 'Select All Branches'}
+                    </button>
+                  ) : (
+                    <span className="text-[10px] font-black uppercase text-rose-700">
+                      {singleSelectedBranch ? getBranchLabel(singleSelectedBranch) : ''}
+                    </span>
+                  )}
+                </div>
+
+                {isMultiBranchEditMode ? (
+                  <div className="grid grid-cols-2 gap-1.5 p-2 bg-slate-50 rounded-xl border border-slate-200">
+                    {availableBranches.map(b => {
+                      const bId = b.id.toLowerCase();
+                      const isChecked = formData.selectedBranches.includes(bId);
+                      return (
+                        <label
+                          key={bId}
+                          className={`flex items-center space-x-2 px-2.5 py-1.5 rounded-lg border text-xs font-bold cursor-pointer transition-all select-none ${
+                            isChecked
+                              ? 'bg-rose-50 border-rose-300 text-rose-900 shadow-2xs'
+                              : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleFormBranch(bId)}
+                            className="accent-rose-700 w-3.5 h-3.5 rounded cursor-pointer shrink-0"
+                          />
+                          <span className="truncate text-[11px]" title={b.name}>{b.name}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="flex items-center space-x-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800">
+                    <Building2 size={14} className="text-rose-700 shrink-0" />
+                    <span>{singleSelectedBranch ? getBranchLabel(singleSelectedBranch) : 'Selected Branch'}</span>
+                  </div>
+                )}
+
+                {isMultiBranchEditMode && (
+                  <p className="text-[10px] font-semibold text-slate-500 mt-1">
+                    {selectedCount === 0
+                      ? 'Select at least 1 branch where this remit is needed.'
+                      : isAllBranchesSelected
+                        ? `Enabled for all ${selectedCount} branches.`
+                        : `Enabled for ${selectedCount} branch${selectedCount > 1 ? 'es' : ''}: ${selectedBranchNames}`}
+                  </p>
+                )}
               </div>
 
               {/* Company Logo Upload & URL */}
@@ -930,34 +1320,36 @@ export const RemitPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* PIN Yes / No Selection */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-[11px] font-black uppercase tracking-wider text-slate-700">
-                    REQUIRE PIN?
-                  </label>
-                  <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
-                    <button
-                      type="button"
-                      onClick={() => setFormData(prev => ({ ...prev, hasPin: true }))}
-                      className={`px-3 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer ${
-                        formData.hasPin ? 'bg-rose-700 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      Yes
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormData(prev => ({ ...prev, hasPin: false, txnPin: '' }))}
-                      className={`px-3 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer ${
-                        !formData.hasPin ? 'bg-slate-700 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      No
-                    </button>
+              {/* PIN Yes / No Selection (Only for non-IME Remits; IME Remit uses fixed Agent ID, Employee ID, Username, Password) */}
+              {!isImeForm && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] font-black uppercase tracking-wider text-slate-700">
+                      REQUIRE PIN?
+                    </label>
+                    <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                      <button
+                        type="button"
+                        onClick={() => setFormData(prev => ({ ...prev, hasPin: true }))}
+                        className={`px-3 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer ${
+                          formData.hasPin ? 'bg-rose-700 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Yes
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormData(prev => ({ ...prev, hasPin: false, txnPin: '' }))}
+                        className={`px-3 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer ${
+                          !formData.hasPin ? 'bg-slate-700 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        No
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
 
               {/* Contact Field */}
               <div>
@@ -974,18 +1366,31 @@ export const RemitPage: React.FC = () => {
               </div>
 
               {/* Branch-Specific Credentials Section */}
-              {formData.branchId === 'all' ? (
-                /* Information note when All Branches is chosen */
+              {selectedCount !== 1 ? (
                 <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3 flex items-start space-x-2.5 text-xs text-amber-900">
                   <Info size={16} className="text-amber-700 shrink-0 mt-0.5" />
                   <div className="leading-relaxed">
-                    <p className="font-bold">All Branches Mode:</p>
+                    <p className="font-bold">
+                      {selectedCount === 0
+                        ? 'No Branch Selected:'
+                        : isAllBranchesSelected
+                          ? `All Branches Mode (${selectedCount} Branches):`
+                          : `${selectedCount} Branches Selected:`}
+                    </p>
                     <p className="text-[11px] text-amber-800 mt-0.5">
-                      This will create <strong>{formData.name || 'this company'}</strong> across all branches with the common Name, S.N., Logo, and Contact.
+                      {selectedCount === 0
+                        ? 'Select 1, 2, 3, or All Branches above to assign this remit.'
+                        : <>This will enable <strong>{formData.name || 'this remit'}</strong> only for <strong>{isAllBranchesSelected ? 'all branches' : selectedBranchNames}</strong> with the common Name, S.N., Logo, and Contact.</>}
                     </p>
-                    <p className="text-[11px] text-amber-800 mt-1 font-semibold">
-                      To enter or update <strong>Username</strong>, <strong>Password</strong>, <strong>Access ID</strong>, and <strong>PIN</strong>, select a specific branch above.
-                    </p>
+                    {selectedCount > 1 && (
+                      <p className="text-[11px] text-amber-800 mt-1 font-semibold">
+                        {isImeForm ? (
+                          <>To enter or update <strong>Agent ID</strong>, <strong>Employee ID</strong>, <strong>Username</strong>, and <strong>Password</strong>, select a single branch.</>
+                        ) : (
+                          <>To enter or update <strong>Username</strong>, <strong>Password</strong>, <strong>Access ID</strong>, and <strong>PIN</strong>, select a single branch.</>
+                        )}
+                      </p>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -993,79 +1398,149 @@ export const RemitPage: React.FC = () => {
                 <div className="space-y-3 pt-2 border-t border-slate-100">
                   <div className="text-[10px] font-black uppercase tracking-wider text-rose-800 flex items-center space-x-1">
                     <Building2 size={12} />
-                    <span>Credentials for {getBranchLabel(formData.branchId)}</span>
+                    <span>Credentials for {getBranchLabel(singleSelectedBranch || undefined)}</span>
                   </div>
 
-                  {/* Username */}
-                  <div>
-                    <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
-                      USERNAME *
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. ratauli_prabhu"
-                      value={formData.username}
-                      onChange={(e) => setFormData(prev => ({ ...prev, username: e.target.value }))}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-900 outline-none focus:bg-white focus:border-rose-600"
-                    />
-                  </div>
+                  {isImeForm ? (
+                    <>
+                      {/* IME Remit 1st Serial Number Fields: Agent ID, Employee ID, Username, Password */}
+                      <div>
+                        <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
+                          AGENT ID *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="e.g. IMENP39156"
+                          value={formData.accessId}
+                          onChange={(e) => setFormData(prev => ({ ...prev, accessId: e.target.value }))}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-900 outline-none focus:bg-white focus:border-rose-600"
+                        />
+                      </div>
 
-                  {/* Password with generator */}
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-[11px] font-black uppercase tracking-wider text-slate-700">
-                        PASSWORD *
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => generateRandomPassword(false)}
-                        className="text-[10px] font-black text-rose-700 hover:text-rose-900 uppercase flex items-center space-x-1 cursor-pointer"
-                      >
-                        <Sparkles size={11} />
-                        <span>GENERATE</span>
-                      </button>
-                    </div>
-                    <input
-                      type="text"
-                      required
-                      placeholder="System password"
-                      value={formData.password}
-                      onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-900 outline-none focus:bg-white focus:border-rose-600"
-                    />
-                  </div>
+                      <div>
+                        <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
+                          EMPLOYEE ID *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="e.g. 34544"
+                          value={formData.txnPin}
+                          onChange={(e) => setFormData(prev => ({ ...prev, txnPin: e.target.value }))}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-900 outline-none focus:bg-white focus:border-rose-600"
+                        />
+                      </div>
 
-                  {/* Access ID */}
-                  <div>
-                    <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
-                      ACCESS ID *
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. PRABHU-HO-101"
-                      value={formData.accessId}
-                      onChange={(e) => setFormData(prev => ({ ...prev, accessId: e.target.value }))}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-900 outline-none focus:bg-white focus:border-rose-600"
-                    />
-                  </div>
+                      <div>
+                        <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
+                          USERNAME *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="e.g. rbtrsslparsa"
+                          value={formData.username}
+                          onChange={(e) => setFormData(prev => ({ ...prev, username: e.target.value }))}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-900 outline-none focus:bg-white focus:border-rose-600"
+                        />
+                      </div>
 
-                  {/* PIN Field if Require PIN is Yes */}
-                  {formData.hasPin && (
-                    <div>
-                      <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
-                        PIN *
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        placeholder="Enter counter PIN (e.g. 4021)"
-                        value={formData.txnPin}
-                        onChange={(e) => setFormData(prev => ({ ...prev, txnPin: e.target.value }))}
-                        className="w-full px-3 py-2 bg-rose-50/50 border border-rose-200 rounded-lg text-xs font-mono font-bold text-slate-900 outline-none focus:bg-white focus:border-rose-600"
-                      />
-                    </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-[11px] font-black uppercase tracking-wider text-slate-700">
+                            PASSWORD *
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => generateRandomPassword(false)}
+                            className="text-[10px] font-black text-rose-700 hover:text-rose-900 uppercase flex items-center space-x-1 cursor-pointer"
+                          >
+                            <Sparkles size={11} />
+                            <span>GENERATE</span>
+                          </button>
+                        </div>
+                        <input
+                          type="text"
+                          required
+                          placeholder="System password"
+                          value={formData.password}
+                          onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-900 outline-none focus:bg-white focus:border-rose-600"
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* Standard Remit Fields: Username, Password, Access ID, PIN */}
+                      <div>
+                        <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
+                          USERNAME *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="e.g. ratauli_prabhu"
+                          value={formData.username}
+                          onChange={(e) => setFormData(prev => ({ ...prev, username: e.target.value }))}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-900 outline-none focus:bg-white focus:border-rose-600"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-[11px] font-black uppercase tracking-wider text-slate-700">
+                            PASSWORD *
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => generateRandomPassword(false)}
+                            className="text-[10px] font-black text-rose-700 hover:text-rose-900 uppercase flex items-center space-x-1 cursor-pointer"
+                          >
+                            <Sparkles size={11} />
+                            <span>GENERATE</span>
+                          </button>
+                        </div>
+                        <input
+                          type="text"
+                          required
+                          placeholder="System password"
+                          value={formData.password}
+                          onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-900 outline-none focus:bg-white focus:border-rose-600"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
+                          ACCESS ID *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="e.g. PRABHU-HO-101"
+                          value={formData.accessId}
+                          onChange={(e) => setFormData(prev => ({ ...prev, accessId: e.target.value }))}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-900 outline-none focus:bg-white focus:border-rose-600"
+                        />
+                      </div>
+
+                      {formData.hasPin && (
+                        <div>
+                          <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1">
+                            PIN *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="Enter counter PIN (e.g. 4021)"
+                            value={formData.txnPin}
+                            onChange={(e) => setFormData(prev => ({ ...prev, txnPin: e.target.value }))}
+                            className="w-full px-3 py-2 bg-rose-50/50 border border-rose-200 rounded-lg text-xs font-mono font-bold text-slate-900 outline-none focus:bg-white focus:border-rose-600"
+                          />
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -1083,17 +1558,22 @@ export const RemitPage: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={isDayEnded}
+                  disabled={isDayEnded || selectedCount === 0}
                   title={isDayEnded ? getDayEndedBlockMessage() : undefined}
                   className="px-4 py-1.5 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {formData.branchId === 'all' ? 'CREATE FOR ALL BRANCHES' : 'SAVE DETAILS'}
+                  {selectedCount === 1
+                    ? (editingCompany ? 'SAVE DETAILS' : 'ADD REMIT')
+                    : isAllBranchesSelected
+                      ? (editingCompany ? 'UPDATE ALL BRANCHES' : 'ADD FOR ALL BRANCHES')
+                      : (editingCompany ? `UPDATE ${selectedCount} BRANCHES` : `ADD FOR ${selectedCount} BRANCHES`)}
                 </button>
               </div>
             </form>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Password-Only Modal for Branch Operators (Strictly Password Change Only) */}
       {isPasswordOnlyModalOpen && editingCompany && (
@@ -1118,14 +1598,33 @@ export const RemitPage: React.FC = () => {
               <DayEndFieldset branchId={editingCompany.branchId === 'all' ? undefined : editingCompany.branchId} className="space-y-3">
               {/* Read-only info */}
               <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 space-y-1 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-[10px] font-bold text-slate-400">Username:</span>
-                  <span className="font-mono font-bold text-slate-800">{editingCompany.username || '-'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[10px] font-bold text-slate-400">Access ID:</span>
-                  <span className="font-mono font-bold text-slate-800">{editingCompany.accessId || '-'}</span>
-                </div>
+                {isImeRemitProfile(editingCompany.name, editingCompany.displayOrder) ? (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-[10px] font-bold text-slate-400">Agent ID:</span>
+                      <span className="font-mono font-bold text-slate-800">{editingCompany.accessId || '-'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[10px] font-bold text-slate-400">Employee ID:</span>
+                      <span className="font-mono font-bold text-slate-800">{editingCompany.txnPin || '-'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[10px] font-bold text-slate-400">Username:</span>
+                      <span className="font-mono font-bold text-slate-800">{editingCompany.username || '-'}</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-[10px] font-bold text-slate-400">Username:</span>
+                      <span className="font-mono font-bold text-slate-800">{editingCompany.username || '-'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[10px] font-bold text-slate-400">Access ID:</span>
+                      <span className="font-mono font-bold text-slate-800">{editingCompany.accessId || '-'}</span>
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Password field */}
