@@ -787,6 +787,17 @@ export const MENU_HIERARCHY: MainMenuGroup[] = [
         coarseDelete: 'delete_transaction'
       },
       {
+        id: 'alert_saving_maturity',
+        name: 'Saving Maturity Alert (Count & Jump)',
+        description: 'View matured Micro-Finance saving account count in header Alerts and jump to Mature Savings list.',
+        viewPerm: 'sub_alert_saving_maturity_view',
+        editPerm: 'sub_alert_saving_maturity_edit',
+        deletePerm: 'sub_alert_saving_maturity_delete',
+        coarseView: 'view_alerts',
+        coarseEdit: 'edit_transaction',
+        coarseDelete: 'delete_transaction'
+      },
+      {
         id: 'alert_notice',
         name: 'Notice Alert (1-Day Count & Jump)',
         description: 'View today active notices count in header Alerts and jump to Notice Board.',
@@ -1425,7 +1436,7 @@ export const RolePermissionManagement: React.FC = () => {
         'sub_mf_dashboard_view', 'sub_mf_centers_view', 'sub_mf_groups_view', 'sub_mf_members_view', 'sub_mf_saving_view', 'sub_mf_loan_view',
         'sub_mf_reports_view', 'sub_mf_signature_sheet_view', 'sub_mf_deposit_sheet_view', 'sub_mf_meeting_minutes_view', 'sub_mf_id_card_view',
         'sub_dep_dashboard_view', 'sub_dep_assets_view', 'sub_dep_reports_view',
-        'sub_alert_bima_maturity_view', 'sub_alert_loan_maturity_view', 'sub_alert_notice_view',
+        'sub_alert_bima_maturity_view', 'sub_alert_loan_maturity_view', 'sub_alert_saving_maturity_view', 'sub_alert_notice_view',
         'sub_tool_remit_view', 'sub_tool_messages_view', 'sub_tool_calculator_view', 'sub_tool_fd_cert_view', 'sub_tool_emi_view', 'sub_tool_date_converter_view'
       ];
     } else if (newRoleTemplate === 'teller') {
@@ -1436,7 +1447,7 @@ export const RolePermissionManagement: React.FC = () => {
         'sub_daily_books_view', 'sub_member_passbooks_view',
         'sub_member_accounts_view',
         'sub_internal_notices_view', 'sub_resource_downloads_view',
-        'sub_alert_bima_maturity_view', 'sub_alert_loan_maturity_view', 'sub_alert_notice_view',
+        'sub_alert_bima_maturity_view', 'sub_alert_loan_maturity_view', 'sub_alert_saving_maturity_view', 'sub_alert_notice_view',
         'sub_tool_remit_view', 'sub_tool_messages_view', 'sub_tool_calculator_view', 'sub_tool_fd_cert_view', 'sub_tool_emi_view', 'sub_tool_date_converter_view'
       ];
     } else if (newRoleTemplate === 'hr') {

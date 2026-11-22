@@ -446,7 +446,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         'sub_dep_accounting_view', 'sub_dep_reports_view', 'sub_dep_settings_view'
       ],
       view_alerts: [
-        'sub_alert_bima_maturity_view', 'sub_alert_loan_maturity_view', 'sub_alert_notice_view'
+        'sub_alert_bima_maturity_view', 'sub_alert_loan_maturity_view', 'sub_alert_saving_maturity_view', 'sub_alert_notice_view'
       ],
       view_shortcuts: [
         'sub_tool_remit_view', 'sub_tool_messages_view', 'sub_tool_calculator_view',

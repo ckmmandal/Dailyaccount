@@ -64,7 +64,9 @@ export interface MFSavingsRecord {
   dateBs?: string;
   amount: number;
   savingType: 'Normal Saving' | 'Recurring Saving' | 'Compulsory' | 'Optional' | 'Fixed Deposit' | string;
-  status: 'ACTIVE' | 'CLOSED' | 'INACTIVE' | 'PAID' | 'DUE' | 'PENDING';
+  status: 'ACTIVE' | 'MATURED' | 'CLOSED' | 'INACTIVE' | 'PAID' | 'DUE' | 'PENDING';
+  periodYears?: number; // Default 6 years
+  maturityDateBs?: string; // BS YYYY-MM-DD auto-calculated from dateBs + periodYears
   collectedBy?: string;
   createdBy?: string;
   createdByName?: string;
@@ -347,9 +349,157 @@ export const findUnclosedDuplicateLoan = (
   });
 };
 
+export const DEFAULT_SAVING_PERIOD_YEARS = 6;
+
+export const calculateBsMaturityDateByYears = (
+  openBs?: string,
+  periodYears: number = DEFAULT_SAVING_PERIOD_YEARS
+): string => {
+  const norm = normalizeBsDate(openBs);
+  if (!norm) return '';
+  const yearsNum = Number(periodYears);
+  if (!Number.isFinite(yearsNum) || yearsNum <= 0) return norm;
+  const parts = norm.split('-').map(Number);
+  if (parts.length !== 3 || parts.some(isNaN)) return norm;
+  const [y0, m0, d0] = parts;
+  const totalMonths = Math.max(1, Math.round(yearsNum * 12));
+  let y = y0;
+  let m = m0 + totalMonths;
+  while (m > 12) {
+    m -= 12;
+    y += 1;
+  }
+  while (m <= 0) {
+    m += 12;
+    y -= 1;
+  }
+  const mm = String(m).padStart(2, '0');
+  const dd = String(d0).padStart(2, '0');
+  return `${y}-${mm}-${dd}`;
+};
+
+export const resolveSavingOpenDateBs = (
+  s: Pick<MFSavingsRecord, 'dateBs' | 'date'>
+): string => {
+  const candidates = [s.dateBs, s.date];
+  for (const raw of candidates) {
+    const norm = normalizeBsDate(raw);
+    if (!norm) continue;
+    const match = norm.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) continue;
+    const year = parseInt(match[1], 10);
+    if (year >= 2050 && year <= 2099) {
+      return norm;
+    }
+    if (year >= 1990 && year <= 2049) {
+      try {
+        const month = parseInt(match[2], 10);
+        const day = parseInt(match[3], 10);
+        const nep = new NepaliDate(new Date(year, month - 1, day));
+        const by = nep.getYear();
+        const bm = String(nep.getMonth() + 1).padStart(2, '0');
+        const bd = String(nep.getDate()).padStart(2, '0');
+        return `${by}-${bm}-${bd}`;
+      } catch {
+        // continue
+      }
+    }
+  }
+  return '';
+};
+
+export const resolveSavingPeriodYears = (
+  s?: Pick<MFSavingsRecord, 'periodYears'> | null
+): number => {
+  const n = Number(s?.periodYears);
+  if (Number.isFinite(n) && n > 0) return n;
+  return DEFAULT_SAVING_PERIOD_YEARS;
+};
+
+export const resolveSavingMaturityDateBs = (
+  s?: Pick<MFSavingsRecord, 'maturityDateBs' | 'periodYears' | 'dateBs' | 'date'> | null
+): string => {
+  if (!s) return '';
+  const explicit = normalizeBsDate(s.maturityDateBs);
+  if (explicit && /^(?:20[5-9]\d|21\d\d)-\d{2}-\d{2}$/.test(explicit)) {
+    return explicit;
+  }
+  const openBs = resolveSavingOpenDateBs(s);
+  if (!openBs) return '';
+  return calculateBsMaturityDateByYears(openBs, resolveSavingPeriodYears(s));
+};
+
 export const isSavingStatusClosed = (status?: string): boolean => {
   const raw = String(status || '').toUpperCase();
   return raw === 'CLOSED' || raw === 'INACTIVE' || raw === 'DUE' || raw === 'PENDING';
+};
+
+export const getEffectiveSavingStatus = (
+  savingOrStatus?: MFSavingsRecord | string | null
+): 'ACTIVE' | 'MATURED' | 'CLOSED' => {
+  if (!savingOrStatus) return 'ACTIVE';
+  if (typeof savingOrStatus === 'string') {
+    const raw = savingOrStatus.toUpperCase();
+    if (isSavingStatusClosed(raw)) return 'CLOSED';
+    if (raw === 'MATURED') return 'MATURED';
+    return 'ACTIVE';
+  }
+  const raw = String(savingOrStatus.status || '').toUpperCase();
+  if (isSavingStatusClosed(raw)) return 'CLOSED';
+  if (raw === 'MATURED') return 'MATURED';
+  const maturityBs = resolveSavingMaturityDateBs(savingOrStatus);
+  const isValidBs = /^(?:20[5-9]\d|21\d\d)-\d{2}-\d{2}$/.test(maturityBs);
+  if (isValidBs && maturityBs <= getTodayBsDate()) {
+    return 'MATURED';
+  }
+  return 'ACTIVE';
+};
+
+const MF_SAVING_META_REGEX = /\s*\[\[MF_META:([^\]]+)\]\]\s*$/;
+
+const decodeSavingRemarksMeta = (
+  rawRemarks?: string | null
+): { cleanRemarks: string; periodYears?: number; maturityDateBs?: string } => {
+  const str = String(rawRemarks || '');
+  const match = str.match(MF_SAVING_META_REGEX);
+  if (!match) return { cleanRemarks: str };
+  const cleanRemarks = str.replace(MF_SAVING_META_REGEX, '').trim();
+  const pairs = match[1].split(';');
+  let periodYears: number | undefined;
+  let maturityDateBs: string | undefined;
+  for (const pair of pairs) {
+    const [k, v] = pair.split('=');
+    if (k === 'periodYears') {
+      const parsed = parseFloat(v);
+      if (Number.isFinite(parsed) && parsed > 0) periodYears = parsed;
+    } else if (k === 'maturityDateBs' && v) {
+      const norm = normalizeBsDate(v);
+      if (norm) maturityDateBs = norm;
+    }
+  }
+  return { cleanRemarks, periodYears, maturityDateBs };
+};
+
+const encodeSavingRemarksWithMeta = (
+  remarks?: string,
+  periodYears?: number,
+  maturityDateBs?: string
+): string => {
+  const { cleanRemarks } = decodeSavingRemarksMeta(remarks);
+  const parts: string[] = [];
+  const yrs = Number(periodYears);
+  if (Number.isFinite(yrs) && yrs > 0) parts.push(`periodYears=${yrs}`);
+  const mat = normalizeBsDate(maturityDateBs);
+  if (mat) parts.push(`maturityDateBs=${mat}`);
+  if (parts.length === 0) return cleanRemarks;
+  const tag = `[[MF_META:${parts.join(';')}]]`;
+  return cleanRemarks ? `${cleanRemarks} ${tag}` : tag;
+};
+
+const notifySavingsUpdated = (): void => {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('mf_savings_updated'));
+  }
 };
 
 export const normalizeSavingProductKey = (savingTypeOrProduct?: string): string => {
@@ -849,50 +999,74 @@ const mapRowToMember = (r: Record<string, unknown>): MFMember => ({
   createdAt: String(r.created_at || '')
 });
 
-const mapSavingToRow = (s: MFSavingsRecord) => ({
-  id: s.id,
-  member_id: s.memberId,
-  account_no: s.accountNo,
-  name: s.name,
-  group_name: s.groupName || '',
-  center_name: s.centerName || '',
-  date: s.date || '',
-  date_bs: s.dateBs || '',
-  amount: Number(s.amount) || 0,
-  saving_type: s.savingType || 'Compulsory',
-  status: s.status || 'ACTIVE',
-  collected_by: s.collectedBy || '',
-  created_by: s.createdBy || null,
-  created_by_name: s.createdByName || null,
-  receipt_no: s.receiptNo || '',
-  remarks: s.remarks || '',
-  created_at: s.createdAt || new Date().toISOString().split('T')[0],
-  updated_at: new Date().toISOString()
-});
+const mapSavingToRow = (s: MFSavingsRecord) => {
+  const periodYears = resolveSavingPeriodYears(s);
+  const maturityDateBs = resolveSavingMaturityDateBs({ ...s, periodYears });
+  return {
+    id: s.id,
+    member_id: s.memberId,
+    account_no: s.accountNo,
+    name: s.name,
+    group_name: s.groupName || '',
+    center_name: s.centerName || '',
+    date: s.date || '',
+    date_bs: s.dateBs || '',
+    amount: Number(s.amount) || 0,
+    saving_type: s.savingType || 'Compulsory',
+    status: s.status || 'ACTIVE',
+    collected_by: s.collectedBy || '',
+    created_by: s.createdBy || null,
+    created_by_name: s.createdByName || null,
+    receipt_no: s.receiptNo || '',
+    remarks: encodeSavingRemarksWithMeta(s.remarks, periodYears, maturityDateBs),
+    created_at: s.createdAt || new Date().toISOString().split('T')[0],
+    updated_at: new Date().toISOString()
+  };
+};
 
-const mapRowToSaving = (r: Record<string, unknown>): MFSavingsRecord => ({
-  id: String(r.id),
-  memberId: String(r.member_id || ''),
-  accountNo: String(r.account_no || ''),
-  name: String(r.name || ''),
-  groupName: String(r.group_name || ''),
-  centerName: String(r.center_name || ''),
-  date: String(r.date || ''),
-  dateBs: r.date_bs ? String(r.date_bs) : undefined,
-  amount: Number(r.amount) || 0,
-  savingType: String(r.saving_type || 'Compulsory'),
-  status: ((): MFSavingsRecord['status'] => {
-    const raw = String(r.status || '').toUpperCase();
-    if (raw === 'CLOSED' || raw === 'INACTIVE' || raw === 'DUE' || raw === 'PENDING') return 'CLOSED';
-    return 'ACTIVE';
-  })(),
-  collectedBy: r.collected_by ? String(r.collected_by) : undefined,
-  createdBy: r.created_by ? String(r.created_by) : undefined,
-  createdByName: r.created_by_name ? String(r.created_by_name) : undefined,
-  receiptNo: r.receipt_no ? String(r.receipt_no) : undefined,
-  remarks: r.remarks ? String(r.remarks) : undefined,
-  createdAt: String(r.created_at || '')
-});
+const mapRowToSaving = (r: Record<string, unknown>): MFSavingsRecord => {
+  const rawRemarks = r.remarks ? String(r.remarks) : '';
+  const decoded = decodeSavingRemarksMeta(rawRemarks);
+  const dateStr = String(r.date || '');
+  const dateBsStr = r.date_bs ? String(r.date_bs) : undefined;
+  const dbPeriod = Number(r.period_years);
+  const periodYears =
+    Number.isFinite(dbPeriod) && dbPeriod > 0
+      ? dbPeriod
+      : decoded.periodYears ?? DEFAULT_SAVING_PERIOD_YEARS;
+  const dbMaturity = r.maturity_date_bs ? normalizeBsDate(String(r.maturity_date_bs)) : '';
+  const maturityDateBs =
+    dbMaturity ||
+    decoded.maturityDateBs ||
+    resolveSavingMaturityDateBs({ date: dateStr, dateBs: dateBsStr, periodYears });
+
+  return {
+    id: String(r.id),
+    memberId: String(r.member_id || ''),
+    accountNo: String(r.account_no || ''),
+    name: String(r.name || ''),
+    groupName: String(r.group_name || ''),
+    centerName: String(r.center_name || ''),
+    date: dateStr,
+    dateBs: dateBsStr,
+    amount: Number(r.amount) || 0,
+    savingType: String(r.saving_type || 'Compulsory'),
+    status: ((): MFSavingsRecord['status'] => {
+      const raw = String(r.status || '').toUpperCase();
+      if (raw === 'CLOSED' || raw === 'INACTIVE' || raw === 'DUE' || raw === 'PENDING') return 'CLOSED';
+      if (raw === 'MATURED') return 'MATURED';
+      return 'ACTIVE';
+    })(),
+    periodYears,
+    maturityDateBs,
+    collectedBy: r.collected_by ? String(r.collected_by) : undefined,
+    createdBy: r.created_by ? String(r.created_by) : undefined,
+    createdByName: r.created_by_name ? String(r.created_by_name) : undefined,
+    receiptNo: r.receipt_no ? String(r.receipt_no) : undefined,
+    remarks: decoded.cleanRemarks || undefined,
+    createdAt: String(r.created_at || '')
+  };
+};
 
 const mapSheetToRow = (s: MFCollectionSheet) => ({
   id: s.id,
@@ -1428,6 +1602,22 @@ export const microFinanceService = {
   saveSavings: (savings: MFSavingsRecord[]): void => {
     localStorage.setItem(STORAGE_KEYS.SAVINGS, JSON.stringify(savings));
     void bgUpsert('mf_savings', savings.map(mapSavingToRow));
+    notifySavingsUpdated();
+  },
+
+  fetchSavingsFromSupabase: async (): Promise<MFSavingsRecord[]> => {
+    const localSavings = microFinanceService.getSavings();
+    try {
+      const { data, error } = await fetchAllRowsPaginated('mf_savings');
+      if (!error && Array.isArray(data) && data.length > 0) {
+        const mapped = data.map(mapRowToSaving);
+        safeSetLocalStorage(STORAGE_KEYS.SAVINGS, mapped);
+        return mapped;
+      }
+    } catch (e) {
+      console.warn('Failed to fetch savings from Supabase, using local cache:', e);
+    }
+    return localSavings;
   },
 
   addSaving: (saving: Omit<MFSavingsRecord, 'id' | 'createdAt'>): MFSavingsRecord => {
@@ -1441,14 +1631,19 @@ export const microFinanceService = {
         );
       }
     }
+    const periodYears = resolveSavingPeriodYears(saving);
+    const maturityDateBs = resolveSavingMaturityDateBs({ ...saving, periodYears });
     const newSaving: MFSavingsRecord = {
       ...saving,
+      periodYears,
+      maturityDateBs,
       id: `sav-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       createdAt: new Date().toISOString().split('T')[0]
     };
     const updated = [newSaving, ...savings];
     localStorage.setItem(STORAGE_KEYS.SAVINGS, JSON.stringify(updated));
     void bgUpsert('mf_savings', [mapSavingToRow(newSaving)]);
+    notifySavingsUpdated();
     // Also update member's total savings
     const members = microFinanceService.getMembers();
     let changedMember: MFMember | null = null;
@@ -1473,16 +1668,32 @@ export const microFinanceService = {
     const savings = existingList.map(s => {
       if (s.id === id) {
         const nextStatusRaw = String(updates.status ?? s.status ?? 'ACTIVE').toUpperCase();
-        const normalizedStatus: 'ACTIVE' | 'CLOSED' =
+        const normalizedStatus: 'ACTIVE' | 'MATURED' | 'CLOSED' =
           nextStatusRaw === 'CLOSED' || nextStatusRaw === 'INACTIVE' || nextStatusRaw === 'DUE' || nextStatusRaw === 'PENDING'
             ? 'CLOSED'
+            : nextStatusRaw === 'MATURED'
+            ? 'MATURED'
             : 'ACTIVE';
         const nextDateBs = normalizeBsDate(updates.dateBs ?? s.dateBs ?? s.date);
+        const nextPeriodYears = resolveSavingPeriodYears({
+          periodYears: updates.periodYears ?? s.periodYears
+        });
+        const nextMaturityDateBs =
+          updates.maturityDateBs !== undefined
+            ? normalizeBsDate(updates.maturityDateBs) || calculateBsMaturityDateByYears(nextDateBs, nextPeriodYears)
+            : resolveSavingMaturityDateBs({
+                ...s,
+                ...updates,
+                dateBs: nextDateBs,
+                periodYears: nextPeriodYears
+              });
         updatedItem = {
           ...s,
           ...updates,
           status: normalizedStatus,
           dateBs: nextDateBs,
+          periodYears: nextPeriodYears,
+          maturityDateBs: nextMaturityDateBs,
           amount: updates.amount !== undefined ? Number(updates.amount) || 0 : s.amount
         };
         return updatedItem;
@@ -1493,12 +1704,13 @@ export const microFinanceService = {
     localStorage.setItem(STORAGE_KEYS.SAVINGS, JSON.stringify(savings));
     if (updatedItem) {
       void bgUpsert('mf_savings', [mapSavingToRow(updatedItem)]);
+      notifySavingsUpdated();
 
       // Adjust member totalSavings if amount, status, or memberId changed
       if (oldItem) {
         const oldRaw = String(oldItem.status || '').toUpperCase();
         const wasActive = oldRaw !== 'CLOSED' && oldRaw !== 'INACTIVE' && oldRaw !== 'DUE' && oldRaw !== 'PENDING';
-        const isNowActive = updatedItem.status === 'ACTIVE';
+        const isNowActive = updatedItem.status !== 'CLOSED';
         const oldDelta = wasActive ? Number(oldItem.amount) || 0 : 0;
         const newDelta = isNowActive ? Number(updatedItem.amount) || 0 : 0;
 
@@ -1537,6 +1749,7 @@ export const microFinanceService = {
     const savings = microFinanceService.getSavings().filter(s => s.id !== id);
     localStorage.setItem(STORAGE_KEYS.SAVINGS, JSON.stringify(savings));
     void bgDelete('mf_savings', id);
+    notifySavingsUpdated();
     return savings;
   },
 
@@ -1977,8 +2190,12 @@ export const microFinanceService = {
         }
         if (batchKey) seenBatchKeys.add(batchKey);
       }
+      const periodYears = resolveSavingPeriodYears(item);
+      const maturityDateBs = resolveSavingMaturityDateBs({ ...item, periodYears });
       created.push({
         ...item,
+        periodYears,
+        maturityDateBs,
         id: `sav-${stamp}-${idx}`,
         createdAt: today
       });
@@ -1986,6 +2203,7 @@ export const microFinanceService = {
     const updated = [...created, ...existing];
     safeSetLocalStorage(STORAGE_KEYS.SAVINGS, updated);
     void bgUpsert('mf_savings', created.map(mapSavingToRow));
+    notifySavingsUpdated();
 
     // Update member totalSavings in batch for ACTIVE (or legacy PAID) savings
     const memberAdds = new Map<string, number>();

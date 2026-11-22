@@ -29,6 +29,12 @@ import {
   getTodayBsDate,
   normalizeLoanProductKey,
   findUnclosedDuplicateLoan,
+  DEFAULT_SAVING_PERIOD_YEARS,
+  calculateBsMaturityDateByYears,
+  resolveSavingOpenDateBs,
+  resolveSavingPeriodYears,
+  resolveSavingMaturityDateBs,
+  getEffectiveSavingStatus,
   isSavingStatusClosed,
   normalizeSavingProductKey,
   findActiveDuplicateSaving,
@@ -74,12 +80,6 @@ const calculateBsMaturityDate = (openBs: string, periodMonths: number): string =
   } catch (e) {
     return openBs;
   }
-};
-
-const getEffectiveSavingStatus = (status?: string): 'ACTIVE' | 'CLOSED' => {
-  const raw = String(status || '').toUpperCase();
-  if (raw === 'CLOSED' || raw === 'INACTIVE' || raw === 'DUE' || raw === 'PENDING') return 'CLOSED';
-  return 'ACTIVE';
 };
 
 const getEffectiveMemberStatus = (status?: string): 'ACTIVE' | 'INACTIVE' => {
@@ -130,25 +130,6 @@ const calculateBsKistaNumber = (loanOpenBs: string, sheetYear: string, sheetMont
   } catch (e) {
     return 1;
   }
-};
-
-// Resolve BS Open Date (YYYY-MM-DD) for a saving account (supports 2050-2099 BS dates and AD->BS conversion)
-const resolveSavingOpenDateBs = (saving: { dateBs?: string; date?: string }): string => {
-  const bsNorm = normalizeBsDate(saving.dateBs);
-  if (bsNorm && /^\d{4}-\d{2}-\d{2}$/.test(bsNorm)) return bsNorm;
-
-  const rawNorm = normalizeBsDate(saving.date);
-  if (rawNorm && /^20[5-9]\d-\d{2}-\d{2}$/.test(rawNorm)) return rawNorm;
-
-  if (saving.date) {
-    try {
-      const converted = new NepaliDate(new Date(saving.date)).format('YYYY-MM-DD');
-      return normalizeBsDate(converted);
-    } catch {
-      return rawNorm || '';
-    }
-  }
-  return '';
 };
 
 // Calculate Saving Kista number inclusively from the account creation BS month
@@ -407,8 +388,15 @@ export const MicroFinanceManagement: React.FC = () => {
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const tab = params.get('tab');
+    const status = (params.get('status') || '').toUpperCase();
     if (tab === 'dashboard' || tab === 'centers' || tab === 'groups' || tab === 'members' || tab === 'saving' || tab === 'loan' || tab === 'reports') {
       setActiveTab(tab);
+    }
+    if (tab === 'saving' && (status === 'ACTIVE' || status === 'MATURED' || status === 'CLOSED')) {
+      setSavingStatusTab(status);
+    }
+    if (tab === 'loan' && (status === 'ACTIVE' || status === 'MATURED' || status === 'CLOSED')) {
+      setLoanStatusTab(status);
     }
   }, [location.search]);
 
@@ -432,7 +420,7 @@ export const MicroFinanceManagement: React.FC = () => {
   const [appliedMemberGroupId, setAppliedMemberGroupId] = useState('');
 
   const [savingSearch, setSavingSearch] = useState('');
-  const [savingStatusTab, setSavingStatusTab] = useState<'ACTIVE' | 'CLOSED'>('ACTIVE');
+  const [savingStatusTab, setSavingStatusTab] = useState<'ACTIVE' | 'MATURED' | 'CLOSED'>('ACTIVE');
   const [selectedSavingToToggleStatus, setSelectedSavingToToggleStatus] = useState<MFSavingsRecord | null>(null);
   const [isToggleSavingStatusModalOpen, setIsToggleSavingStatusModalOpen] = useState(false);
   const [savingCenterFilterId, setSavingCenterFilterId] = useState('');
@@ -613,9 +601,22 @@ export const MicroFinanceManagement: React.FC = () => {
     savingType: string;
     product: string;
     amount: number;
-  }>>([
-    { id: 'acc-1', accountNo: 'SAV-1001-01', savingType: 'Normal Saving', product: 'General Saving', amount: 1000 }
-  ]);
+    periodYears: number;
+    maturityDateBs: string;
+  }>>(() => {
+    const initialDate = getTodayBsDate();
+    return [
+      {
+        id: 'acc-1',
+        accountNo: 'SAV-1001-01',
+        savingType: 'Normal Saving',
+        product: 'General Saving',
+        amount: 1000,
+        periodYears: DEFAULT_SAVING_PERIOD_YEARS,
+        maturityDateBs: calculateBsMaturityDateByYears(initialDate, DEFAULT_SAVING_PERIOD_YEARS)
+      }
+    ];
+  });
 
   // Loan Products from Admin Center (filtered by MF checkbox)
   const [loanProductsList, setLoanProductsList] = useState<LoanProduct[]>([]);
@@ -994,6 +995,8 @@ export const MicroFinanceManagement: React.FC = () => {
           'Group Name': m1?.samuhName || defaultGroup,
           'Center Name': m1?.centerName || defaultCenter,
           'Open Date': todayBs,
+          'Period (Years)': DEFAULT_SAVING_PERIOD_YEARS,
+          'Maturity Date (BS)': calculateBsMaturityDateByYears(todayBs, DEFAULT_SAVING_PERIOD_YEARS),
           'Recurring Amount': 1000,
           'Saving Type': filteredMfSavingProducts[0]?.name || 'Normal Saving',
           'Status': 'ACTIVE'
@@ -1005,6 +1008,8 @@ export const MicroFinanceManagement: React.FC = () => {
           'Group Name': m2?.samuhName || defaultGroup,
           'Center Name': m2?.centerName || defaultCenter,
           'Open Date': todayBs,
+          'Period (Years)': DEFAULT_SAVING_PERIOD_YEARS,
+          'Maturity Date (BS)': calculateBsMaturityDateByYears(todayBs, DEFAULT_SAVING_PERIOD_YEARS),
           'Recurring Amount': 1000,
           'Saving Type': filteredMfSavingProducts[0]?.name || 'Normal Saving',
           'Status': 'ACTIVE'
@@ -1333,23 +1338,52 @@ export const MicroFinanceManagement: React.FC = () => {
           const excelGroupNorm = normalizeMfText(excelGroupRaw);
           const excelCenterNorm = normalizeMfText(excelCenterRaw);
 
-          const matchedMember = members.find(m => {
-            if (memberIdRaw) {
-              if (isSameMfMemberId(m.memberId, memberIdRaw)) return true;
-              const mIdDigits = stripLeadingZerosId(m.memberId).replace(/[^a-z0-9]/g, '');
-              if (cleanMemberId && cleanMemberId.length >= 6 && mIdDigits === cleanMemberId) return true;
-              return false;
+          const findMemberByExcelRow = () => {
+            const nameNorm = normalizeMfText(nameRaw);
+            const byId = memberIdRaw
+              ? members.find(m => {
+                  if (isSameMfMemberId(m.memberId, memberIdRaw)) return true;
+                  const mIdDigits = stripLeadingZerosId(m.memberId).replace(/[^a-z0-9]/g, '');
+                  return Boolean(cleanMemberId && cleanMemberId.length >= 6 && mIdDigits === cleanMemberId);
+                })
+              : undefined;
+
+            if (byId) {
+              // Guard against Excel copy-paste typos where Member ID belongs to another member in the same group/center
+              if (nameNorm && normalizeMfText(byId.name) !== nameNorm) {
+                const nameMatches = members.filter(m => {
+                  if (normalizeMfText(m.name) !== nameNorm) return false;
+                  const targetGroup = excelGroupNorm || normalizeMfText(byId.samuhName);
+                  const targetCenter = excelCenterNorm || normalizeMfText(byId.centerName);
+                  if (targetGroup && normalizeMfText(m.samuhName) !== targetGroup) return false;
+                  if (targetCenter && normalizeMfText(m.centerName) !== targetCenter) return false;
+                  return true;
+                });
+                if (nameMatches.length === 1) return nameMatches[0];
+              }
+              return byId;
             }
-            if (accountNoRaw && normalizeMfMemberId(m.savingsAccountNo) === normalizeMfMemberId(accountNoRaw)) {
-              return true;
+
+            if (accountNoRaw) {
+              const byAcc = members.find(
+                m => normalizeMfMemberId(m.savingsAccountNo) === normalizeMfMemberId(accountNoRaw)
+              );
+              if (byAcc) return byAcc;
             }
-            if (nameRaw && normalizeMfText(m.name) === normalizeMfText(nameRaw)) {
-              if (excelGroupNorm && normalizeMfText(m.samuhName) !== excelGroupNorm) return false;
-              if (excelCenterNorm && normalizeMfText(m.centerName) !== excelCenterNorm) return false;
-              return true;
+
+            if (nameNorm) {
+              return members.find(m => {
+                if (normalizeMfText(m.name) !== nameNorm) return false;
+                if (excelGroupNorm && normalizeMfText(m.samuhName) !== excelGroupNorm) return false;
+                if (excelCenterNorm && normalizeMfText(m.centerName) !== excelCenterNorm) return false;
+                return true;
+              });
             }
-            return false;
-          });
+
+            return undefined;
+          };
+
+          const matchedMember = findMemberByExcelRow();
 
           const matchedGroupFromExcel = excelGroupNorm
             ? groups.find(g => normalizeMfText(g.name) === excelGroupNorm || normalizeMfText(g.code) === excelGroupNorm)
@@ -1393,10 +1427,20 @@ export const MicroFinanceManagement: React.FC = () => {
           }
 
           const dateRaw = getExcelCell(row, ['Open Date', 'Date (BS)', 'Date BS', 'Date']);
-          const normalizedBs = normalizeBsDate(dateRaw || todayBs);
+          const normalizedBs = normalizeBsDate(dateRaw || todayBs) || todayBs;
+          const periodRaw = parseExcelNumber(getExcelCell(row, ['Period (Years)', 'Period Years', 'Period', 'Years', 'Tenure']));
+          const periodYears = periodRaw > 0 ? periodRaw : DEFAULT_SAVING_PERIOD_YEARS;
+          const maturityRaw = getExcelCell(row, ['Maturity Date (BS)', 'Maturity Date', 'Maturity']);
+          const maturityDateBs = maturityRaw
+            ? normalizeBsDate(maturityRaw) || calculateBsMaturityDateByYears(normalizedBs, periodYears)
+            : calculateBsMaturityDateByYears(normalizedBs, periodYears);
           const statusRaw = getExcelCell(row, ['Status']).toUpperCase();
-          const status: 'ACTIVE' | 'INACTIVE' =
-            statusRaw === 'INACTIVE' || statusRaw === 'DUE' || statusRaw === 'PENDING' ? 'INACTIVE' : 'ACTIVE';
+          const status: 'ACTIVE' | 'MATURED' | 'CLOSED' =
+            statusRaw === 'CLOSED' || statusRaw === 'INACTIVE' || statusRaw === 'DUE' || statusRaw === 'PENDING'
+              ? 'CLOSED'
+              : statusRaw === 'MATURED'
+              ? 'MATURED'
+              : 'ACTIVE';
 
           items.push({
             memberId: matchedMember?.memberId || memberIdRaw || `M-${1001 + idx}`,
@@ -1405,10 +1449,12 @@ export const MicroFinanceManagement: React.FC = () => {
             groupName: matchedMember?.samuhName || matchedGroupFromExcel?.name || excelGroupRaw || '',
             centerName: matchedMember?.centerName || matchedGroupFromExcel?.centerName || matchedCenterFromExcel?.name || excelCenterRaw || '',
             date: todayAd,
-            dateBs: normalizedBs || todayBs,
+            dateBs: normalizedBs,
             amount,
             savingType: getExcelCell(row, ['Saving Type', 'Product', 'Type']) || filteredMfSavingProducts[0]?.name || 'Normal Saving',
             status,
+            periodYears,
+            maturityDateBs,
             collectedBy: user?.fullName || '',
             receiptNo: '',
             remarks: '',
@@ -1479,17 +1525,40 @@ export const MicroFinanceManagement: React.FC = () => {
           const excelCenterRaw = getExcelCell(row, ['Center Name', 'Center']);
           const excelGroupNorm = normalizeMfText(excelGroupRaw);
           const excelCenterNorm = normalizeMfText(excelCenterRaw);
-          const matchedMember = members.find(m => {
-            if (memberIdRaw) {
-              return isSameMfMemberId(m.memberId, memberIdRaw);
+          const findLoanMemberByExcelRow = () => {
+            const nameNorm = normalizeMfText(nameRaw);
+            const byId = memberIdRaw
+              ? members.find(m => isSameMfMemberId(m.memberId, memberIdRaw))
+              : undefined;
+
+            if (byId) {
+              if (nameNorm && normalizeMfText(byId.name) !== nameNorm) {
+                const nameMatches = members.filter(m => {
+                  if (normalizeMfText(m.name) !== nameNorm) return false;
+                  const targetGroup = excelGroupNorm || normalizeMfText(byId.samuhName);
+                  const targetCenter = excelCenterNorm || normalizeMfText(byId.centerName);
+                  if (targetGroup && normalizeMfText(m.samuhName) !== targetGroup) return false;
+                  if (targetCenter && normalizeMfText(m.centerName) !== targetCenter) return false;
+                  return true;
+                });
+                if (nameMatches.length === 1) return nameMatches[0];
+              }
+              return byId;
             }
-            if (nameRaw && normalizeMfText(m.name) === normalizeMfText(nameRaw)) {
-              if (excelGroupNorm && normalizeMfText(m.samuhName) !== excelGroupNorm) return false;
-              if (excelCenterNorm && normalizeMfText(m.centerName) !== excelCenterNorm) return false;
-              return true;
+
+            if (nameNorm) {
+              return members.find(m => {
+                if (normalizeMfText(m.name) !== nameNorm) return false;
+                if (excelGroupNorm && normalizeMfText(m.samuhName) !== excelGroupNorm) return false;
+                if (excelCenterNorm && normalizeMfText(m.centerName) !== excelCenterNorm) return false;
+                return true;
+              });
             }
-            return false;
-          });
+
+            return undefined;
+          };
+
+          const matchedMember = findLoanMemberByExcelRow();
           const matchedGroupFromExcel = excelGroupNorm
             ? groups.find(g => normalizeMfText(g.name) === excelGroupNorm || normalizeMfText(g.code) === excelGroupNorm)
             : undefined;
@@ -1745,8 +1814,15 @@ export const MicroFinanceManagement: React.FC = () => {
     const membersWithPhotoCount = members.filter(m => Boolean(m.photoUrl && m.photoUrl.trim())).length;
 
     const totalSavingAccounts = savings.length;
-    const activeSavingAccounts = savings.filter(s => getEffectiveSavingStatus(s.status) === 'ACTIVE').length;
-    const closedSavingAccounts = totalSavingAccounts - activeSavingAccounts;
+    let activeSavingAccounts = 0;
+    let maturedSavingAccounts = 0;
+    let closedSavingAccounts = 0;
+    savings.forEach(s => {
+      const eff = getEffectiveSavingStatus(s);
+      if (eff === 'CLOSED') closedSavingAccounts += 1;
+      else if (eff === 'MATURED') maturedSavingAccounts += 1;
+      else activeSavingAccounts += 1;
+    });
 
     let activeLoansCount = 0;
     let maturedLoansCount = 0;
@@ -1779,6 +1855,7 @@ export const MicroFinanceManagement: React.FC = () => {
       membersWithPhotoCount,
       totalSavingAccounts,
       activeSavingAccounts,
+      maturedSavingAccounts,
       closedSavingAccounts,
       totalLoanAccounts,
       activeLoansCount,
@@ -1828,7 +1905,7 @@ export const MicroFinanceManagement: React.FC = () => {
           Boolean(s.groupName && centerGroupNames.has(normalizeMfText(s.groupName)));
         return matchMember || matchDirect;
       });
-      const activeSavingsCount = centerSavings.filter(s => getEffectiveSavingStatus(s.status) === 'ACTIVE').length;
+      const activeSavingsCount = centerSavings.filter(s => getEffectiveSavingStatus(s) !== 'CLOSED').length;
       const closedSavingsCount = centerSavings.length - activeSavingsCount;
 
       const centerLoans = allLoanAccountsForCounts.filter(l => {
@@ -2145,17 +2222,20 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const savingStatusCounts = useMemo(() => {
     let active = 0;
+    let matured = 0;
     let closed = 0;
     baseFilteredSavings.forEach(s => {
-      if (getEffectiveSavingStatus(s.status) === 'CLOSED') closed += 1;
+      const eff = getEffectiveSavingStatus(s);
+      if (eff === 'CLOSED') closed += 1;
+      else if (eff === 'MATURED') matured += 1;
       else active += 1;
     });
-    return { active, closed };
+    return { active, matured, closed };
   }, [baseFilteredSavings]);
 
-  // Filtered Savings by Active / Close tab
+  // Filtered Savings by Active / Mature / Close tab
   const filteredSavings = useMemo(() => {
-    return baseFilteredSavings.filter(s => getEffectiveSavingStatus(s.status) === savingStatusTab);
+    return baseFilteredSavings.filter(s => getEffectiveSavingStatus(s) === savingStatusTab);
   }, [baseFilteredSavings, savingStatusTab]);
 
 
@@ -2274,8 +2354,10 @@ export const MicroFinanceManagement: React.FC = () => {
         'Group': String(item.groupName || linked?.samuhName || ''),
         'Saving Type': String(item.savingType || ''),
         'Open Date': String(resolveSavingOpenDateBs(item) || item.date || ''),
+        'Period (Years)': resolveSavingPeriodYears(item),
+        'Maturity Date (BS)': String(resolveSavingMaturityDateBs(item) || ''),
         'Recurring Amount': Number(item.amount) || 0,
-        'Status': getEffectiveSavingStatus(item.status)
+        'Status': getEffectiveSavingStatus(item)
       };
     });
     exportRowsToExcel(rows, 'Savings', `MF_Savings_${getTodayBsDate()}.xlsx`);
@@ -2730,8 +2812,8 @@ export const MicroFinanceManagement: React.FC = () => {
       alert(getDayEndedBlockMessage());
       return;
     }
-    const currentStatus = getEffectiveSavingStatus(selectedSavingToToggleStatus.status);
-    const nextStatus: 'ACTIVE' | 'CLOSED' = currentStatus === 'ACTIVE' ? 'CLOSED' : 'ACTIVE';
+    const currentStatus = getEffectiveSavingStatus(selectedSavingToToggleStatus);
+    const nextStatus: 'ACTIVE' | 'CLOSED' = currentStatus !== 'CLOSED' ? 'CLOSED' : 'ACTIVE';
     if (nextStatus === 'ACTIVE') {
       const latestSavings = microFinanceService.getSavings();
       const conflict = findActiveDuplicateSaving(
@@ -2756,8 +2838,8 @@ export const MicroFinanceManagement: React.FC = () => {
     setSelectedSavingToToggleStatus(null);
     showToast(
       nextStatus === 'CLOSED'
-        ? `Saving account ${selectedSavingToToggleStatus.accountNo} (${selectedSavingToToggleStatus.name}) deactivated & moved to Close`
-        : `Saving account ${selectedSavingToToggleStatus.accountNo} (${selectedSavingToToggleStatus.name}) activated & moved to Active`
+        ? `Saving account ${selectedSavingToToggleStatus.accountNo} (${selectedSavingToToggleStatus.name}) closed & moved to Close`
+        : `Saving account ${selectedSavingToToggleStatus.accountNo} (${selectedSavingToToggleStatus.name}) activated`
     );
   };
 
@@ -2766,10 +2848,15 @@ export const MicroFinanceManagement: React.FC = () => {
       alert(getDayEndedBlockMessage());
       return;
     }
+    const openBs = resolveSavingOpenDateBs(item) || getTodayBsDate();
+    const periodYears = resolveSavingPeriodYears(item);
+    const maturityDateBs = resolveSavingMaturityDateBs({ ...item, dateBs: openBs, periodYears });
     setEditSavingForm({
       ...item,
-      dateBs: resolveSavingOpenDateBs(item) || getTodayBsDate(),
-      status: getEffectiveSavingStatus(item.status)
+      dateBs: openBs,
+      periodYears,
+      maturityDateBs,
+      status: getEffectiveSavingStatus(item)
     });
     setIsEditSavingModalOpen(true);
   };
@@ -2794,13 +2881,27 @@ export const MicroFinanceManagement: React.FC = () => {
       return;
     }
 
+    const periodYears = resolveSavingPeriodYears(editSavingForm);
+    const maturityDateBs =
+      normalizeBsDate(editSavingForm.maturityDateBs) ||
+      calculateBsMaturityDateByYears(targetBs, periodYears);
+    const desiredStatusRaw = String(editSavingForm.status || 'ACTIVE').toUpperCase();
+    const nextStatus: 'ACTIVE' | 'MATURED' | 'CLOSED' =
+      desiredStatusRaw === 'CLOSED'
+        ? 'CLOSED'
+        : desiredStatusRaw === 'MATURED'
+        ? 'MATURED'
+        : 'ACTIVE';
+
     const updated = microFinanceService.updateSaving(editSavingForm.id, {
       ...editSavingForm,
       accountNo: editSavingForm.accountNo.trim(),
       name: editSavingForm.name.trim(),
       dateBs: targetBs,
+      periodYears,
+      maturityDateBs,
       amount: Number(editSavingForm.amount) || 0,
-      status: getEffectiveSavingStatus(editSavingForm.status)
+      status: nextStatus
     });
     setSavings(updated);
     setMembers(microFinanceService.getMembers());
@@ -2856,20 +2957,23 @@ export const MicroFinanceManagement: React.FC = () => {
   // Handlers for Savings (Supports search directly in input and multiple accounts)
   const handleOpenAddSaving = () => {
     const defaultProduct = filteredMfSavingProducts[0]?.name || 'General Saving';
+    const todayBs = getTodayBsDate();
 
     setSavingFormError(null);
     setSelectedSavingMemberId('');
     setMemberSearchInput('');
     setIsMemberDropdownOpen(false);
-    setSavingDate(getTodayBsDate());
-    // Start with 1 blank account row; accountNo auto-fills once a member is selected
+    setSavingDate(todayBs);
+    // Start with 1 blank account row; period defaults to 6 years with auto-calculated maturity date
     setSavingAccounts([
       {
         id: 'acc-' + Date.now() + '-1',
         accountNo: '',
         savingType: 'Normal Saving',
         product: defaultProduct,
-        amount: 1000
+        amount: 1000,
+        periodYears: DEFAULT_SAVING_PERIOD_YEARS,
+        maturityDateBs: calculateBsMaturityDateByYears(todayBs, DEFAULT_SAVING_PERIOD_YEARS)
       }
     ]);
     setIsSavingModalOpen(true);
@@ -2905,6 +3009,7 @@ export const MicroFinanceManagement: React.FC = () => {
       }) || filteredMfSavingProducts[0];
     const defaultProduct = availableProduct?.name || 'General Saving';
     const defaultAmt = 500;
+    const baseDateBs = normalizeBsDate(savingDate || getTodayBsDate()) || getTodayBsDate();
 
     setSavingAccounts(prev => [
       ...prev,
@@ -2913,7 +3018,9 @@ export const MicroFinanceManagement: React.FC = () => {
         accountNo: `${base}-0${nextIdx}`,
         savingType: defaultType,
         product: defaultProduct,
-        amount: defaultAmt
+        amount: defaultAmt,
+        periodYears: DEFAULT_SAVING_PERIOD_YEARS,
+        maturityDateBs: calculateBsMaturityDateByYears(baseDateBs, DEFAULT_SAVING_PERIOD_YEARS)
       }
     ]);
   };
@@ -2924,9 +3031,46 @@ export const MicroFinanceManagement: React.FC = () => {
     setSavingAccounts(prev => prev.filter(a => a.id !== id));
   };
 
-  const handleUpdateSavingAccount = (id: string, field: 'accountNo' | 'savingType' | 'product' | 'amount', value: string | number) => {
+  const handleUpdateSavingAccount = (
+    id: string,
+    field: 'accountNo' | 'savingType' | 'product' | 'amount' | 'periodYears' | 'maturityDateBs',
+    value: string | number
+  ) => {
     setSavingFormError(null);
-    setSavingAccounts(prev => prev.map(a => a.id === id ? { ...a, [field]: value } : a));
+    setSavingAccounts(prev =>
+      prev.map(a => {
+        if (a.id !== id) return a;
+        if (field === 'periodYears') {
+          const yrs = Number(value);
+          const safeYears = Number.isFinite(yrs) && yrs > 0 ? yrs : 0;
+          const baseDateBs = normalizeBsDate(savingDate || getTodayBsDate()) || getTodayBsDate();
+          return {
+            ...a,
+            periodYears: safeYears,
+            maturityDateBs:
+              safeYears > 0 ? calculateBsMaturityDateByYears(baseDateBs, safeYears) : a.maturityDateBs
+          };
+        }
+        return { ...a, [field]: value };
+      })
+    );
+  };
+
+  const handleSavingDateChange = (newDateBs: string) => {
+    setSavingFormError(null);
+    setSavingDate(newDateBs);
+    const norm = normalizeBsDate(newDateBs);
+    if (norm && /^\d{4}-\d{2}-\d{2}$/.test(norm)) {
+      setSavingAccounts(prev =>
+        prev.map(acc => ({
+          ...acc,
+          maturityDateBs: calculateBsMaturityDateByYears(
+            norm,
+            acc.periodYears > 0 ? acc.periodYears : DEFAULT_SAVING_PERIOD_YEARS
+          )
+        }))
+      );
+    }
   };
 
   const handleSaveSaving = () => {
@@ -2981,6 +3125,10 @@ export const MicroFinanceManagement: React.FC = () => {
       // Save all accounts in a single batch
       savingAccounts.forEach(acc => {
         const typeLabel = acc.product ? `${acc.savingType} (${acc.product})` : acc.savingType;
+        const periodYears = acc.periodYears > 0 ? acc.periodYears : DEFAULT_SAVING_PERIOD_YEARS;
+        const maturityDateBs =
+          normalizeBsDate(acc.maturityDateBs) ||
+          calculateBsMaturityDateByYears(dynamicBsDate, periodYears);
         microFinanceService.addSaving({
           memberId: mem.memberId,
           accountNo: acc.accountNo.trim(),
@@ -2992,6 +3140,8 @@ export const MicroFinanceManagement: React.FC = () => {
           amount: Number(acc.amount) || 0,
           savingType: typeLabel,
           status: 'ACTIVE',
+          periodYears,
+          maturityDateBs,
           collectedBy: user?.fullName || '',
           receiptNo: '',
           createdBy: user?.id || user?.username || '',
@@ -3332,11 +3482,40 @@ export const MicroFinanceManagement: React.FC = () => {
     return true;
   };
 
-  // Strict matcher: ensures loans never leak across members sharing the same name or different center/group
+  // Resolves a unique member when a saving/loan record's memberId was mistyped with another member's ID in the same group/center
+  const resolveTrueOwnerForMislinkedRecord = (
+    record: { memberId?: string; name?: string; groupName?: string; centerName?: string }
+  ): MFMember | null => {
+    const recName = normalizeMfText(record.name);
+    const recMemId = normalizeMfMemberId(record.memberId);
+    if (!recName || !recMemId) return null;
+
+    const idOwner = members.find(m => isSameMfMemberId(m.memberId, recMemId));
+    if (!idOwner || normalizeMfText(idOwner.name) === recName) return null;
+
+    const recGroup = normalizeMfText(record.groupName) || normalizeMfText(idOwner.samuhName);
+    const recCenter = normalizeMfText(record.centerName) || normalizeMfText(idOwner.centerName);
+
+    const exactNameMatches = members.filter(m => {
+      if (normalizeMfText(m.name) !== recName) return false;
+      if (recGroup && normalizeMfText(m.samuhName) !== recGroup) return false;
+      if (recCenter && normalizeMfText(m.centerName) !== recCenter) return false;
+      return true;
+    });
+
+    return exactNameMatches.length === 1 ? exactNameMatches[0] : null;
+  };
+
+  // Strict matcher: ensures loans never leak across members sharing the same name or different center/group,
+  // while safely correcting cross-member Member ID typos when name + group/center uniquely identify another member
   const doesLoanBelongToMember = (loan: MFLoanRecord, mem: MFMember): boolean => {
     const loanMemId = normalizeMfMemberId(loan.memberId);
     const memId = normalizeMfMemberId(mem.memberId);
     if (loanMemId && memId) {
+      const mislinkedOwner = resolveTrueOwnerForMislinkedRecord(loan);
+      if (mislinkedOwner) {
+        return isSameMfMemberId(mislinkedOwner.memberId, memId);
+      }
       return isSameMfMemberId(loanMemId, memId);
     }
 
@@ -3353,72 +3532,57 @@ export const MicroFinanceManagement: React.FC = () => {
     return Boolean(!loanMemId && loanName && memName && loanName === memName);
   };
 
-  // Helper: returns matching ACTIVE saving accounts in Savings Management for a member (strict ID match with leading-zero equivalence, fallback to name + center/group only when saving has no memberId)
-  const getMemberActiveSavings = (mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string; savingsAccountNo?: string }): MFSavingsRecord[] => {
+  const doesSavingBelongToMember = (
+    saving: MFSavingsRecord,
+    mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string; savingsAccountNo?: string }
+  ): boolean => {
     const memId = normalizeMfMemberId(mem.memberId);
+    const savMemId = normalizeMfMemberId(saving.memberId);
+    if (memId && savMemId) {
+      const mislinkedOwner = resolveTrueOwnerForMislinkedRecord(saving);
+      if (mislinkedOwner) {
+        return isSameMfMemberId(mislinkedOwner.memberId, memId);
+      }
+      if (isSameMfMemberId(savMemId, memId)) return true;
+    }
+
     const memAcc = normalizeMfMemberId(mem.savingsAccountNo);
+    if (memAcc && normalizeMfMemberId(saving.accountNo) === memAcc) {
+      return true;
+    }
+
     const memName = normalizeMfText(mem.name);
-    const memGroup = normalizeMfText(mem.samuhName);
-    const memCenter = normalizeMfText(mem.centerName);
-
-    const activeSavings = savings.filter(s => getEffectiveSavingStatus(s.status) === 'ACTIVE');
-
-    if (memId) {
-      const byId = activeSavings.filter(s => isSameMfMemberId(s.memberId, memId));
-      if (byId.length > 0) return byId;
+    const savName = normalizeMfText(saving.name);
+    if (!savMemId && memName && savName === memName) {
+      const sGroup = normalizeMfText(saving.groupName);
+      const memGroup = normalizeMfText(mem.samuhName);
+      const sCenter = normalizeMfText(saving.centerName);
+      const memCenter = normalizeMfText(mem.centerName);
+      if (sGroup && memGroup && sGroup !== memGroup) return false;
+      if (sCenter && memCenter && sCenter !== memCenter) return false;
+      return true;
     }
 
-    if (memAcc) {
-      const byAcc = activeSavings.filter(s => normalizeMfMemberId(s.accountNo) === memAcc);
-      if (byAcc.length > 0) return byAcc;
-    }
-
-    if (memName) {
-      return activeSavings.filter(s => {
-        if (normalizeMfMemberId(s.memberId)) return false;
-        if (normalizeMfText(s.name) !== memName) return false;
-        const sGroup = normalizeMfText(s.groupName);
-        const sCenter = normalizeMfText(s.centerName);
-        if (sGroup && memGroup && sGroup !== memGroup) return false;
-        if (sCenter && memCenter && sCenter !== memCenter) return false;
-        return true;
-      });
-    }
-
-    return [];
+    return false;
   };
 
-  // Helper: returns ALL matching saving accounts (Active + Closed) for a member for profile/history view
-  const getMemberAllSavings = (mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string; savingsAccountNo?: string }): MFSavingsRecord[] => {
-    const memId = normalizeMfMemberId(mem.memberId);
-    const memAcc = normalizeMfMemberId(mem.savingsAccountNo);
-    const memName = normalizeMfText(mem.name);
-    const memGroup = normalizeMfText(mem.samuhName);
-    const memCenter = normalizeMfText(mem.centerName);
+  // Helper: returns matching ACTIVE (unclosed) saving accounts in Savings Management for a member
+  const getMemberActiveSavings = (mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string; savingsAccountNo?: string }): MFSavingsRecord[] => {
+    return savings.filter(
+      s => getEffectiveSavingStatus(s) !== 'CLOSED' && doesSavingBelongToMember(s, mem)
+    );
+  };
 
-    let matched: MFSavingsRecord[] = [];
-    if (memId) {
-      matched = savings.filter(s => isSameMfMemberId(s.memberId, memId));
-    }
-    if (matched.length === 0 && memAcc) {
-      matched = savings.filter(s => normalizeMfMemberId(s.accountNo) === memAcc);
-    }
-    if (matched.length === 0 && memName) {
-      matched = savings.filter(s => {
-        if (normalizeMfMemberId(s.memberId)) return false;
-        if (normalizeMfText(s.name) !== memName) return false;
-        const sGroup = normalizeMfText(s.groupName);
-        const sCenter = normalizeMfText(s.centerName);
-        if (sGroup && memGroup && sGroup !== memGroup) return false;
-        if (sCenter && memCenter && sCenter !== memCenter) return false;
-        return true;
-      });
-    }
+  // Helper: returns ALL matching saving accounts (Active + Matured + Closed) for a member for profile/history view
+  const getMemberAllSavings = (mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string; savingsAccountNo?: string }): MFSavingsRecord[] => {
+    const matched = savings.filter(s => doesSavingBelongToMember(s, mem));
+    const statusRank = (st: 'ACTIVE' | 'MATURED' | 'CLOSED') =>
+      st === 'ACTIVE' ? 0 : st === 'MATURED' ? 1 : 2;
 
     return [...matched].sort((a, b) => {
-      const aActive = getEffectiveSavingStatus(a.status) === 'ACTIVE' ? 0 : 1;
-      const bActive = getEffectiveSavingStatus(b.status) === 'ACTIVE' ? 0 : 1;
-      if (aActive !== bActive) return aActive - bActive;
+      const aRank = statusRank(getEffectiveSavingStatus(a));
+      const bRank = statusRank(getEffectiveSavingStatus(b));
+      if (aRank !== bRank) return aRank - bRank;
       const dA = resolveSavingOpenDateBs(a) || a.date || '';
       const dB = resolveSavingOpenDateBs(b) || b.date || '';
       return dB.localeCompare(dA);
@@ -3974,29 +4138,6 @@ export const MicroFinanceManagement: React.FC = () => {
               </p>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
-              {canViewIdCard && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTab('reports');
-                    setReportTab('id-card');
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
-                >
-                  <CreditCard className="w-3.5 h-3.5 text-[#00593B]" />
-                  <span>Member ID Card</span>
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={reloadData}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#00593B] hover:bg-[#00462e] text-xs font-semibold text-white whitespace-nowrap shrink-0 transition-colors cursor-pointer"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Refresh</span>
-              </button>
-            </div>
           </div>
 
           {/* Row 1: 6 Operational KPI Cards (Pure Counts & Statuses — Zero Saving Balance / Loan Portfolio) */}
@@ -4095,8 +4236,17 @@ export const MicroFinanceManagement: React.FC = () => {
                 </div>
                 <div className="mt-1 text-[11px] text-slate-500 truncate">
                   <span className="font-mono tabular-nums font-semibold text-emerald-700">{dashboardStats.activeSavingAccounts}</span> active
-                  {' · '}
-                  <span className="font-mono tabular-nums text-slate-600">{dashboardStats.closedSavingAccounts}</span> closed
+                  {dashboardStats.maturedSavingAccounts > 0 ? (
+                    <>
+                      {' · '}
+                      <span className="font-mono tabular-nums font-semibold text-amber-600">{dashboardStats.maturedSavingAccounts}</span> matured
+                    </>
+                  ) : (
+                    <>
+                      {' · '}
+                      <span className="font-mono tabular-nums text-slate-600">{dashboardStats.closedSavingAccounts}</span> closed
+                    </>
+                  )}
                 </div>
               </div>
             </button>
@@ -4153,7 +4303,6 @@ export const MicroFinanceManagement: React.FC = () => {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <h3 className="text-sm font-bold text-slate-900">Center-wise Members &amp; Accounts</h3>
-                  <p className="text-xs text-slate-500">Ordered by meeting day · Active accounts count per center</p>
                 </div>
                 <div className="flex items-center gap-4 text-xs font-medium text-slate-600">
                   <span className="inline-flex items-center gap-1.5">
@@ -4216,11 +4365,7 @@ export const MicroFinanceManagement: React.FC = () => {
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <h3 className="text-sm font-bold text-slate-900">Loan Accounts Status</h3>
-                  <p className="text-xs text-slate-500">Account lifecycle count breakdown</p>
                 </div>
-                <span className="font-mono tabular-nums text-xs font-semibold text-slate-600">
-                  {dashboardStats.totalLoanAccounts} total
-                </span>
               </div>
 
               <div className="relative h-44 w-full flex items-center justify-center">
@@ -5244,10 +5389,11 @@ export const MicroFinanceManagement: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
-              {/* Active / Close Switcher */}
+              {/* Active / Mature / Close Switcher */}
               <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
                 {([
                   { key: 'ACTIVE', label: 'Active', count: savingStatusCounts.active },
+                  { key: 'MATURED', label: 'Mature', count: savingStatusCounts.matured },
                   { key: 'CLOSED', label: 'Close', count: savingStatusCounts.closed }
                 ] as const).map(tab => (
                   <button
@@ -5256,7 +5402,9 @@ export const MicroFinanceManagement: React.FC = () => {
                     onClick={() => setSavingStatusTab(tab.key)}
                     className={`px-3.5 py-1.5 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
                       savingStatusTab === tab.key
-                        ? tab.key === 'CLOSED'
+                        ? tab.key === 'MATURED'
+                          ? 'bg-white text-amber-600 shadow-2xs'
+                          : tab.key === 'CLOSED'
                           ? 'bg-white text-rose-600 shadow-2xs'
                           : 'bg-white text-emerald-700 shadow-2xs'
                         : 'text-slate-600 hover:text-slate-900'
@@ -5266,7 +5414,9 @@ export const MicroFinanceManagement: React.FC = () => {
                     <span
                       className={`px-1.5 py-0.2 rounded-md text-[10px] font-mono ${
                         savingStatusTab === tab.key
-                          ? tab.key === 'CLOSED'
+                          ? tab.key === 'MATURED'
+                            ? 'bg-amber-50 text-amber-700'
+                            : tab.key === 'CLOSED'
                             ? 'bg-rose-50 text-rose-700'
                             : 'bg-emerald-50 text-emerald-700'
                           : 'bg-slate-200/70 text-slate-600'
@@ -5418,6 +5568,7 @@ export const MicroFinanceManagement: React.FC = () => {
                     <th className="py-2 px-3">NAME</th>
                     <th className="py-2 px-3">GROUP</th>
                     <th className="py-2 px-3">OPEN DATE</th>
+                    <th className="py-2 px-3">MATURITY DATE</th>
                     <th className="py-2 px-3 text-right">RECURRING AMOUNT</th>
                     <th className="py-2 px-3 text-center">STATUS</th>
                     <th className="py-2 px-3 text-right">ACTION</th>
@@ -5425,7 +5576,10 @@ export const MicroFinanceManagement: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                   {filteredSavings.map((item, idx) => {
-                    const effectiveStatus = getEffectiveSavingStatus(item.status);
+                    const effectiveStatus = getEffectiveSavingStatus(item);
+                    const isOpenAccount = effectiveStatus !== 'CLOSED';
+                    const maturityDateBs = resolveSavingMaturityDateBs(item);
+                    const periodYears = resolveSavingPeriodYears(item);
                     return (
                     <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-2 px-3 text-center text-slate-400 font-bold">{idx + 1}</td>
@@ -5433,16 +5587,24 @@ export const MicroFinanceManagement: React.FC = () => {
                       <td className="py-2 px-3 font-mono font-semibold text-slate-800">{item.accountNo}</td>
                       <td className="py-2 px-3 font-extrabold text-slate-900">{item.name}</td>
                       <td className="py-2 px-3 text-slate-600">{item.groupName || memberLookupById.find(item.memberId, item.accountNo)?.samuhName || '-'}</td>
-                      <td className="py-2 px-3 text-slate-700 font-mono font-bold">
+                      <td className="py-2 px-3 text-slate-700 font-mono font-bold whitespace-nowrap">
                         {resolveSavingOpenDateBs(item) || item.date || '2083-06-29'}
                       </td>
-                      <td className="py-2 px-3 text-right font-black font-mono text-emerald-700">
+                      <td className="py-2 px-3 font-mono whitespace-nowrap">
+                        <span className={`font-bold ${effectiveStatus === 'MATURED' ? 'text-amber-700' : 'text-slate-700'}`}>
+                          {maturityDateBs || '-'}
+                        </span>
+                        <span className="ml-1.5 text-[10px] font-semibold text-slate-400">({periodYears}Y)</span>
+                      </td>
+                      <td className="py-2 px-3 text-right font-black font-mono text-emerald-700 whitespace-nowrap">
                         NPR {item.amount.toLocaleString()}
                       </td>
                       <td className="py-2 px-3 text-center">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
                           effectiveStatus === 'ACTIVE'
                             ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            : effectiveStatus === 'MATURED'
+                            ? 'bg-amber-50 text-amber-700 border border-amber-200'
                             : 'bg-red-50 text-red-700 border border-red-200'
                         }`}>
                           {effectiveStatus}
@@ -5455,19 +5617,19 @@ export const MicroFinanceManagement: React.FC = () => {
                             disabled={isDayEnded}
                             onClick={() => handleOpenToggleSavingStatus(item)}
                             className={`p-1 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                              effectiveStatus === 'ACTIVE'
+                              isOpenAccount
                                 ? 'text-amber-600 hover:text-amber-700 hover:bg-amber-50'
                                 : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'
                             }`}
                             title={
                               isDayEnded
                                 ? 'Day Ended - Action Locked'
-                                : effectiveStatus === 'ACTIVE'
+                                : isOpenAccount
                                 ? 'Deactivate / Close Saving Account'
                                 : 'Activate Saving Account'
                             }
                           >
-                            {effectiveStatus === 'ACTIVE' ? (
+                            {isOpenAccount ? (
                               <Ban className="w-4 h-4" />
                             ) : (
                               <CheckCircle2 className="w-4 h-4" />
@@ -5507,13 +5669,13 @@ export const MicroFinanceManagement: React.FC = () => {
 
                   {filteredSavings.length === 0 && (
                     <tr>
-                      <td colSpan={9} className="py-16 text-center">
+                      <td colSpan={10} className="py-16 text-center">
                         <div className="flex flex-col items-center justify-center space-y-2">
                           <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center">
                             <Search className="w-6 h-6" />
                           </div>
                           <p className="text-sm font-extrabold text-slate-800">
-                            No {savingStatusTab === 'ACTIVE' ? 'active' : 'closed'} saving accounts found.
+                            No {savingStatusTab === 'ACTIVE' ? 'active' : savingStatusTab === 'MATURED' ? 'matured' : 'closed'} saving accounts found.
                           </p>
                           <p className="text-xs text-slate-400">Try adjusting your filters or search term.</p>
                         </div>
@@ -7346,6 +7508,51 @@ export const MicroFinanceManagement: React.FC = () => {
                           />
                         </div>
                       </div>
+
+                      {/* Second Row: Period (Years, default 6) & Auto-Calculated Maturity Date (BS) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1 border-t border-slate-200/60">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                            PERIOD (YEARS)
+                          </label>
+                          <div className="relative flex items-center">
+                            <input
+                              type="number"
+                              min={0.5}
+                              step={0.5}
+                              value={acc.periodYears}
+                              onChange={e => handleUpdateSavingAccount(acc.id, 'periodYears', parseFloat(e.target.value) || 0)}
+                              placeholder="6"
+                              className="w-full px-2.5 py-2 pr-14 bg-white border border-slate-200 rounded-xl font-mono font-bold text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-[#00593B]"
+                            />
+                            <span className="absolute right-3 text-[10px] font-bold text-slate-400 uppercase pointer-events-none">
+                              Years
+                            </span>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                            MATURITY DATE (BS)
+                          </label>
+                          <div className="flex items-center bg-emerald-50/70 focus-within:bg-white border border-emerald-200 focus-within:ring-1 focus-within:ring-[#00593B] rounded-xl pr-1.5">
+                            <input
+                              type="text"
+                              value={acc.maturityDateBs}
+                              onChange={e => handleUpdateSavingAccount(acc.id, 'maturityDateBs', e.target.value)}
+                              placeholder="YYYY-MM-DD"
+                              maxLength={10}
+                              className="w-full px-2.5 py-2 bg-transparent font-mono font-bold text-xs text-emerald-900 focus:outline-hidden"
+                            />
+                            <NepaliDatePicker
+                              value={acc.maturityDateBs || calculateBsMaturityDateByYears(savingDate, acc.periodYears || DEFAULT_SAVING_PERIOD_YEARS)}
+                              onChange={val => handleUpdateSavingAccount(acc.id, 'maturityDateBs', val)}
+                              align="right"
+                              iconOnly
+                            />
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -7360,20 +7567,14 @@ export const MicroFinanceManagement: React.FC = () => {
                   <input
                     type="text"
                     value={savingDate}
-                    onChange={e => {
-                      setSavingFormError(null);
-                      setSavingDate(e.target.value);
-                    }}
+                    onChange={e => handleSavingDateChange(e.target.value)}
                     placeholder="YYYY-MM-DD"
                     maxLength={10}
                     className="w-32 px-3 py-2 bg-transparent font-mono text-slate-800 font-bold focus:outline-hidden"
                   />
                   <NepaliDatePicker
                     value={savingDate}
-                    onChange={val => {
-                      setSavingFormError(null);
-                      setSavingDate(val);
-                    }}
+                    onChange={val => handleSavingDateChange(val)}
                     align="left"
                     iconOnly
                     disallowBackDateIfDisabled
@@ -8804,11 +9005,13 @@ export const MicroFinanceManagement: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <div className="text-sm font-black text-slate-900">{selectedSavingToView.name}</div>
                   <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
-                    getEffectiveSavingStatus(selectedSavingToView.status) === 'ACTIVE'
+                    getEffectiveSavingStatus(selectedSavingToView) === 'ACTIVE'
                       ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                      : getEffectiveSavingStatus(selectedSavingToView) === 'MATURED'
+                      ? 'bg-amber-100 text-amber-800 border border-amber-200'
                       : 'bg-rose-100 text-rose-800 border border-rose-200'
                   }`}>
-                    {getEffectiveSavingStatus(selectedSavingToView.status)}
+                    {getEffectiveSavingStatus(selectedSavingToView)}
                   </span>
                 </div>
                 <div className="text-[11px] text-slate-500 font-medium">
@@ -8834,12 +9037,22 @@ export const MicroFinanceManagement: React.FC = () => {
 
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Open Date (BS)</div>
-                  <div className="font-bold font-mono text-slate-800 mt-0.5">{selectedSavingToView.dateBs || selectedSavingToView.date}</div>
+                  <div className="font-bold font-mono text-slate-800 mt-0.5">{resolveSavingOpenDateBs(selectedSavingToView) || selectedSavingToView.date}</div>
                 </div>
 
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Saving Type / Product</div>
                   <div className="font-bold text-slate-800 mt-0.5">{selectedSavingToView.savingType || 'Normal Saving'}</div>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <div className="text-[10px] text-slate-400 uppercase font-bold">Period</div>
+                  <div className="font-bold font-mono text-slate-800 mt-0.5">{resolveSavingPeriodYears(selectedSavingToView)} Year(s)</div>
+                </div>
+
+                <div className="p-3 bg-amber-50/60 rounded-xl border border-amber-200/80">
+                  <div className="text-[10px] text-amber-700 uppercase font-bold">Maturity Date (BS)</div>
+                  <div className="font-extrabold font-mono text-amber-900 mt-0.5">{resolveSavingMaturityDateBs(selectedSavingToView) || '-'}</div>
                 </div>
               </div>
             </div>
@@ -8950,34 +9163,95 @@ export const MicroFinanceManagement: React.FC = () => {
                   <div>
                     <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">STATUS</label>
                     <select
-                      value={getEffectiveSavingStatus(editSavingForm.status)}
-                      onChange={e => setEditSavingForm({ ...editSavingForm, status: e.target.value as 'ACTIVE' | 'CLOSED' })}
+                      value={getEffectiveSavingStatus(editSavingForm)}
+                      onChange={e => setEditSavingForm({ ...editSavingForm, status: e.target.value as 'ACTIVE' | 'MATURED' | 'CLOSED' })}
                       className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 cursor-pointer"
                     >
                       <option value="ACTIVE">ACTIVE</option>
+                      <option value="MATURED">MATURED</option>
                       <option value="CLOSED">CLOSED</option>
                     </select>
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">OPEN DATE (BS)</label>
-                  <div className="inline-flex items-center bg-slate-50 focus-within:bg-white border border-slate-200 focus-within:ring-1 focus-within:ring-[#00593B] rounded-xl pr-1.5">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">OPEN DATE (BS)</label>
+                    <div className="flex items-center bg-slate-50 focus-within:bg-white border border-slate-200 focus-within:ring-1 focus-within:ring-[#00593B] rounded-xl pr-1.5">
+                      <input
+                        type="text"
+                        value={editSavingForm.dateBs || ''}
+                        onChange={e => {
+                          const newBs = e.target.value;
+                          const norm = normalizeBsDate(newBs);
+                          const yrs = resolveSavingPeriodYears(editSavingForm);
+                          setEditSavingForm({
+                            ...editSavingForm,
+                            dateBs: newBs,
+                            maturityDateBs: norm && /^\d{4}-\d{2}-\d{2}$/.test(norm)
+                              ? calculateBsMaturityDateByYears(norm, yrs)
+                              : editSavingForm.maturityDateBs
+                          });
+                        }}
+                        placeholder="YYYY-MM-DD"
+                        maxLength={10}
+                        className="w-full px-2.5 py-2 bg-transparent font-mono text-slate-800 font-bold focus:outline-hidden"
+                      />
+                      <NepaliDatePicker
+                        value={editSavingForm.dateBs || getTodayBsDate()}
+                        onChange={val => {
+                          const yrs = resolveSavingPeriodYears(editSavingForm);
+                          setEditSavingForm({
+                            ...editSavingForm,
+                            dateBs: val,
+                            maturityDateBs: calculateBsMaturityDateByYears(val, yrs)
+                          });
+                        }}
+                        align="left"
+                        iconOnly
+                        disallowBackDateIfDisabled
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">PERIOD (YEARS)</label>
                     <input
-                      type="text"
-                      value={editSavingForm.dateBs || ''}
-                      onChange={e => setEditSavingForm({ ...editSavingForm, dateBs: e.target.value })}
-                      placeholder="YYYY-MM-DD"
-                      maxLength={10}
-                      className="w-32 px-3 py-2 bg-transparent font-mono text-slate-800 font-bold focus:outline-hidden"
+                      type="number"
+                      min={0.5}
+                      step={0.5}
+                      value={editSavingForm.periodYears ?? DEFAULT_SAVING_PERIOD_YEARS}
+                      onChange={e => {
+                        const yrs = parseFloat(e.target.value) || 0;
+                        const openBs = normalizeBsDate(editSavingForm.dateBs || editSavingForm.date || getTodayBsDate());
+                        setEditSavingForm({
+                          ...editSavingForm,
+                          periodYears: yrs,
+                          maturityDateBs: yrs > 0 && openBs ? calculateBsMaturityDateByYears(openBs, yrs) : editSavingForm.maturityDateBs
+                        });
+                      }}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-mono font-bold text-slate-800"
                     />
-                    <NepaliDatePicker
-                      value={editSavingForm.dateBs || getTodayBsDate()}
-                      onChange={val => setEditSavingForm({ ...editSavingForm, dateBs: val })}
-                      align="left"
-                      iconOnly
-                      disallowBackDateIfDisabled
-                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">MATURITY DATE (BS)</label>
+                    <div className="flex items-center bg-emerald-50/70 focus-within:bg-white border border-emerald-200 focus-within:ring-1 focus-within:ring-[#00593B] rounded-xl pr-1.5">
+                      <input
+                        type="text"
+                        value={editSavingForm.maturityDateBs || ''}
+                        onChange={e => setEditSavingForm({ ...editSavingForm, maturityDateBs: e.target.value })}
+                        placeholder="YYYY-MM-DD"
+                        maxLength={10}
+                        className="w-full px-2.5 py-2 bg-transparent font-mono text-emerald-900 font-bold focus:outline-hidden"
+                      />
+                      <NepaliDatePicker
+                        value={editSavingForm.maturityDateBs || resolveSavingMaturityDateBs(editSavingForm) || getTodayBsDate()}
+                        onChange={val => setEditSavingForm({ ...editSavingForm, maturityDateBs: val })}
+                        align="right"
+                        iconOnly
+                      />
+                    </div>
                   </div>
                 </div>
               </DayEndFieldset>
@@ -9183,7 +9457,7 @@ export const MicroFinanceManagement: React.FC = () => {
       {isViewMemberModalOpen && selectedMemberToView && (() => {
         const effStatus = getEffectiveMemberStatus(selectedMemberToView.status);
         const memberAllSavings = getMemberAllSavings(selectedMemberToView);
-        const memberActiveSavings = memberAllSavings.filter(s => getEffectiveSavingStatus(s.status) === 'ACTIVE');
+        const memberActiveSavings = memberAllSavings.filter(s => getEffectiveSavingStatus(s) !== 'CLOSED');
         const memberClosedSavingsCount = memberAllSavings.length - memberActiveSavings.length;
         const recurringSaving = memberActiveSavings.reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
 
@@ -9399,15 +9673,16 @@ export const MicroFinanceManagement: React.FC = () => {
                             <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
                               <th className="py-2 px-3">Account No.</th>
                               <th className="py-2 px-3">Saving Type</th>
-                              <th className="py-2 px-3">Open Date (BS)</th>
+                              <th className="py-2 px-3">Open / Maturity (BS)</th>
                               <th className="py-2 px-3 text-right">Recurring Amt</th>
                               <th className="py-2 px-3 text-right">Status</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-slate-700">
                             {memberAllSavings.map(sav => {
-                              const savStatus = getEffectiveSavingStatus(sav.status);
+                              const savStatus = getEffectiveSavingStatus(sav);
                               const openDateBs = resolveSavingOpenDateBs(sav) || sav.date || '—';
+                              const maturityDateBs = resolveSavingMaturityDateBs(sav) || '—';
                               return (
                                 <tr key={sav.id} className="hover:bg-slate-50/70">
                                   <td className="py-2.5 px-3 font-mono tabular-nums font-semibold text-slate-900 whitespace-nowrap">
@@ -9417,16 +9692,21 @@ export const MicroFinanceManagement: React.FC = () => {
                                     {sav.savingType || 'Regular Saving'}
                                   </td>
                                   <td className="py-2.5 px-3 font-mono tabular-nums text-slate-600 whitespace-nowrap">
-                                    {openDateBs}
+                                    <div>{openDateBs}</div>
+                                    <div className="text-[10px] text-amber-700">Mat: {maturityDateBs}</div>
                                   </td>
                                   <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-emerald-700 whitespace-nowrap">
                                     NPR {(Number(sav.amount) || 0).toLocaleString()}
                                   </td>
                                   <td className="py-2.5 px-3 text-right whitespace-nowrap">
                                     <span className={`font-semibold ${
-                                      savStatus === 'ACTIVE' ? 'text-emerald-700' : 'text-slate-400'
+                                      savStatus === 'ACTIVE'
+                                        ? 'text-emerald-700'
+                                        : savStatus === 'MATURED'
+                                        ? 'text-amber-600'
+                                        : 'text-slate-400'
                                     }`}>
-                                      {savStatus === 'ACTIVE' ? 'Active' : 'Closed'}
+                                      {savStatus === 'ACTIVE' ? 'Active' : savStatus === 'MATURED' ? 'Matured' : 'Closed'}
                                     </span>
                                   </td>
                                 </tr>
@@ -9673,7 +9953,7 @@ export const MicroFinanceManagement: React.FC = () => {
       {/* MODAL: DEACTIVATE / ACTIVATE SAVING ACCOUNT CONFIRMATION */}
       {/* ============================================================== */}
       {isToggleSavingStatusModalOpen && selectedSavingToToggleStatus && (() => {
-        const isCurrentlyActive = getEffectiveSavingStatus(selectedSavingToToggleStatus.status) === 'ACTIVE';
+        const isCurrentlyActive = getEffectiveSavingStatus(selectedSavingToToggleStatus) !== 'CLOSED';
         return (
           <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-xs flex justify-center items-center p-4">
             <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden p-6 text-center space-y-4 animate-in zoom-in-95 duration-200">

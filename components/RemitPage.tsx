@@ -19,19 +19,13 @@ const DEFAULT_BRANCH_LIST: { id: string; name: string }[] = [
 ];
 
 export const RemitPage: React.FC = () => {
-  const { user, isSuperAdmin, branches: authBranches } = useAuth();
+  const { user, branch, isSuperAdmin, branches: authBranches } = useAuth();
 
-  const isHeadOfficeOrAdmin = useMemo(() => {
-    if (isSuperAdmin) return true;
-    const b = (user?.branchId || '').toLowerCase().trim();
-    return !b || b === 'main' || b === 'headoffice' || b === 'head_office' || user?.roleId === '1';
-  }, [isSuperAdmin, user?.branchId, user?.roleId]);
-
-  const userBranchId = useMemo(() => {
-    const b = (user?.branchId || '').toLowerCase().trim();
+  const loggedInBranchId = useMemo(() => {
+    const b = (branch?.id || user?.branchId || '').toLowerCase().trim();
     if (!b || b === 'main' || b === 'headoffice' || b === 'head_office') return 'main';
     return b;
-  }, [user?.branchId]);
+  }, [branch?.id, user?.branchId]);
 
   // Combined branch list
   const availableBranches = useMemo(() => {
@@ -45,18 +39,22 @@ export const RemitPage: React.FC = () => {
     return Array.from(map.values());
   }, [authBranches]);
 
-  // Active branch filter for Head Office / Super Admin
+  // Active branch filter (Super Admin can switch branches; all other users are locked to their logged-in branch)
   const [selectedBranchFilter, setSelectedBranchFilter] = useState<string>(() => {
-    return isHeadOfficeOrAdmin ? 'all' : userBranchId;
+    return isSuperAdmin ? 'all' : loggedInBranchId;
   });
 
   useEffect(() => {
-    if (!isHeadOfficeOrAdmin) {
-      setSelectedBranchFilter(userBranchId);
+    if (!isSuperAdmin) {
+      setSelectedBranchFilter(loggedInBranchId);
     }
-  }, [isHeadOfficeOrAdmin, userBranchId]);
+  }, [isSuperAdmin, loggedInBranchId]);
 
-  const isDayEnded = useDayEndLock(isHeadOfficeOrAdmin && selectedBranchFilter !== 'all' ? selectedBranchFilter : undefined);
+  const isDayEnded = useDayEndLock(
+    isSuperAdmin
+      ? (selectedBranchFilter !== 'all' ? selectedBranchFilter : undefined)
+      : loggedInBranchId
+  );
 
   const [companies, setCompanies] = useState<RemittanceCompany[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -163,8 +161,9 @@ export const RemitPage: React.FC = () => {
   };
 
   const openAddModal = () => {
-    if (!isHeadOfficeOrAdmin) {
-      alert('Only Head Office / Super Admin can add new remittance partners.');
+    if (!isSuperAdmin) {
+      setToastMessage('Only Super Admin can add new remittance partners.');
+      setTimeout(() => setToastMessage(null), 2500);
       return;
     }
     setEditingCompany(null);
@@ -198,8 +197,8 @@ export const RemitPage: React.FC = () => {
       ? selectedBranchFilter 
       : (comp.branchId && comp.branchId !== 'main' ? comp.branchId : 'all');
 
-    if (!isHeadOfficeOrAdmin) {
-      // Branch user can ONLY change password
+    if (!isSuperAdmin) {
+      // Non-Super-Admin branch user can ONLY change password
       setBranchNewPassword(comp.password || '');
       setIsPasswordOnlyModalOpen(true);
       return;
@@ -396,8 +395,9 @@ export const RemitPage: React.FC = () => {
   };
 
   const handleDelete = async (comp: RemittanceCompany) => {
-    if (!isHeadOfficeOrAdmin) {
-      alert('Only Head Office / Super Admin can delete remittance partners.');
+    if (!isSuperAdmin) {
+      setToastMessage('Only Super Admin can delete remittance partners.');
+      setTimeout(() => setToastMessage(null), 2500);
       return;
     }
     if (window.confirm(`Delete "${comp.name}" login record for ${getBranchLabel(comp.branchId)}?`)) {
@@ -415,7 +415,7 @@ export const RemitPage: React.FC = () => {
   // Filter and sort companies so EVERY branch has all companies
   const filteredAndSortedCompanies = useMemo(() => {
     let list = [...companies];
-    const targetBranch = (isHeadOfficeOrAdmin ? selectedBranchFilter : userBranchId).toLowerCase();
+    const targetBranch = (isSuperAdmin ? selectedBranchFilter : loggedInBranchId).toLowerCase();
 
     if (targetBranch === 'all') {
       // In 'All Branches' mode, show unique company cards (preferring Head Office / main credentials)
@@ -466,7 +466,7 @@ export const RemitPage: React.FC = () => {
     });
 
     return list;
-  }, [companies, selectedBranchFilter, isHeadOfficeOrAdmin, userBranchId]);
+  }, [companies, selectedBranchFilter, isSuperAdmin, loggedInBranchId]);
 
   const getCompanyInitialColor = (name: string) => {
     const n = name.toLowerCase();
@@ -482,43 +482,40 @@ export const RemitPage: React.FC = () => {
   };
 
   const getBranchLabel = (branchId?: string) => {
-    if (!branchId || branchId === 'main') return 'Head Office';
     if (branchId === 'all') return 'All Branches';
-    const found = availableBranches.find(b => b.id.toLowerCase() === branchId.toLowerCase());
-    return found ? found.name : branchId.toUpperCase();
+    const key = (!branchId || branchId === 'headoffice' || branchId === 'head_office') ? 'main' : branchId.toLowerCase();
+    const found = availableBranches.find(b => b.id.toLowerCase() === key);
+    if (found) return found.name;
+    if (key === 'main') return 'Head Office';
+    return key.toUpperCase();
   };
 
   return (
     <div className="flex flex-col h-full bg-slate-50 overflow-hidden font-sans text-slate-900">
       {/* Top Header Bar */}
-      <div className="bg-white border-b border-slate-200 px-5 py-2.5 shrink-0 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
-        <div className="flex items-center space-x-3">
-          <div className="w-8 h-8 rounded-xl bg-rose-700 flex items-center justify-center text-white shadow-xs">
-            <Globe size={18} />
+      <div className="bg-white border-b border-slate-200 px-4 py-2 shrink-0 flex flex-wrap items-center justify-between gap-2.5 shadow-2xs">
+        <div className="flex items-center space-x-2.5">
+          <div className="w-8 h-8 rounded-xl bg-rose-700 flex items-center justify-center text-white shadow-xs shrink-0">
+            <Globe size={17} />
           </div>
           <div>
-            <h1 className="text-base font-black uppercase tracking-tight text-slate-900 leading-tight">
+            <h1 className="text-sm sm:text-base font-black uppercase tracking-tight text-slate-900 leading-tight">
               Remittance Login Detail
             </h1>
             <div className="flex items-center space-x-1.5 text-[10px] font-bold text-slate-500">
               <span>Branch:</span>
               <span className="text-rose-700 uppercase font-black">
-                {isHeadOfficeOrAdmin 
-                  ? (selectedBranchFilter === 'all' ? 'All Branches' : getBranchLabel(selectedBranchFilter)) 
-                  : getBranchLabel(userBranchId)}
+                {isSuperAdmin
+                  ? (selectedBranchFilter === 'all' ? 'All Branches' : getBranchLabel(selectedBranchFilter))
+                  : (branch?.name || getBranchLabel(loggedInBranchId))}
               </span>
-              {!isHeadOfficeOrAdmin && (
-                <span className="text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded border border-slate-200">
-                  Password Change Only
-                </span>
-              )}
             </div>
           </div>
         </div>
 
-        <div className="flex items-center space-x-2">
-          {/* Branch Filter Selector (Visible for Head Office / Super Admin) */}
-          {isHeadOfficeOrAdmin && (
+        {/* Super Admin Controls Only (All Branches, Sync Supabase, Print Sheet, Add Partner) */}
+        {isSuperAdmin && (
+          <div className="flex items-center space-x-2">
             <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
               <Building2 size={13} className="text-slate-500 ml-1.5" />
               <select
@@ -533,29 +530,26 @@ export const RemitPage: React.FC = () => {
                 ))}
               </select>
             </div>
-          )}
 
-          <button
-            onClick={handleManualSyncToSupabase}
-            disabled={isSyncing}
-            className="px-3 py-1.5 rounded-lg border border-sky-200 hover:border-sky-300 bg-sky-50 text-sky-800 text-xs font-bold flex items-center space-x-1.5 transition-all shadow-2xs hover:bg-sky-100 cursor-pointer disabled:opacity-50"
-            title="Sync all credentials directly to Supabase table"
-          >
-            <RefreshCw size={13} className={isSyncing ? "animate-spin text-sky-600" : "text-sky-600"} />
-            <span className="hidden sm:inline">{isSyncing ? "Syncing..." : "Sync Supabase"}</span>
-          </button>
+            <button
+              onClick={handleManualSyncToSupabase}
+              disabled={isSyncing}
+              className="px-3 py-1.5 rounded-lg border border-sky-200 hover:border-sky-300 bg-sky-50 text-sky-800 text-xs font-bold flex items-center space-x-1.5 transition-all shadow-2xs hover:bg-sky-100 cursor-pointer disabled:opacity-50"
+              title="Sync all credentials directly to Supabase table"
+            >
+              <RefreshCw size={13} className={isSyncing ? "animate-spin text-sky-600" : "text-sky-600"} />
+              <span className="hidden sm:inline">{isSyncing ? "Syncing..." : "Sync Supabase"}</span>
+            </button>
 
-          <button
-            onClick={() => window.print()}
-            className="px-3 py-1.5 rounded-lg border border-slate-200 hover:border-slate-300 bg-white text-slate-700 text-xs font-bold flex items-center space-x-1.5 transition-all shadow-2xs hover:bg-slate-50 cursor-pointer"
-            title="Print Credentials Sheet"
-          >
-            <Printer size={14} />
-            <span>Print Sheet</span>
-          </button>
+            <button
+              onClick={() => window.print()}
+              className="px-3 py-1.5 rounded-lg border border-slate-200 hover:border-slate-300 bg-white text-slate-700 text-xs font-bold flex items-center space-x-1.5 transition-all shadow-2xs hover:bg-slate-50 cursor-pointer"
+              title="Print Credentials Sheet"
+            >
+              <Printer size={14} />
+              <span>Print Sheet</span>
+            </button>
 
-          {/* Add Partner Button (Strictly Super Admin / Head Office Only) */}
-          {isHeadOfficeOrAdmin && (
             <button
               onClick={openAddModal}
               disabled={isDayEnded}
@@ -565,12 +559,12 @@ export const RemitPage: React.FC = () => {
               <Plus size={14} strokeWidth={2.5} />
               <span>Add Remittance Partner</span>
             </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Main Content Area - Ultra Compact Cards Grid sorted by S.N. */}
-      <div className="flex-1 overflow-y-auto p-4 md:p-5">
+      <div className="flex-1 overflow-y-auto p-3 md:p-4">
         {isLoading ? (
           <div className="flex items-center justify-center h-48 text-slate-400 text-xs font-bold uppercase tracking-wider">
             Loading...
@@ -580,11 +574,11 @@ export const RemitPage: React.FC = () => {
             <Globe size={28} className="text-slate-400 mb-2" />
             <h3 className="text-sm font-bold text-slate-800">No Remittance Records Found</h3>
             <p className="text-xs text-slate-500 max-w-sm mt-1">
-              {isHeadOfficeOrAdmin 
+              {isSuperAdmin 
                 ? 'No remittance partner credentials have been registered for this branch yet.' 
                 : 'No remittance credentials found for your branch. Please contact Head Office.'}
             </p>
-            {isHeadOfficeOrAdmin && (
+            {isSuperAdmin && (
               <button
                 onClick={openAddModal}
                 disabled={isDayEnded}
@@ -596,7 +590,7 @@ export const RemitPage: React.FC = () => {
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3.5">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 items-start">
             {filteredAndSortedCompanies.map((comp) => {
               // Passwords are SHOWN by default; hidden ONLY if user explicitly toggled it
               const isPwdVisible = !hiddenPasswords[comp.id];
@@ -606,13 +600,13 @@ export const RemitPage: React.FC = () => {
               return (
                 <div 
                   key={comp.id}
-                  className="bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-sm transition-all flex flex-col justify-between overflow-hidden p-3 hover:border-slate-300"
+                  className="bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-sm transition-all flex flex-col overflow-hidden p-2.5 hover:border-slate-300"
                 >
-                  {/* Card Header: Logo + Company Name + Action Controls (CLEAN, NO ALL BRANCHES SUBTITLE) */}
-                  <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
+                  {/* Card Header: Logo + Company Name + Action Controls */}
+                  <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-slate-100">
                     <div className="flex items-center space-x-2 min-w-0 flex-1">
                       {comp.logoUrl ? (
-                        <div className="w-8 h-8 rounded-lg border border-slate-200 bg-white p-0.5 flex items-center justify-center overflow-hidden shrink-0 shadow-2xs">
+                        <div className="w-7 h-7 rounded-lg border border-slate-200 bg-white p-0.5 flex items-center justify-center overflow-hidden shrink-0 shadow-2xs">
                           <img 
                             src={comp.logoUrl} 
                             alt={comp.name} 
@@ -623,7 +617,7 @@ export const RemitPage: React.FC = () => {
                           />
                         </div>
                       ) : (
-                        <div className={`w-8 h-8 rounded-lg ${initialColor} flex items-center justify-center font-black text-xs uppercase shrink-0 shadow-2xs`}>
+                        <div className={`w-7 h-7 rounded-lg ${initialColor} flex items-center justify-center font-black text-[11px] uppercase shrink-0 shadow-2xs`}>
                           {comp.name.substring(0, 2)}
                         </div>
                       )}
@@ -641,35 +635,35 @@ export const RemitPage: React.FC = () => {
                         onClick={() => openEditModal(comp)}
                         disabled={isDayEnded}
                         className={`p-1 rounded-md transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                          isHeadOfficeOrAdmin 
+                          isSuperAdmin 
                             ? 'text-slate-400 hover:text-slate-800 hover:bg-slate-100' 
-                            : 'text-rose-700 hover:bg-rose-50 border border-rose-200 px-1.5 flex items-center space-x-1'
+                            : 'text-rose-700 hover:bg-rose-50 border border-rose-200 px-1.5 py-0.5 flex items-center space-x-1'
                         }`}
-                        title={isDayEnded ? getDayEndedBlockMessage() : (isHeadOfficeOrAdmin ? "Edit Remittance Details" : "Change Password")}
+                        title={isDayEnded ? getDayEndedBlockMessage() : (isSuperAdmin ? "Edit Remittance Details" : "Change Password")}
                       >
-                        <Edit3 size={13} />
-                        {!isHeadOfficeOrAdmin && <span className="text-[9px] font-bold">Password</span>}
+                        <Edit3 size={12} />
+                        {!isSuperAdmin && <span className="text-[9px] font-bold">Password</span>}
                       </button>
 
-                      {/* Delete is ONLY available to Super Admin / Head Office */}
-                      {isHeadOfficeOrAdmin && (
+                      {/* Delete is ONLY available to Super Admin */}
+                      {isSuperAdmin && (
                         <button
                           onClick={() => handleDelete(comp)}
                           disabled={isDayEnded}
                           className="p-1 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           title={isDayEnded ? getDayEndedBlockMessage() : "Delete Partner"}
                         >
-                          <Trash2 size={13} />
+                          <Trash2 size={12} />
                         </button>
                       )}
                     </div>
                   </div>
 
-                  {/* Card Body: Headings directly in front of values */}
+                  {/* Card Body: Compact uniform rows with zero wasted vertical gap */}
                   {/* Order: 1. Username, 2. Password, 3. Access ID, 4. PIN (if Yes), 5. Contact */}
-                  <div className="space-y-1.5 text-xs">
+                  <div className="space-y-1 text-xs">
                     {/* 1. Username */}
-                    <div className="flex items-center justify-between px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
+                    <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
                       <div className="flex items-center space-x-1.5 min-w-0 flex-1">
                         <span className="text-[11px] font-bold text-slate-500 w-16 shrink-0">Username:</span>
                         <span className="font-mono font-bold text-slate-900 truncate select-all text-xs">
@@ -679,7 +673,7 @@ export const RemitPage: React.FC = () => {
                       {comp.username && (
                         <button
                           onClick={() => handleCopy(comp.username, 'Username', `${comp.id}_user`)}
-                          className={`p-1 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
+                          className={`p-0.5 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
                             copiedKey === `${comp.id}_user`
                               ? 'bg-emerald-600 text-white'
                               : 'text-slate-400 hover:text-slate-800 hover:bg-white'
@@ -692,7 +686,7 @@ export const RemitPage: React.FC = () => {
                     </div>
 
                     {/* 2. Password (SHOWS BY DEFAULT; HIDES ON EYE CLICK) */}
-                    <div className="flex items-center justify-between px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
+                    <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
                       <div className="flex items-center space-x-1.5 min-w-0 flex-1">
                         <span className="text-[11px] font-bold text-slate-500 w-16 shrink-0">Password:</span>
                         <span className="font-mono font-bold text-slate-900 truncate select-all text-xs tracking-wider">
@@ -710,14 +704,14 @@ export const RemitPage: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => togglePasswordVisibility(comp.id)}
-                            className="p-1 rounded text-slate-400 hover:text-slate-800 hover:bg-white transition-all cursor-pointer"
+                            className="p-0.5 rounded text-slate-400 hover:text-slate-800 hover:bg-white transition-all cursor-pointer"
                             title={isPwdVisible ? 'Hide Password' : 'Show Password'}
                           >
                             {isPwdVisible ? <EyeOff size={12} /> : <Eye size={12} />}
                           </button>
                           <button
                             onClick={() => handleCopy(comp.password, 'Password', `${comp.id}_pwd`)}
-                            className={`p-1 rounded text-xs transition-all cursor-pointer ${
+                            className={`p-0.5 rounded text-xs transition-all cursor-pointer ${
                               copiedKey === `${comp.id}_pwd`
                                 ? 'bg-emerald-600 text-white'
                                 : 'text-slate-400 hover:text-slate-800 hover:bg-white'
@@ -731,7 +725,7 @@ export const RemitPage: React.FC = () => {
                     </div>
 
                     {/* 3. Access ID */}
-                    <div className="flex items-center justify-between px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
+                    <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
                       <div className="flex items-center space-x-1.5 min-w-0 flex-1">
                         <span className="text-[11px] font-bold text-slate-500 w-16 shrink-0">Access ID:</span>
                         <span className="font-mono font-bold text-slate-900 truncate select-all text-xs">
@@ -741,7 +735,7 @@ export const RemitPage: React.FC = () => {
                       {comp.accessId && (
                         <button
                           onClick={() => handleCopy(comp.accessId, 'Access ID', `${comp.id}_acc`)}
-                          className={`p-1 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
+                          className={`p-0.5 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
                             copiedKey === `${comp.id}_acc`
                               ? 'bg-emerald-600 text-white'
                               : 'text-slate-400 hover:text-slate-800 hover:bg-white'
@@ -755,7 +749,7 @@ export const RemitPage: React.FC = () => {
 
                     {/* 4. PIN (Only shown if usesPin / Has PIN is Yes) */}
                     {usesPin && (
-                      <div className="flex items-center justify-between px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
+                      <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
                         <div className="flex items-center space-x-1.5 min-w-0 flex-1">
                           <span className="text-[11px] font-bold text-slate-500 w-16 shrink-0">PIN:</span>
                           <span className="font-mono font-bold text-slate-900 truncate select-all text-xs">
@@ -765,7 +759,7 @@ export const RemitPage: React.FC = () => {
                         {comp.txnPin && (
                           <button
                             onClick={() => handleCopy(comp.txnPin || '', 'PIN', `${comp.id}_pin`)}
-                            className={`p-1 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
+                            className={`p-0.5 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
                               copiedKey === `${comp.id}_pin`
                                 ? 'bg-emerald-600 text-white'
                                 : 'text-slate-400 hover:text-slate-800 hover:bg-white'
@@ -780,7 +774,7 @@ export const RemitPage: React.FC = () => {
 
                     {/* 5. Contact Phone */}
                     {comp.contactPhone && (
-                      <div className="flex items-center justify-between px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
+                      <div className="flex items-center justify-between px-2 py-1 min-h-[28px] bg-slate-50 hover:bg-slate-100/70 rounded-lg border border-slate-200/70 transition-colors">
                         <div className="flex items-center space-x-1.5 min-w-0 flex-1">
                           <span className="text-[11px] font-bold text-slate-500 w-16 shrink-0">Contact:</span>
                           <span className="font-semibold text-slate-800 truncate text-xs">
@@ -789,7 +783,7 @@ export const RemitPage: React.FC = () => {
                         </div>
                         <button
                           onClick={() => handleCopy(comp.contactPhone || '', 'Contact', `${comp.id}_contact`)}
-                          className={`p-1 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
+                          className={`p-0.5 rounded text-xs transition-all shrink-0 cursor-pointer ml-1 ${
                             copiedKey === `${comp.id}_contact`
                               ? 'bg-emerald-600 text-white'
                               : 'text-slate-400 hover:text-slate-800 hover:bg-white'
@@ -816,8 +810,8 @@ export const RemitPage: React.FC = () => {
         </div>
       )}
 
-      {/* Full Add / Edit Modal (Head Office / Super Admin Only) */}
-      {isModalOpen && isHeadOfficeOrAdmin && (
+      {/* Full Add / Edit Modal (Super Admin Only) */}
+      {isModalOpen && isSuperAdmin && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-[9000] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-150">
           <div className="bg-white w-full max-w-md rounded-2xl border border-slate-200 shadow-xl overflow-hidden my-auto animate-in zoom-in-95 duration-150">
             {/* Modal Header */}

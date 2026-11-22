@@ -9,7 +9,7 @@ import {
   Users as HRLogo, Megaphone, Calculator as CalcIcon,
   Printer, Award, Building2, KeyRound, Lock, LogOut,
   Crown, ArrowRightLeft, Check, CheckCircle2, ChevronDown,
-  Calendar, Clock, Sun, Moon, Globe, Coins, Receipt, TrendingDown
+  Calendar, Clock, Sun, Moon, Globe, Coins, Receipt, TrendingDown, PiggyBank
 } from 'lucide-react';
 
 import { AuthProvider, useAuth } from './AuthContext';
@@ -46,7 +46,7 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import { Permission, PayrollRecord, Employee, Branch, PopupNotice, ChatMessage } from './types';
 import { storageService } from './services/storageService';
 import { loanInsuranceService } from './services/loanInsuranceService';
-import { microFinanceService } from './services/microFinanceService';
+import { microFinanceService, getEffectiveSavingStatus } from './services/microFinanceService';
 import { isBranchMatch } from './services/supabaseService';
 import { isPasswordExpired } from './utils/passwordPolicy';
 import { getUserChatProfile, isMessageFromMe, isMessageForMe, playChatNotificationSound, triggerBrowserNotification } from './utils/chatHelpers';
@@ -327,6 +327,7 @@ const AppLayout: React.FC = () => {
   const [selectedSlip, setSelectedSlip] = useState<PayrollRecord | null>(null);
   const [bimaMaturityCount, setBimaMaturityCount] = useState(0);
   const [loanMaturityCount, setLoanMaturityCount] = useState(0);
+  const [savingMaturityCount, setSavingMaturityCount] = useState(0);
   const [noticeCount, setNoticeCount] = useState(0);
   const [activeLoginPopup, setActiveLoginPopup] = useState<PopupNotice | null>(null);
   const dismissedPopupIdsRef = useRef<Set<string>>(new Set());
@@ -848,6 +849,16 @@ const AppLayout: React.FC = () => {
       }
 
       try {
+        const savings = await microFinanceService.fetchSavingsFromSupabase().catch(() => microFinanceService.getSavings());
+        const maturedSavings = (Array.isArray(savings) ? savings : []).filter(
+          s => getEffectiveSavingStatus(s) === 'MATURED'
+        );
+        setSavingMaturityCount(maturedSavings.length);
+      } catch (error) {
+        console.error("Failed to check Saving maturity alerts", error);
+      }
+
+      try {
         const notices = await storageService.getNotices(branch?.id);
         const todayNotices = Array.isArray(notices)
           ? notices.filter(n => n.status === 'Active' && (isDateToday(n.date) || isCreatedToday(n.createdAt)))
@@ -863,11 +874,13 @@ const AppLayout: React.FC = () => {
     window.addEventListener('storage', checkDailyAlerts);
     window.addEventListener('focus', checkDailyAlerts);
     window.addEventListener('saccos_popup_notice_updated', checkDailyAlerts);
+    window.addEventListener('mf_savings_updated', checkDailyAlerts);
     return () => {
       clearInterval(interval);
       window.removeEventListener('storage', checkDailyAlerts);
       window.removeEventListener('focus', checkDailyAlerts);
       window.removeEventListener('saccos_popup_notice_updated', checkDailyAlerts);
+      window.removeEventListener('mf_savings_updated', checkDailyAlerts);
     };
   }, [branch]);
 
@@ -1228,10 +1241,12 @@ const AppLayout: React.FC = () => {
               {hasPermission('view_alerts') && (() => {
                 const canSeeBima = hasPermission('sub_alert_bima_maturity_view');
                 const canSeeLoan = hasPermission('sub_alert_loan_maturity_view');
+                const canSeeSaving = hasPermission('sub_alert_saving_maturity_view') || hasPermission('sub_alert_loan_maturity_view');
                 const canSeeNotice = hasPermission('sub_alert_notice_view');
                 const totalDailyAlerts =
                   (canSeeBima ? bimaMaturityCount : 0) +
                   (canSeeLoan ? loanMaturityCount : 0) +
+                  (canSeeSaving ? savingMaturityCount : 0) +
                   (canSeeNotice ? noticeCount : 0);
                 return (
                   <div className="relative" ref={alertsRef}>
@@ -1248,7 +1263,7 @@ const AppLayout: React.FC = () => {
                             ? 'bg-amber-500/25 hover:bg-amber-500/35 text-white border-2 border-amber-300/80 shadow-xs'
                             : 'bg-white/10 hover:bg-white/20 text-white border-white/25 hover:border-white/50'
                       }`}
-                      title="Today's Alerts (1 Day)"
+                      title="Alerts & Maturity Notifications"
                     >
                       <div className="relative">
                         <Bell size={17} className={isAlertsMenuOpen ? 'text-rose-900' : 'text-amber-200'} />
@@ -1262,7 +1277,7 @@ const AppLayout: React.FC = () => {
                     </button>
 
                     {isAlertsMenuOpen && (
-                      <div className="absolute right-0 mt-1.5 w-44 bg-white border border-rose-200 rounded-xl shadow-2xl z-[300] animate-in zoom-in-95 duration-150 p-1 font-bold space-y-0.5 overflow-hidden text-slate-900">
+                      <div className="absolute right-0 mt-1.5 w-48 bg-white border border-rose-200 rounded-xl shadow-2xl z-[300] animate-in zoom-in-95 duration-150 p-1 font-bold space-y-0.5 overflow-hidden text-slate-900">
                         {canSeeBima && (
                           <button
                             type="button"
@@ -1305,6 +1320,29 @@ const AppLayout: React.FC = () => {
                               loanMaturityCount > 0 ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-500'
                             }`}>
                               {loanMaturityCount}
+                            </span>
+                          </button>
+                        )}
+
+                        {canSeeSaving && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigate('/micro-finance?tab=saving&status=MATURED');
+                              setIsAlertsMenuOpen(false);
+                            }}
+                            className="w-full flex items-center justify-between px-2 py-1 text-slate-800 hover:bg-teal-50 hover:text-teal-900 rounded-lg transition-all text-[11px] font-bold border border-transparent hover:border-teal-100 cursor-pointer"
+                          >
+                            <div className="flex items-center space-x-1.5 min-w-0">
+                              <div className="w-5 h-5 rounded-md bg-teal-100 border border-teal-200 text-teal-700 flex items-center justify-center shrink-0">
+                                <PiggyBank size={11} />
+                              </div>
+                              <span className="truncate">Saving Maturity</span>
+                            </div>
+                            <span className={`min-w-[18px] h-4 px-1 rounded font-mono text-[10px] font-black flex items-center justify-center tabular-nums shrink-0 ${
+                              savingMaturityCount > 0 ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-500'
+                            }`}>
+                              {savingMaturityCount}
                             </span>
                           </button>
                         )}
