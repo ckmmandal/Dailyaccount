@@ -1312,7 +1312,8 @@ export const fetchWithCache = async <T>(
 
       // Built-in resilient fallback for ledger_accounts queries
       if (key.startsWith('ledger_accounts_')) {
-        const local = getLocalDB<LedgerAccount[]>('ledger_accounts', []);
+        const local = getLocalDB<LedgerAccount[]>('ledger_accounts', [])
+          .filter(a => a && a.id && !String(a.id).startsWith('staff_'));
         setCachedData(key, local as unknown as T, ttlMs);
         return local as unknown as T;
       }
@@ -2518,50 +2519,28 @@ export const supabaseService = {
     })];
     saveLocalDB('employees', updated);
 
-    // Auto sync staff ledger account
+    // Update existing manually-created linked ledger account only (never auto-create new staff ledger accounts)
     try {
-      const localAccs = getLocalDB<LedgerAccount[]>('ledger_accounts', []);
-      const matchedIdx = localAccs.findIndex(a => 
-        (a.employeeId && a.employeeId === empId) ||
-        (a.employeeCode && emp.employeeCode && a.employeeCode.trim().toLowerCase() === emp.employeeCode.trim().toLowerCase()) ||
-        (a.name && emp.fullName && a.name.trim().toLowerCase() === emp.fullName.trim().toLowerCase())
-      );
+      const localAccs = getLocalDB<LedgerAccount[]>('ledger_accounts', [])
+        .filter(a => a && a.id && !String(a.id).startsWith('staff_'));
+      const matchedIdx = localAccs.findIndex(a => a.employeeId && a.employeeId === empId);
       if (matchedIdx >= 0) {
         localAccs[matchedIdx] = {
           ...localAccs[matchedIdx],
           name: emp.fullName.trim(),
-          branchId: emp.branchId || 'main',
+          branchId: emp.branchId || localAccs[matchedIdx].branchId || 'main',
           employeeBranchId: emp.branchId || 'main',
           employeeId: empId,
           employeeCode: emp.employeeCode || localAccs[matchedIdx].employeeCode,
-          type: 'Staff',
           mobile: emp.mobile || localAccs[matchedIdx].mobile,
           status: emp.status === 'Inactive' ? 'Closed' : 'Active'
         };
-      } else {
-        const newStaffAcc: LedgerAccount = {
-          id: `staff_${empId}`,
-          name: emp.fullName.trim(),
-          branchId: emp.branchId || 'main',
-          openingBalance: 0,
-          initialBalance: 0,
-          status: emp.status === 'Inactive' ? 'Closed' : 'Active',
-          createdAt: Date.now(),
-          type: 'Staff',
-          interestRate: 0,
-          mobile: emp.mobile || '',
-          address: emp.permanentAddress || emp.temporaryAddress || '',
-          capitalizationFrequency: 'None',
-          capitalizeToPrincipal: true,
-          employeeId: empId,
-          employeeBranchId: emp.branchId || 'main',
-          employeeCode: emp.employeeCode || ''
-        };
-        localAccs.unshift(newStaffAcc);
+        saveLocalDB('ledger_accounts', localAccs);
+        window.dispatchEvent(new Event('ledgerAccountsUpdated'));
       }
-      saveLocalDB('ledger_accounts', localAccs);
-      window.dispatchEvent(new Event('ledgerAccountsUpdated'));
-    } catch (e) {}
+    } catch (_e) {
+      // ignore local sync notice
+    }
 
     // Persist to Supabase in parallel:
     // A. Upsert to 'employees' table (skipping any previously detected missing schema columns)
@@ -4795,214 +4774,99 @@ export const supabaseService = {
     }
   },
 
-  // Ledger Accounts
+  // Ledger Accounts (strictly user-created accounts only; no auto-generated HR staff accounts)
   async getLedgerAccounts(branchId?: string): Promise<LedgerAccount[]> {
     const key = `ledger_accounts_${normalizeBranchId(branchId)}`;
     return fetchWithCache(key, async () => {
       let remoteParsed: LedgerAccount[] = [];
-    try {
-      // Fetch all ledger accounts so employee accounts created at HO can be mapped to work branches
-      const query = supabase.from('ledger_accounts').select('*');
-      const { data, error } = await query;
-      if (error) throw error;
-      remoteParsed = (data || []).map(a => {
-        let extra = {
-          type: 'Customer',
-          interestRate: 0,
-          mobile: '',
-          address: '',
-          photoUrl: '',
-          capitalizationFrequency: 'None',
-          capitalizeToPrincipal: true,
-          employeeId: '',
-          employeeBranchId: '',
-          employeeCode: ''
-        };
-        
-        if (a.category) {
-          try {
-            if (typeof a.category === 'string' && a.category.trim().startsWith('{')) {
-              const parsed = JSON.parse(a.category);
-              extra = { ...extra, ...parsed };
-            } else if (typeof a.category === 'object' && a.category !== null) {
-              extra = { ...extra, ...a.category };
-            } else {
-              extra.type = String(a.category);
+      let remoteFetchSucceeded = false;
+      try {
+        const query = supabase.from('ledger_accounts').select('*');
+        const { data, error } = await query;
+        if (error) throw error;
+        remoteFetchSucceeded = true;
+        remoteParsed = (data || [])
+          .filter(a => a && a.id && !String(a.id).startsWith('staff_'))
+          .map(a => {
+            let extra = {
+              type: 'Customer',
+              interestRate: 0,
+              mobile: '',
+              address: '',
+              photoUrl: '',
+              capitalizationFrequency: 'None',
+              capitalizeToPrincipal: true,
+              employeeId: '',
+              employeeBranchId: '',
+              employeeCode: ''
+            };
+
+            if (a.category) {
+              try {
+                if (typeof a.category === 'string' && a.category.trim().startsWith('{')) {
+                  const parsed = JSON.parse(a.category);
+                  extra = { ...extra, ...parsed };
+                } else if (typeof a.category === 'object' && a.category !== null) {
+                  extra = { ...extra, ...a.category };
+                } else {
+                  extra.type = String(a.category);
+                }
+              } catch (_e) {
+                extra.type = String(a.category);
+              }
             }
-          } catch (e) {
-            extra.type = String(a.category);
-          }
-        }
 
-        let parsedCreatedAt = Date.now();
-        if (a.created_at) {
-          if (!isNaN(Number(a.created_at))) {
-            parsedCreatedAt = Number(a.created_at);
-          } else {
-            const dt = new Date(a.created_at).getTime();
-            if (!isNaN(dt)) parsedCreatedAt = dt;
-          }
-        }
+            let parsedCreatedAt = Date.now();
+            if (a.created_at) {
+              if (!isNaN(Number(a.created_at))) {
+                parsedCreatedAt = Number(a.created_at);
+              } else {
+                const dt = new Date(a.created_at).getTime();
+                if (!isNaN(dt)) parsedCreatedAt = dt;
+              }
+            }
 
-        return {
-          id: String(a.id),
-          name: String(a.name || ''),
-          branchId: a.branch_id || 'main',
-          openingBalance: Number(a.initial_balance) || 0,
-          initialBalance: Number(a.initial_balance) || 0,
-          status: (a.status || 'Active') as 'Active' | 'Closed',
-          createdAt: parsedCreatedAt,
-          type: (extra.type || 'Customer') as LedgerAccount['type'],
-          interestRate: Number(extra.interestRate) || 0,
-          mobile: extra.mobile || '',
-          address: extra.address || '',
-          photoUrl: extra.photoUrl || '',
-          capitalizationFrequency: (extra.capitalizationFrequency || 'None') as LedgerAccount['capitalizationFrequency'],
-          capitalizeToPrincipal: extra.capitalizeToPrincipal !== false,
-          employeeId: extra.employeeId || undefined,
-          employeeBranchId: extra.employeeBranchId || undefined,
-          employeeCode: extra.employeeCode || undefined
-        };
-      });
-    } catch (e) {
-      console.warn("Falling back to localStorage for getLedgerAccounts query:", e);
-    }
-
-    // Merge remote items with local items so newly created local accounts are never lost
-    const local = getLocalDB<LedgerAccount[]>('ledger_accounts', []);
-    const map = new Map<string, LedgerAccount>();
-
-    // 1. Put remote parsed items
-    remoteParsed.forEach(acc => map.set(acc.id, acc));
-
-    // 2. Merge local items if not already present or if local is newer
-    local.forEach(acc => {
-      if (!acc || !acc.id) return;
-      if (!map.has(acc.id)) {
-        map.set(acc.id, acc);
+            return {
+              id: String(a.id),
+              name: String(a.name || ''),
+              branchId: a.branch_id || 'main',
+              openingBalance: Number(a.initial_balance) || 0,
+              initialBalance: Number(a.initial_balance) || 0,
+              status: (a.status || 'Active') as 'Active' | 'Closed',
+              createdAt: parsedCreatedAt,
+              type: (extra.type || 'Customer') as LedgerAccount['type'],
+              interestRate: Number(extra.interestRate) || 0,
+              mobile: extra.mobile || '',
+              address: extra.address || '',
+              photoUrl: extra.photoUrl || '',
+              capitalizationFrequency: (extra.capitalizationFrequency || 'None') as LedgerAccount['capitalizationFrequency'],
+              capitalizeToPrincipal: extra.capitalizeToPrincipal !== false,
+              employeeId: extra.employeeId || undefined,
+              employeeBranchId: extra.employeeBranchId || undefined,
+              employeeCode: extra.employeeCode || undefined
+            };
+          });
+      } catch (e) {
+        console.warn("Falling back to localStorage for getLedgerAccounts query:", e);
       }
-    });
 
-    // 3. Dynamic binding of all employees from HR Employee Directory
-    let allEmployees: Employee[] = [];
-    try {
-      allEmployees = getLocalDB<Employee[]>('employees', []);
-      if (allEmployees.length === 0) {
-        const { data: empData } = await supabase.from('employees').select('*');
-        if (empData) {
-          allEmployees = empData.map(e => ({
-            id: e.id,
-            fullName: e.full_name,
-            employeeCode: e.employee_code,
-            branchId: e.branch_id || 'main',
-            status: e.status || 'Active',
-            mobile: e.mobile || '',
-            permanentAddress: e.permanent_address || '',
-            temporaryAddress: e.temporary_address || '',
-            department: e.department || '',
-            designation: e.designation || 'Staff',
-            joinedDate: e.joined_date || '',
-            basicSalary: Number(e.basic_salary) || 0,
-            daType: 'Percentage',
-            daValue: 0,
-            dearnessAllowance: 0,
-            gradeRate: 0,
-            gradeRateAmount: 0,
-            hasSSF: false,
-            ssfContribution: 0,
-            hasPF: false,
-            pfContribution: 0,
-            hasGratuity: false,
-            gratuity: 0,
-            hasDashain: false,
-            dashainBonus: 0,
-            hasMedical: false,
-            medicalAllowance: 0,
-            hasBonus: false,
-            bonusYearly: 0,
-            panNo: e.pan_no || '',
-            photoUrl: e.photo_url || '',
-            gender: 'Male',
-            maritalStatus: 'Single',
-            employmentType: 'Permanent'
-          }));
-        }
+      // Use authoritative Supabase rows when online; fall back to cleaned localStorage only if offline
+      const merged: LedgerAccount[] = remoteFetchSucceeded
+        ? remoteParsed
+        : getLocalDB<LedgerAccount[]>('ledger_accounts', [])
+            .filter(acc => acc && acc.id && !String(acc.id).startsWith('staff_'));
+
+      saveLocalDB('ledger_accounts', merged);
+
+      if (branchId && branchId !== 'all') {
+        const targetNorm = normalizeBranchId(branchId);
+        return merged.filter(a => {
+          const aBranchNorm = normalizeBranchId(a.branchId);
+          const empBranchNorm = a.employeeBranchId ? normalizeBranchId(a.employeeBranchId) : '';
+          return aBranchNorm === targetNorm || (empBranchNorm !== '' && empBranchNorm === targetNorm);
+        });
       }
-    } catch (err) {
-      allEmployees = getLocalDB<Employee[]>('employees', []);
-    }
-
-    allEmployees.forEach(emp => {
-      if (!emp || !emp.fullName) return;
-      const empClean = emp.fullName.trim().toLowerCase();
-      const existing = Array.from(map.values()).find(a => 
-        (a.employeeId && a.employeeId === emp.id) ||
-        (a.employeeCode && emp.employeeCode && a.employeeCode.trim().toLowerCase() === emp.employeeCode.trim().toLowerCase()) ||
-        (a.name && a.name.trim().toLowerCase() === empClean)
-      );
-
-      if (existing) {
-        existing.employeeId = emp.id;
-        existing.employeeCode = emp.employeeCode || existing.employeeCode;
-        existing.employeeBranchId = emp.branchId || 'main';
-        existing.type = existing.type || 'Staff';
-        if (emp.status === 'Inactive') existing.status = 'Closed';
-      } else {
-        const autoStaff: LedgerAccount = {
-          id: `staff_${emp.id}`,
-          name: emp.fullName.trim(),
-          branchId: emp.branchId || 'main',
-          openingBalance: 0,
-          initialBalance: 0,
-          status: emp.status === 'Inactive' ? 'Closed' : 'Active',
-          createdAt: Date.now(),
-          type: 'Staff',
-          interestRate: 0,
-          mobile: emp.mobile || '',
-          address: emp.permanentAddress || emp.temporaryAddress || '',
-          capitalizationFrequency: 'None',
-          capitalizeToPrincipal: true,
-          employeeId: emp.id,
-          employeeBranchId: emp.branchId || 'main',
-          employeeCode: emp.employeeCode || ''
-        };
-        map.set(autoStaff.id, autoStaff);
-      }
-    });
-
-    const merged = Array.from(map.values());
-    saveLocalDB('ledger_accounts', merged);
-
-    if (branchId && branchId !== 'all') {
-      const targetNorm = normalizeBranchId(branchId);
-      
-      return merged.filter(a => {
-        const aBranchNorm = normalizeBranchId(a.branchId);
-        const empBranchNorm = normalizeBranchId(a.employeeBranchId);
-
-        // 1. Direct branch account match
-        if (aBranchNorm === targetNorm) return true;
-
-        // 2. Direct employee branch match
-        if (empBranchNorm === targetNorm) return true;
-
-        // 3. Dynamic lookup from employee master
-        if (a.employeeId || a.employeeCode || a.type === 'Staff') {
-          const matchedEmp = allEmployees.find(e => 
-            (a.employeeId && e.id === a.employeeId) ||
-            (a.employeeCode && e.employeeCode && e.employeeCode.trim().toLowerCase() === a.employeeCode.trim().toLowerCase()) ||
-            (e.fullName && a.name && e.fullName.trim().toLowerCase() === a.name.trim().toLowerCase())
-          );
-          if (matchedEmp) {
-            const empActiveBranchNorm = normalizeBranchId(matchedEmp.branchId);
-            if (empActiveBranchNorm === targetNorm) return true;
-          }
-        }
-
-        return false;
-      });
-    }
-    return merged;
+      return merged;
     }, { ttlMs: 30000, timeoutMs: 10000, fallbackLocalKey: 'ledger_accounts', defaultVal: [] });
   },
   async saveLedgerAccount(account: LedgerAccount) {
@@ -5094,15 +4958,19 @@ export const supabaseService = {
   async deleteLedgerAccount(id: string) {
     invalidateMemoryCache('ledger_accounts');
     const local = getLocalDB<LedgerAccount[]>('ledger_accounts', []);
-    saveLocalDB('ledger_accounts', local.filter(a => a.id !== id));
-    try {
-      window.dispatchEvent(new Event('ledgerAccountsUpdated'));
-    } catch (e) {}
+    saveLocalDB('ledger_accounts', local.filter(a => a.id !== id && !String(a.id).startsWith('staff_')));
     try {
       const { error } = await supabase.from('ledger_accounts').delete().eq('id', id);
       if (error) throw error;
     } catch (e) {
       console.warn("Failed to delete ledger account from Supabase, deleted locally:", e);
+    } finally {
+      invalidateMemoryCache('ledger_accounts');
+      try {
+        window.dispatchEvent(new Event('ledgerAccountsUpdated'));
+      } catch (_e) {
+        // ignore
+      }
     }
   },
 

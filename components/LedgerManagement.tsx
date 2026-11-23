@@ -315,11 +315,21 @@ const LedgerManagement: React.FC = () => {
       return;
     }
     const { id } = confirmDelete;
-    await storageService.deleteLedgerAccount(id);
-    await storageService.saveLog(user?.id || 'sys', 'DELETE_LEDGER', `ID: ${id}`, branch?.id);
-    const updatedAccounts = await storageService.getLedgerAccounts(branch?.id);
-    setAccounts(updatedAccounts || []);
-    setConfirmDelete(null);
+    try {
+      await storageService.deleteLedgerAccount(id);
+      setAccounts(prev => prev.filter(a => a.id !== id));
+      await storageService.saveLog(user?.id || 'sys', 'DELETE_LEDGER', `ID: ${id}`, branch?.id).catch(() => {});
+      const updatedAccounts = await storageService.getLedgerAccounts(branch?.id);
+      setAccounts((updatedAccounts || []).filter(a => a.id !== id));
+      setStatusToast('Ledger account deleted successfully!');
+      setTimeout(() => setStatusToast(null), 3000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to delete ledger account.';
+      setStatusToast(msg);
+      setTimeout(() => setStatusToast(null), 3500);
+    } finally {
+      setConfirmDelete(null);
+    }
   };
 
   const resetForm = () => {

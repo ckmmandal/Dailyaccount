@@ -27,78 +27,73 @@ export const EMICalculator: React.FC<{ onClose: () => void }> = ({ onClose }) =>
   const f0 = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
 
   return (
-    <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm z-[6000] flex items-center justify-center p-4 italic font-black text-slate-950 uppercase">
-      <div className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 border-2 border-slate-950">
+    <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm z-[6000] flex items-center justify-center p-3 italic font-black text-slate-950 uppercase">
+      <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 border-2 border-slate-950">
         
-        {/* Header Section - More Compact */}
-        <div className="p-4 px-6 border-b-2 border-slate-100 flex items-center justify-between bg-white relative">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-[#059669] text-white rounded-xl flex items-center justify-center shadow-md">
-              <Calculator size={20} />
+        {/* Header Section - Compact */}
+        <div className="py-3 px-5 border-b border-slate-100 flex items-center justify-between bg-white relative">
+          <div className="flex items-center space-x-2.5">
+            <div className="w-9 h-9 bg-[#059669] text-white rounded-xl flex items-center justify-center shadow-sm">
+              <Calculator size={18} />
             </div>
-            <div className="flex flex-col">
-              <h3 className="text-xl font-black uppercase tracking-tighter text-slate-900 leading-none italic">
-                EMI <span className="text-[#059669]">CALCULATOR</span>
-              </h3>
-              <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest mt-1 italic">
-                INSTALLMENT ESTIMATOR
-              </p>
-            </div>
+            <h3 className="text-lg font-black uppercase tracking-tighter text-slate-900 leading-none italic">
+              EMI <span className="text-[#059669]">CALCULATOR</span>
+            </h3>
           </div>
           <button 
             onClick={onClose} 
-            className="p-2 bg-slate-50 rounded-xl text-slate-400 hover:text-rose-600 transition-all border border-slate-100"
+            className="p-1.5 bg-slate-50 rounded-xl text-slate-400 hover:text-rose-600 transition-all border border-slate-100 cursor-pointer"
           >
-            <X size={20} />
+            <X size={18} />
           </button>
         </div>
 
-        {/* Input Form Section - Optimized Spacing */}
-        <div className="p-6 space-y-5 bg-white">
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest ml-1 italic">
+        {/* Input Form Section - Compact Spacing */}
+        <div className="p-4 space-y-3 bg-white">
+          <div className="space-y-2.5">
+            <div className="space-y-1">
+              <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest ml-1 italic block">
                 PRINCIPAL
               </label>
               <div className="relative">
-                <div className="absolute left-4 top-1/2 -translate-y-1/2 text-[#10b981] font-black text-sm italic">Rs.</div>
+                <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#10b981] font-black text-xs italic">Rs.</div>
                 <input 
                   type="number" 
                   value={values.amount}
                   onChange={e => setValues({...values, amount: e.target.value})}
-                  className="w-full h-12 bg-slate-50 border-2 border-slate-100 rounded-2xl pl-12 pr-6 font-black text-lg text-slate-900 italic outline-none focus:border-[#10b981] transition-all shadow-inner placeholder:text-slate-300"
+                  className="w-full h-10 bg-slate-50 border-2 border-slate-100 rounded-xl pl-11 pr-4 font-black text-base text-slate-900 italic outline-none focus:border-[#10b981] transition-all shadow-inner placeholder:text-slate-300"
                   placeholder="PRINCIPAL AMOUNT..."
                 />
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest ml-1 italic">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest ml-1 italic block">
                   INTEREST
                 </label>
                 <div className="relative">
-                  <Percent className="absolute left-4 top-1/2 -translate-y-1/2 text-[#10b981]" size={16} />
+                  <Percent className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#10b981]" size={15} />
                   <input 
                     type="number" 
                     value={values.interest}
                     onChange={e => setValues({...values, interest: e.target.value})}
-                    className="w-full h-12 bg-slate-50 border-2 border-slate-100 rounded-2xl pl-10 pr-4 font-black text-lg text-slate-900 italic outline-none focus:border-[#10b981] transition-all shadow-inner placeholder:text-slate-300"
+                    className="w-full h-10 bg-slate-50 border-2 border-slate-100 rounded-xl pl-9 pr-3 font-black text-base text-slate-900 italic outline-none focus:border-[#10b981] transition-all shadow-inner placeholder:text-slate-300"
                     placeholder="RATE %"
                   />
                 </div>
               </div>
-              <div className="space-y-1.5">
-                <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest ml-1 italic">
+              <div className="space-y-1">
+                <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest ml-1 italic block">
                   DURATION
                 </label>
                 <div className="relative">
-                  <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 text-[#10b981]" size={16} />
+                  <Calendar className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#10b981]" size={15} />
                   <input 
                     type="number" 
                     value={values.months}
                     onChange={e => setValues({...values, months: e.target.value})}
-                    className="w-full h-12 bg-slate-50 border-2 border-slate-100 rounded-2xl pl-10 pr-4 font-black text-lg text-slate-900 italic outline-none focus:border-[#10b981] transition-all shadow-inner placeholder:text-slate-300"
+                    className="w-full h-10 bg-slate-50 border-2 border-slate-100 rounded-xl pl-9 pr-3 font-black text-base text-slate-900 italic outline-none focus:border-[#10b981] transition-all shadow-inner placeholder:text-slate-300"
                     placeholder="MONTHS"
                   />
                 </div>
@@ -106,36 +101,36 @@ export const EMICalculator: React.FC<{ onClose: () => void }> = ({ onClose }) =>
             </div>
           </div>
 
-          {/* Results Card - All White and Compact */}
-          <div className="bg-emerald-50/30 p-6 rounded-[2rem] border-2 border-emerald-100 shadow-sm relative overflow-hidden text-center">
-            <span className="text-[9px] font-black text-[#059669] uppercase tracking-[0.3em] mb-2 block italic">
+          {/* Results Card - Compact */}
+          <div className="bg-emerald-50/30 px-4 py-3.5 rounded-2xl border-2 border-emerald-100 shadow-sm relative overflow-hidden text-center">
+            <span className="text-[9px] font-black text-[#059669] uppercase tracking-[0.25em] mb-1 block italic">
               MONTHLY EMI AMOUNT
             </span>
             
-            <div className="flex items-center justify-center space-x-1.5 mb-4">
-              <span className="text-2xl font-black text-slate-900 italic tracking-tighter">Rs.</span>
-              <div className="text-4xl font-black text-slate-950 italic tracking-tighter leading-none">
+            <div className="flex items-center justify-center space-x-1.5 mb-2">
+              <span className="text-xl font-black text-slate-900 italic tracking-tighter">Rs.</span>
+              <div className="text-3xl font-black text-slate-950 italic tracking-tighter leading-none">
                 {emiResult > 0 ? f2(emiResult) : "0.00"}
               </div>
             </div>
 
-            <div className="w-24 h-1 bg-[#10b981]/20 mx-auto rounded-full mb-6"></div>
+            <div className="w-20 h-0.5 bg-[#10b981]/25 mx-auto rounded-full mb-2.5"></div>
 
-            <div className="grid grid-cols-2 w-full gap-4 pt-4 border-t border-emerald-200/50">
+            <div className="grid grid-cols-2 w-full gap-3 pt-2.5 border-t border-emerald-200/50">
               <div className="text-center border-r border-emerald-200/50 pr-2">
-                <span className="block text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1 italic">
+                <span className="block text-[8px] font-black text-slate-400 uppercase tracking-widest mb-0.5 italic">
                   TOTAL INTEREST
                 </span>
-                <div className="flex items-center justify-center space-x-1 text-[#059669] font-black text-base italic tracking-tight">
+                <div className="flex items-center justify-center space-x-1 text-[#059669] font-black text-sm italic tracking-tight">
                   <span className="text-[10px]">Rs.</span>
                   <span>{totalInterest > 0 ? f0(totalInterest) : "0"}</span>
                 </div>
               </div>
               <div className="text-center pl-2">
-                <span className="block text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1 italic">
+                <span className="block text-[8px] font-black text-slate-400 uppercase tracking-widest mb-0.5 italic">
                   TOTAL REPAYMENT
                 </span>
-                <div className="flex items-center justify-center space-x-1 text-slate-900 font-black text-base italic tracking-tight">
+                <div className="flex items-center justify-center space-x-1 text-slate-900 font-black text-sm italic tracking-tight">
                   <span className="text-[10px]">Rs.</span>
                   <span>{totalPayment > 0 ? f0(totalPayment) : "0"}</span>
                 </div>
@@ -143,8 +138,8 @@ export const EMICalculator: React.FC<{ onClose: () => void }> = ({ onClose }) =>
             </div>
           </div>
 
-          {/* Action Footer */}
-          <div className="flex flex-col gap-2 pt-1">
+          {/* Action Footer - Compact Single Row */}
+          <div className="flex items-center gap-2 pt-0.5">
             <button 
               onClick={() => {
                 onClose();
@@ -152,16 +147,16 @@ export const EMICalculator: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                 // Navigate to full-page calculator
                 window.location.href = '/calculator';
               }} 
-              className="bg-emerald-600 text-white w-full h-12 rounded-xl font-black uppercase text-[10px] tracking-[0.15em] shadow-lg hover:bg-emerald-700 transition-all active:scale-95 flex items-center justify-center space-x-2 cursor-pointer"
+              className="bg-emerald-600 text-white flex-1 h-10 rounded-xl font-black uppercase text-[10px] tracking-[0.12em] shadow-md hover:bg-emerald-700 transition-all active:scale-95 flex items-center justify-center space-x-1.5 cursor-pointer"
             >
-              <Calculator size={16} />
+              <Calculator size={15} />
               <span>OPEN FULL CALCULATOR</span>
             </button>
             <button 
               onClick={onClose} 
-              className="bg-slate-100 text-slate-700 hover:bg-slate-200 w-full h-10 rounded-xl font-black uppercase text-[10px] tracking-[0.2em] transition-all active:scale-95 flex items-center justify-center space-x-2 cursor-pointer"
+              className="bg-slate-100 text-slate-700 hover:bg-slate-200 px-4 h-10 rounded-xl font-black uppercase text-[10px] tracking-[0.15em] transition-all active:scale-95 flex items-center justify-center space-x-1.5 cursor-pointer shrink-0"
             >
-              <ShieldCheck size={16} />
+              <ShieldCheck size={15} />
               <span>DISMISS</span>
             </button>
           </div>

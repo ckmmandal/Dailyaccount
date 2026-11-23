@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import NepaliDate from 'nepali-date-converter';
 import { 
-  Calendar, ArrowRightLeft, Copy, Check, X, Sparkles, 
-  Clock, CalendarDays, HelpCircle
+  Calendar, ArrowRightLeft, Copy, Check, X, 
+  Clock
 } from 'lucide-react';
 
 interface DateConverterModalProps {
@@ -215,18 +215,9 @@ export const DateConverterModal: React.FC<DateConverterModalProps> = ({ onClose 
                 <Calendar size={22} />
               </div>
               <div>
-                <div className="flex items-center space-x-2">
-                  <h3 className="text-base font-black tracking-tight uppercase">
-                    Date Converter
-                  </h3>
-                  <span className="bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-[9px] font-black uppercase px-2 py-0.5 rounded-full flex items-center space-x-1">
-                    <Sparkles size={10} />
-                    <span>BS ↔ AD</span>
-                  </span>
-                </div>
-                <p className="text-[11px] font-bold text-slate-300 tracking-wide mt-0.5">
-                  Convert dates between Bikram Sambat (BS) and English Calendar (AD)
-                </p>
+                <h3 className="text-base font-black tracking-tight uppercase">
+                  Date Converter
+                </h3>
               </div>
             </div>
 
@@ -255,7 +246,6 @@ export const DateConverterModal: React.FC<DateConverterModalProps> = ({ onClose 
               }`}
             >
               <span className="font-mono">BS → AD</span>
-              <span className="text-[10px] opacity-80">(Bikram Sambat to AD)</span>
             </button>
 
             <button
@@ -273,7 +263,6 @@ export const DateConverterModal: React.FC<DateConverterModalProps> = ({ onClose 
               }`}
             >
               <span className="font-mono">AD → BS</span>
-              <span className="text-[10px] opacity-80">(AD to Bikram Sambat)</span>
             </button>
           </div>
         </div>
@@ -329,7 +318,7 @@ export const DateConverterModal: React.FC<DateConverterModalProps> = ({ onClose 
                 type="text"
                 value={inputDate}
                 onChange={(e) => setInputDate(e.target.value)}
-                placeholder="YYYY-MM-DD (e.g. 2083-05-04)"
+                placeholder="YYYY-MM-DD"
                 maxLength={10}
                 autoFocus
                 className="w-full h-12 bg-slate-50 border-2 border-slate-300 focus:border-emerald-500 rounded-xl px-4 text-base font-black text-slate-900 font-mono tracking-widest focus:outline-none transition-all placeholder:text-slate-400 placeholder:font-normal placeholder:tracking-normal shadow-inner"
@@ -337,16 +326,6 @@ export const DateConverterModal: React.FC<DateConverterModalProps> = ({ onClose 
               <div className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-mono text-xs font-bold pointer-events-none">
                 {mode === 'BS_TO_AD' ? 'BS' : 'AD'}
               </div>
-            </div>
-
-            <div className="flex items-center justify-between text-[11px] text-slate-500 font-bold px-1">
-              <span className="flex items-center space-x-1">
-                <HelpCircle size={12} className="text-slate-400" />
-                <span>Format: <strong className="font-mono text-slate-700">YYYY-MM-DD</strong> (Year-Month-Day)</span>
-              </span>
-              <span className="text-slate-400">
-                {mode === 'BS_TO_AD' ? 'e.g. 2083-05-04' : 'e.g. 2026-08-20'}
-              </span>
             </div>
 
             {conversionError && (
@@ -426,12 +405,7 @@ export const DateConverterModal: React.FC<DateConverterModalProps> = ({ onClose 
         </div>
 
         {/* Modal Footer */}
-        <div className="p-4 bg-white border-t border-slate-200 flex items-center justify-between text-xs font-bold text-slate-500">
-          <div className="flex items-center space-x-2 text-slate-600">
-            <CalendarDays size={15} className="text-emerald-600 shrink-0" />
-            <span>Ratauli Saccos Daily Financial & Calendar Utilities</span>
-          </div>
-
+        <div className="p-4 bg-white border-t border-slate-200 flex items-center justify-end text-xs font-bold text-slate-500">
           <button
             type="button"
             onClick={onClose}

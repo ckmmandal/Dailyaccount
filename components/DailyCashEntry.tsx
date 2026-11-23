@@ -225,9 +225,20 @@ const getInitialLedgerAccounts = (branchId: string): LedgerAccount[] => {
     const raw = localStorage.getItem('saccos_db_ledger_accounts');
     if (raw) {
       const list: LedgerAccount[] = JSON.parse(raw);
-      if (Array.isArray(list)) return list;
+      if (Array.isArray(list)) {
+        const targetNorm = normalizeBranchId(branchId);
+        return list.filter(a => {
+          if (!a || !a.id || String(a.id).startsWith('staff_')) return false;
+          if (!branchId || branchId === 'all') return true;
+          const aBranch = normalizeBranchId(a.branchId);
+          const empBranch = a.employeeBranchId ? normalizeBranchId(a.employeeBranchId) : '';
+          return aBranch === targetNorm || (empBranch !== '' && empBranch === targetNorm);
+        });
+      }
     }
-  } catch (e) {}
+  } catch (_e) {
+    // ignore cache parse errors
+  }
   return [];
 };
 
@@ -627,34 +638,11 @@ const DailyCashEntry: React.FC = () => {
         setAllBranches(branchesList);
       }
 
+      // Show ONLY accounts genuinely created in Ledger Master (never auto-inject HR employees)
       const accMap = new Map<string, LedgerAccount>();
       (accounts || []).forEach(a => {
-        if (a && a.name) accMap.set(a.name.trim().toLowerCase(), a);
-      });
-      
-      (branchEmployees || []).forEach(emp => {
-        if (!emp || !emp.fullName) return;
-        const k = emp.fullName.trim().toLowerCase();
-        if (!accMap.has(k)) {
-          accMap.set(k, {
-            id: `staff_${emp.id}`,
-            name: emp.fullName.trim(),
-            branchId: emp.branchId || currentBranchId,
-            openingBalance: 0,
-            initialBalance: 0,
-            status: emp.status === 'Inactive' ? 'Closed' : 'Active',
-            createdAt: Date.now(),
-            type: 'Staff',
-            interestRate: 0,
-            mobile: emp.mobile || '',
-            email: emp.email || '',
-            address: emp.permanentAddress || emp.temporaryAddress || '',
-            capitalizationFrequency: 'None',
-            capitalizeToPrincipal: true,
-            employeeId: emp.id,
-            employeeBranchId: emp.branchId || currentBranchId,
-            employeeCode: emp.employeeCode || ''
-          });
+        if (a && a.id && a.name && !String(a.id).startsWith('staff_')) {
+          accMap.set(a.name.trim().toLowerCase(), a);
         }
       });
 
@@ -1266,10 +1254,6 @@ const DailyCashEntry: React.FC = () => {
     const nameTrimmed = (newTrans.name || '').trim().toUpperCase();
     const matchedAccount = ledgerAccounts.find(acc => acc.name.trim().toUpperCase() === nameTrimmed);
     const resolvedName = matchedAccount ? matchedAccount.name : newTrans.name.trim();
-
-    if (matchedAccount && matchedAccount.id.startsWith('staff_')) {
-      storageService.saveLedgerAccount(matchedAccount).catch(() => {});
-    }
 
     // Match linked employee or staff record
     const matchedEmployee = (employees || []).find(emp => 
