@@ -16,6 +16,13 @@ import { PasswordRequirementGuide } from './PasswordRequirementGuide';
 import { sendPasswordResetEmailApi } from '../services/pdfEmailService';
 import { isDayEndedForBranch, getDayEndedBlockMessage, useDayEndLock } from '../utils/dayEndLock';
 import { DayEndFieldset } from './DayEndFieldset';
+import {
+  UserMfBranchAccessMode,
+  parseUserMfBranchAccess,
+  applyUserMfBranchAccessToPermissions,
+  getMfBranchAccessSummary,
+  resolveCanonicalBranchKey
+} from '../utils/mfBranchFilter';
 
 // Helper for safe UUID generation
 const safeUUID = (): string => {
@@ -84,6 +91,10 @@ const UserManagement: React.FC = () => {
 
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [originalEditPassword, setOriginalEditPassword] = useState<string>('');
+  const [editMfBranchMode, setEditMfBranchMode] = useState<UserMfBranchAccessMode>('login_only');
+  const [editMfBranchIds, setEditMfBranchIds] = useState<string[]>([]);
+  const [newMfBranchMode, setNewMfBranchMode] = useState<UserMfBranchAccessMode>('login_only');
+  const [newMfBranchIds, setNewMfBranchIds] = useState<string[]>([]);
 
   // Password Reset by Super Admin State
   const [resetUser, setResetUser] = useState<User | null>(null);
@@ -231,10 +242,30 @@ Please use at least 8 characters with upper, lower, number, and special characte
         editingUser.passwordUpdatedAt = Date.now();
       }
 
+      const isEditingSuper =
+        editingUser.username === 'admin' ||
+        editingUser.roleId === '1' ||
+        roles.find(r => r.id === editingUser.roleId)?.name?.toLowerCase().includes('super');
+
+      const nextPermissions = isEditingSuper
+        ? (editingUser.permissions || [])
+        : applyUserMfBranchAccessToPermissions(
+            editingUser.permissions,
+            editMfBranchMode,
+            editMfBranchIds,
+            branches
+          );
+
+      const userToSave: User = {
+        ...editingUser,
+        permissions: nextPermissions
+      };
+
       setLoading(true);
-      await storageService.saveUser(editingUser);
-      const updated = await storageService.getUsers();
+      await storageService.saveUser(userToSave);
+      const updated = await storageService.getUsers({ forceRefresh: true });
       setUsers(updated);
+      window.dispatchEvent(new Event('userPermissionsUpdated'));
       setEditingUser(null);
       alert("User account updated successfully!");
     } catch (error) {
@@ -249,7 +280,7 @@ Please use at least 8 characters with upper, lower, number, and special characte
     try {
       setLoading(true);
       const [u, r, b] = await Promise.all([
-        storageService.getUsers(),
+        storageService.getUsers({ forceRefresh: true }),
         storageService.getRoles(),
         storageService.getBranches()
       ]);
@@ -440,18 +471,28 @@ Please use at least 8 characters with upper, lower, number, and special characte
 
     try {
       setLoading(true);
+      const isNewSuper =
+        newUser.username === 'admin' ||
+        newUser.roleId === '1' ||
+        roles.find(r => r.id === newUser.roleId)?.name?.toLowerCase().includes('super');
+
       const user = {
         ...newUser,
         id: safeUUID(),
         accountCreated: Date.now(),
         passwordUpdatedAt: Date.now(),
         forcePasswordChange: false,
-        permissions: []
+        permissions: isNewSuper
+          ? []
+          : applyUserMfBranchAccessToPermissions([], newMfBranchMode, newMfBranchIds, branches)
       } as User;
       await storageService.saveUser(user);
-      const updated = await storageService.getUsers();
+      const updated = await storageService.getUsers({ forceRefresh: true });
       setUsers(updated);
+      window.dispatchEvent(new Event('userPermissionsUpdated'));
       setShowAdd(false);
+      setNewMfBranchMode('login_only');
+      setNewMfBranchIds([]);
       setNewUser({ 
         fullName: '', 
         username: '', 
@@ -636,6 +677,20 @@ Please use at least 8 characters with upper, lower, number, and special characte
                                    <div className="flex items-center space-x-1 bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded text-[8px] uppercase font-bold">
                                       <span>{u.designation || getRoleName(u.roleId)}</span>
                                    </div>
+                                   {(() => {
+                                     const isSuper =
+                                       u.username === 'admin' ||
+                                       u.roleId === '1' ||
+                                       getRoleName(u.roleId).toLowerCase().includes('super');
+                                     if (isSuper) return null;
+                                     const mfBadge = getMfBranchAccessSummary(u.permissions, branches);
+                                     if (!mfBadge) return null;
+                                     return (
+                                       <div className="flex items-center space-x-1 bg-emerald-50 border border-emerald-200 text-emerald-700 px-1.5 py-0.5 rounded text-[8px] uppercase font-black">
+                                          <span>{mfBadge.label}</span>
+                                       </div>
+                                     );
+                                   })()}
                                 </div>
                              </td>
                              <td className="p-2 border-r border-slate-100">
@@ -660,6 +715,13 @@ Please use at least 8 characters with upper, lower, number, and special characte
                                      onClick={() => {
                                        setEditingUser(u);
                                        setOriginalEditPassword(u.password || '');
+                                       const mfAccess = parseUserMfBranchAccess(u.permissions, [], u.branchId, branches);
+                                       setEditMfBranchMode(mfAccess.mode);
+                                       setEditMfBranchIds(
+                                         mfAccess.mode === 'selected'
+                                           ? mfAccess.explicitBranchKeys
+                                           : [resolveCanonicalBranchKey(u.branchId, branches)].filter(Boolean)
+                                       );
                                      }} 
                                      title={isDayEnded ? getDayEndedBlockMessage() : 'Edit User'}
                                      className="p-2 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white rounded-lg transition-all shadow-2xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
@@ -747,6 +809,76 @@ Please use at least 8 characters with upper, lower, number, and special characte
                             {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                          </select>
                       </div>
+
+                      {!(newUser.roleId === '1' || getRoleName(newUser.roleId || '').toLowerCase().includes('super')) && (
+                        <div className="col-span-2 bg-emerald-50/60 border border-emerald-200 rounded-xl p-3 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] font-black uppercase text-emerald-900">
+                              Micro-Finance Branch Access (Optional)
+                            </span>
+                            <span className="text-[9px] font-bold text-emerald-700">
+                              Cross-branch visibility
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            {([
+                              { id: 'login_only', label: 'Login Branch Only' },
+                              { id: 'all', label: 'All Branches' },
+                              { id: 'selected', label: 'Selected Branches' }
+                            ] as const).map(opt => (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                onClick={() => {
+                                  setNewMfBranchMode(opt.id);
+                                  if (opt.id === 'selected' && newMfBranchIds.length === 0 && newUser.branchId) {
+                                    setNewMfBranchIds([resolveCanonicalBranchKey(newUser.branchId, branches)]);
+                                  }
+                                }}
+                                className={`px-2 py-1.5 rounded-lg text-[10px] font-black border transition-all cursor-pointer ${
+                                  newMfBranchMode === opt.id
+                                    ? 'bg-[#00593B] text-white border-[#00593B]'
+                                    : 'bg-white text-slate-700 border-slate-200 hover:border-emerald-400'
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+                          {newMfBranchMode === 'selected' && (
+                            <div className="grid grid-cols-2 gap-1.5 pt-1">
+                              {branches.map(b => {
+                                const bKey = resolveCanonicalBranchKey(b.id, branches);
+                                const isChecked = newMfBranchIds.includes(bKey);
+                                return (
+                                  <label
+                                    key={b.id}
+                                    className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[10px] font-bold cursor-pointer ${
+                                      isChecked
+                                        ? 'bg-white border-emerald-500 text-emerald-900'
+                                        : 'bg-white/70 border-slate-200 text-slate-600'
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={e => {
+                                        if (e.target.checked) {
+                                          setNewMfBranchIds(prev => Array.from(new Set([...prev, bKey])));
+                                        } else {
+                                          setNewMfBranchIds(prev => prev.filter(k => k !== bKey));
+                                        }
+                                      }}
+                                      className="w-3.5 h-3.5 rounded text-emerald-600 border-slate-300"
+                                    />
+                                    <span className="truncate">{b.name}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
                    </div>
                    </DayEndFieldset>
                    
@@ -883,6 +1015,103 @@ Please use at least 8 characters with upper, lower, number, and special characte
                             <option value="Inactive">Inactive</option>
                          </select>
                       </div>
+
+                      {!(editingUser.username === 'admin' || editingUser.roleId === '1' || getRoleName(editingUser.roleId).toLowerCase().includes('super')) && (
+                        <div className="col-span-2 bg-emerald-50/70 border border-emerald-200 rounded-xl p-3 space-y-2 mt-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] font-black uppercase text-emerald-900 flex items-center gap-1.5">
+                              <Building2 size={12} className="text-emerald-700" />
+                              <span>Micro-Finance Branch Access</span>
+                            </span>
+                            <span className="text-[9px] font-bold text-emerald-700">
+                              All MF Sub-Menus Visibility
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            {([
+                              { id: 'login_only', label: 'Login Branch Only' },
+                              { id: 'all', label: 'All Branches' },
+                              { id: 'selected', label: 'Selected Branches' }
+                            ] as const).map(opt => (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                onClick={() => {
+                                  setEditMfBranchMode(opt.id);
+                                  if (opt.id === 'selected' && editMfBranchIds.length === 0 && editingUser.branchId) {
+                                    setEditMfBranchIds([resolveCanonicalBranchKey(editingUser.branchId, branches)]);
+                                  }
+                                }}
+                                className={`px-2 py-1.5 rounded-lg text-[10px] font-black border transition-all cursor-pointer ${
+                                  editMfBranchMode === opt.id
+                                    ? 'bg-[#00593B] text-white border-[#00593B] shadow-xs'
+                                    : 'bg-white text-slate-700 border-slate-200 hover:border-emerald-400'
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+                          {editMfBranchMode === 'selected' && (
+                            <div className="grid grid-cols-2 gap-1.5 pt-1">
+                              {branches.map(b => {
+                                const bKey = resolveCanonicalBranchKey(b.id, branches);
+                                const isChecked = editMfBranchIds.includes(bKey);
+                                const isOwnBranch = bKey === resolveCanonicalBranchKey(editingUser.branchId, branches);
+                                return (
+                                  <label
+                                    key={b.id}
+                                    className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[10px] font-bold cursor-pointer ${
+                                      isChecked
+                                        ? 'bg-white border-emerald-500 text-emerald-900'
+                                        : 'bg-white/70 border-slate-200 text-slate-600'
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={e => {
+                                        if (e.target.checked) {
+                                          setEditMfBranchIds(prev => Array.from(new Set([...prev, bKey])));
+                                        } else {
+                                          setEditMfBranchIds(prev => prev.filter(k => k !== bKey));
+                                        }
+                                      }}
+                                      className="w-3.5 h-3.5 rounded text-emerald-600 border-slate-300"
+                                    />
+                                    <span className="truncate">{b.name}</span>
+                                    {isOwnBranch && (
+                                      <span className="ml-auto text-[8px] font-black uppercase text-emerald-600">Own</span>
+                                    )}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <p className="text-[9px] font-semibold text-slate-500 leading-tight">
+                            {editMfBranchMode === 'login_only' && 'Default: User only sees Micro-Finance data of their logged-in branch.'}
+                            {editMfBranchMode === 'all' && 'Designated Access: User can view & filter Micro-Finance data of all branches.'}
+                            {editMfBranchMode === 'selected' && 'Designated Access: User can view Micro-Finance data of the checked branches (plus their login branch).'}
+                          </p>
+                          {(() => {
+                            if (editMfBranchMode === 'login_only') return null;
+                            const selectedRole = roles.find(r => r.id === editingUser.roleId);
+                            const rolePerms = Array.isArray(selectedRole?.permissions) ? selectedRole.permissions : [];
+                            const hasRoleMfPerm = rolePerms.some(
+                              p => typeof p === 'string' && (p === 'view_microfinance' || p.startsWith('sub_mf_'))
+                            );
+                            if (hasRoleMfPerm) return null;
+                            return (
+                              <div className="flex items-start gap-1.5 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 text-[9px] font-bold text-amber-800">
+                                <AlertCircle size={12} className="shrink-0 mt-0.5 text-amber-600" />
+                                <span>
+                                  Selected role ({selectedRole?.name || 'Unknown'}) does not have Micro-Finance menu access yet. Assign the Micro Finance role or enable Micro-Finance permissions in Role Management.
+                                </span>
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
                    </div>
                    </DayEndFieldset>
 

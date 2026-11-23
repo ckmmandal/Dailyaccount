@@ -52,7 +52,7 @@ import { isPasswordExpired } from './utils/passwordPolicy';
 import { getUserChatProfile, isMessageFromMe, isMessageForMe, playChatNotificationSound, triggerBrowserNotification } from './utils/chatHelpers';
 import { isDayEndedForBranch, canPerformDayOpen, normalizeLockBranchId } from './utils/dayEndLock';
 import { getTodayBsDateStr, toNormalizedBsDateStr } from './utils/backDateControl';
-import { resolveCanonicalBranchKey, scopeMicroFinanceData } from './utils/mfBranchFilter';
+import { resolveCanonicalBranchKey, parseUserMfBranchAccess, scopeMicroFinanceData } from './utils/mfBranchFilter';
 
 // Individual Slip Print View for Profile Link
 const InternalSalarySlipPrintView = ({ slip, employee, onClose }: { slip: PayrollRecord, employee: any, onClose: () => void }) => {
@@ -309,7 +309,7 @@ const SidebarLink: React.FC<SidebarLinkProps> = ({ to, icon, label, permission, 
 
 const AppLayout: React.FC = () => {
   const navigate = useNavigate();
-  const { user, branch, branches: authBranches, isSuperAdmin, switchBranch, settings, logout, login, refreshUser, hasPermission } = useAuth();
+  const { user, role, branch, branches: authBranches, isSuperAdmin, switchBranch, settings, logout, login, refreshUser, hasPermission } = useAuth();
   const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isAlertsMenuOpen, setIsAlertsMenuOpen] = useState(false);
@@ -839,9 +839,9 @@ const AppLayout: React.FC = () => {
       }
 
       try {
-        const targetBranchKey = isSuperAdmin
-          ? ''
-          : resolveCanonicalBranchKey(branch?.id || branch?.name || user?.branchId, combinedBranches);
+        const loggedInKey = resolveCanonicalBranchKey(branch?.id || branch?.name || user?.branchId, combinedBranches);
+        const mfAccess = parseUserMfBranchAccess(user?.permissions, role?.permissions, loggedInKey, combinedBranches);
+        const targetBranchKeys = isSuperAdmin || mfAccess.mode === 'all' ? [] : mfAccess.allowedBranchKeys;
 
         let centersRaw = microFinanceService.getCenters();
         let groupsRaw = microFinanceService.getGroups();
@@ -849,7 +849,7 @@ const AppLayout: React.FC = () => {
         let loansRaw: Awaited<ReturnType<typeof microFinanceService.fetchActiveLoansFromSupabase>>;
         let savingsRaw: Awaited<ReturnType<typeof microFinanceService.fetchSavingsFromSupabase>>;
 
-        if (targetBranchKey && (centersRaw.length === 0 || membersRaw.length === 0)) {
+        if (targetBranchKeys.length > 0 && (centersRaw.length === 0 || membersRaw.length === 0)) {
           const allMf = await microFinanceService.fetchAllFromSupabase().catch(() => null);
           if (allMf) {
             centersRaw = allMf.centers;
@@ -876,7 +876,7 @@ const AppLayout: React.FC = () => {
           members: membersRaw,
           savings: Array.isArray(savingsRaw) ? savingsRaw : [],
           loans: Array.isArray(loansRaw) ? loansRaw : [],
-          targetBranchKey,
+          targetBranchKeys,
           branches: combinedBranches
         });
 
@@ -918,7 +918,7 @@ const AppLayout: React.FC = () => {
       window.removeEventListener('saccos_popup_notice_updated', checkDailyAlerts);
       window.removeEventListener('mf_savings_updated', checkDailyAlerts);
     };
-  }, [branch, isSuperAdmin, user?.branchId, combinedBranches]);
+  }, [branch, isSuperAdmin, user?.branchId, user?.permissions, role?.permissions, combinedBranches]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -962,14 +962,14 @@ const AppLayout: React.FC = () => {
         });
         setLinkedEmployee(linked || null);
 
-        // If user branch is missing or default, but linked employee has a specific branch, auto-sync (ONLY for non-superadmin)
-        if (!isSuperAdmin && linked && linked.branchId && (!user.branchId || user.branchId === 'main' || user.branchId !== linked.branchId)) {
-          const updatedUser = { 
-            ...user, 
-            branchId: linked.branchId, 
+        // If user branch is missing, auto-fill from linked employee (never overwrite Admin-assigned branchId)
+        if (!isSuperAdmin && linked && linked.branchId && !user.branchId) {
+          const updatedUser = {
+            ...user,
+            branchId: linked.branchId,
             designation: linked.designation || user.designation,
             department: linked.department || user.department,
-            profilePhoto: linked.photoUrl || user.profilePhoto 
+            profilePhoto: linked.photoUrl || user.profilePhoto
           };
           login(updatedUser);
         }

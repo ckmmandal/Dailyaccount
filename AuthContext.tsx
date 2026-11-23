@@ -1,4 +1,4 @@
-import React, { useState, createContext, useContext, useEffect } from 'react';
+import React, { useState, createContext, useContext, useEffect, useRef } from 'react';
 import { User, Permission, Role, Branch, SystemSettings } from './types';
 import { supabaseService } from './services/supabaseService';
 
@@ -66,6 +66,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return null;
     }
   });
+  const userRef = useRef<User | null>(user);
+  userRef.current = user;
+  const lastFocusSyncRef = useRef<number>(0);
+
+  const safePersistAuthUser = (u: User | null) => {
+    try {
+      if (!u) {
+        localStorage.removeItem('ZEN_AUTH_USER');
+        return;
+      }
+      localStorage.setItem('ZEN_AUTH_USER', JSON.stringify(u));
+    } catch {
+      if (u) {
+        try {
+          const compact: User = {
+            ...u,
+            profilePhoto:
+              typeof u.profilePhoto === 'string' && u.profilePhoto.length > 8000 ? undefined : u.profilePhoto
+          };
+          localStorage.setItem('ZEN_AUTH_USER', JSON.stringify(compact));
+        } catch {
+          // Ignore persistent storage errors
+        }
+      }
+    }
+  };
   const [settings, setSettings] = useState<SystemSettings | null>(() => {
     try {
       const saved = localStorage.getItem('ZEN_AUTH_SETTINGS') || localStorage.getItem('saccos_db_settings');
@@ -175,38 +201,60 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try { localStorage.setItem('saccos_db_branches', JSON.stringify(b)); } catch {}
       }
 
-      // If user is logged in, check if their branchId needs to be resolved or synced from HR employees (for non-superadmin)
-      if (user) {
-        const updatedUser = { ...user };
-        let needsUpdate = false;
-        const userIsSuper = user.username === 'admin' || user.roleId === '1';
+      // If user is logged in, refresh latest permissions/role directly from Supabase (uncached)
+      const activeUser = userRef.current;
+      if (activeUser) {
+        const remoteUser =
+          (await supabaseService
+            .getFreshUserByIdOrUsername({ id: activeUser.id, username: activeUser.username })
+            .catch(() => null)) ||
+          (await supabaseService
+            .getUsers({ forceRefresh: true })
+            .then(list =>
+              (Array.isArray(list) ? list : []).find(
+                u => u && (u.id === activeUser.id || u.username === activeUser.username)
+              ) || null
+            )
+            .catch(() => null));
 
-        if (!userIsSuper) {
+        const updatedUser: User = remoteUser
+          ? {
+              ...activeUser,
+              ...remoteUser,
+              permissions: Array.isArray(remoteUser.permissions) ? remoteUser.permissions : [],
+              profilePhoto: remoteUser.profilePhoto || activeUser.profilePhoto
+            }
+          : { ...activeUser };
+        let needsUpdate = Boolean(remoteUser);
+        const userIsSuper = updatedUser.username === 'admin' || updatedUser.roleId === '1';
+
+        if (!userIsSuper && !updatedUser.branchId) {
           const linkedEmp = (emps || []).find(e => {
             const empName = (e.fullName || '').toLowerCase().trim();
-            const uName = (user.fullName || '').toLowerCase().trim();
+            const uName = (updatedUser.fullName || '').toLowerCase().trim();
             const sameName = empName !== '' && empName === uName;
 
             const empEmail = (e.email || '').toLowerCase().trim();
-            const uEmail = (user.email || '').toLowerCase().trim();
+            const uEmail = (updatedUser.email || '').toLowerCase().trim();
             const sameEmail = empEmail !== '' && uEmail !== '' && empEmail === uEmail;
 
             const empCode = (e.employeeCode || '').toLowerCase().trim();
-            const uUsername = (user.username || '').toLowerCase().trim();
+            const uUsername = (updatedUser.username || '').toLowerCase().trim();
             const sameCode = empCode !== '' && empCode === uUsername;
 
             return sameName || sameEmail || sameCode;
           });
 
-          if (linkedEmp && linkedEmp.branchId && (!updatedUser.branchId || updatedUser.branchId === 'main' || updatedUser.branchId !== linkedEmp.branchId)) {
+          if (linkedEmp && linkedEmp.branchId) {
             updatedUser.branchId = linkedEmp.branchId;
             needsUpdate = true;
           }
         }
 
         if (needsUpdate) {
+          userRef.current = updatedUser;
           setUser(updatedUser);
-          localStorage.setItem('ZEN_AUTH_USER', JSON.stringify(updatedUser));
+          safePersistAuthUser(updatedUser);
         }
       }
     } catch (error) {
@@ -223,29 +271,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = (u: User) => {
     // Normalizing user branchId on login
-    let finalUser = { ...u };
-    if (!finalUser.branchId && (finalUser as any).branch_id) {
-      finalUser.branchId = (finalUser as any).branch_id;
-    }
+    const rawBranch = (u as User & { branch_id?: string }).branch_id;
+    const finalUser: User = {
+      ...u,
+      branchId: u.branchId || rawBranch || 'main',
+      permissions: Array.isArray(u.permissions) ? u.permissions : []
+    };
+    userRef.current = finalUser;
     setUser(finalUser);
-    localStorage.setItem('ZEN_AUTH_USER', JSON.stringify(finalUser));
-    // Immediately refresh roles and user data in the background
-    refreshRoles().catch(() => {});
-    refreshUser().catch(() => {});
+    safePersistAuthUser(finalUser);
+    // Immediately refresh roles and latest user permissions directly from Supabase
+    void refreshRoles().catch(() => {});
+    void refreshUser(finalUser).catch(() => {});
   };
 
   const logout = () => {
-    if (user) {
+    const activeUser = userRef.current;
+    if (activeUser) {
       void supabaseService.saveLog(
-        user.id || user.username || 'admin',
+        activeUser.id || activeUser.username || 'admin',
         'USER_LOGOUT',
-        `User @${user.username} (${user.fullName}) signed out`,
-        user.branchId || 'main'
+        `User @${activeUser.username} (${activeUser.fullName}) signed out`,
+        activeUser.branchId || 'main'
       ).catch(() => {});
     }
+    supabaseService.invalidateMemoryCache('users');
+    supabaseService.invalidateMemoryCache('roles');
+    userRef.current = null;
     setUser(null);
-    localStorage.removeItem('ZEN_AUTH_USER');
-    localStorage.removeItem('ZEN_ACTIVE_BRANCH_ID');
+    safePersistAuthUser(null);
+    try {
+      localStorage.removeItem('ZEN_ACTIVE_BRANCH_ID');
+    } catch {
+      // Ignore storage errors
+    }
   };
 
   const switchBranch = (target: string | Branch) => {
@@ -262,9 +321,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ...user,
       branchId: targetId
     };
+    userRef.current = updatedUser;
     setUser(updatedUser);
-    localStorage.setItem('ZEN_AUTH_USER', JSON.stringify(updatedUser));
-    localStorage.setItem('ZEN_ACTIVE_BRANCH_ID', targetId);
+    safePersistAuthUser(updatedUser);
+    try {
+      localStorage.setItem('ZEN_ACTIVE_BRANCH_ID', targetId);
+    } catch {
+      // Ignore storage errors
+    }
     window.dispatchEvent(new CustomEvent('branchSwitched', { detail: { branchId: targetId } }));
     
     // Automatically refresh the page to reload all branch data cleanly
@@ -330,6 +394,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const refreshRoles = async () => {
     try {
+      supabaseService.invalidateMemoryCache('roles');
       const r = await supabaseService.getRoles();
       if (Array.isArray(r) && r.length > 0) {
         setRoles(r);
@@ -345,20 +410,64 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setBranches(b || []);
   };
 
-  const refreshUser = async () => {
-    if (!user) return;
+  const refreshUser = async (overrideUser?: User) => {
+    const target = overrideUser || userRef.current;
+    if (!target) return;
     try {
-      const users = await supabaseService.getUsers().catch(() => []);
-      const safeUsers = Array.isArray(users) ? users : [];
-      const current = safeUsers.find(u => u && (u.id === user.id || u.username === user.username));
-      if (current) {
-        setUser(current);
-        localStorage.setItem('ZEN_AUTH_USER', JSON.stringify(current));
+      const fresh =
+        (await supabaseService
+          .getFreshUserByIdOrUsername({ id: target.id, username: target.username })
+          .catch(() => null)) ||
+        (await supabaseService
+          .getUsers({ forceRefresh: true })
+          .then(users => {
+            const safeUsers = Array.isArray(users) ? users : [];
+            return (
+              safeUsers.find(u => u && (u.id === target.id || u.username === target.username)) ||
+              null
+            );
+          })
+          .catch(() => null));
+
+      if (fresh) {
+        const merged: User = {
+          ...target,
+          ...fresh,
+          permissions: Array.isArray(fresh.permissions) ? fresh.permissions : [],
+          profilePhoto: fresh.profilePhoto || target.profilePhoto
+        };
+        // Avoid replacing if user logged out while request was in flight
+        if (!userRef.current || userRef.current.username !== target.username) return;
+        userRef.current = merged;
+        setUser(merged);
+        safePersistAuthUser(merged);
       }
     } catch (e) {
       console.warn("Could not refresh user:", e);
     }
   };
+
+  // Auto-sync latest permissions & roles when user returns to tab or User Management updates permissions
+  useEffect(() => {
+    if (!user) return;
+    const handlePermEvent = () => {
+      void refreshUser();
+      void refreshRoles();
+    };
+    const handleFocusSync = () => {
+      const now = Date.now();
+      if (now - lastFocusSyncRef.current < 5000) return;
+      lastFocusSyncRef.current = now;
+      void refreshUser();
+      void refreshRoles();
+    };
+    window.addEventListener('userPermissionsUpdated', handlePermEvent);
+    window.addEventListener('focus', handleFocusSync);
+    return () => {
+      window.removeEventListener('userPermissionsUpdated', handlePermEvent);
+      window.removeEventListener('focus', handleFocusSync);
+    };
+  }, [user?.id, user?.username]);
 
   const role = user ? (Array.isArray(roles) ? roles : []).find(r => 
     r && (

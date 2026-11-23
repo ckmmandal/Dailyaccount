@@ -38,6 +38,7 @@ interface GroupMeetingMinutesModuleProps {
   onToast?: (msg: string) => void;
   branchId?: string;
   activeBranchKey?: string;
+  activeBranchKeys?: string[];
 }
 
 const nepaliMonthsEnglish = [
@@ -82,7 +83,8 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
   logoUrl = '/system_logo.png',
   onToast = () => {},
   branchId,
-  activeBranchKey
+  activeBranchKey,
+  activeBranchKeys
 }) => {
   const isDayEnded = useDayEndLock(branchId);
   // Current BS Date calculation
@@ -642,10 +644,10 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
     setPendingTemplateConfirm(null);
   };
 
-  // Filtered meetings for records table (branch-scoped when activeBranchKey is set)
+  // Filtered meetings for records table (branch-scoped when activeBranchKey/activeBranchKeys is set)
   const filteredRecords = useMemo(() => {
     return meetings.filter(m => {
-      if (!matchesScopedSheetOrMeeting(m, centers, groups, activeBranchKey, branches)) {
+      if (!matchesScopedSheetOrMeeting(m, centers, groups, activeBranchKey, branches, activeBranchKeys)) {
         return false;
       }
       const dateRaw = m.meetingDateBs || '';
@@ -671,7 +673,7 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
 
       return matchYear && matchMonth;
     });
-  }, [meetings, centers, groups, activeBranchKey, branches, recordFilterYear, recordFilterMonth]);
+  }, [meetings, centers, groups, activeBranchKey, activeBranchKeys, branches, recordFilterYear, recordFilterMonth]);
 
   return (
     <div className="space-y-2.5">

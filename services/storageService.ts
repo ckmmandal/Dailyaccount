@@ -440,8 +440,11 @@ export const storageService = {
   },
 
   // Users
-  getUsers: async (): Promise<User[]> => {
-    return supabaseService.getUsers();
+  getUsers: async (options?: { forceRefresh?: boolean }): Promise<User[]> => {
+    return supabaseService.getUsers(options);
+  },
+  getFreshUser: async (criteria: { id?: string; username?: string }): Promise<User | null> => {
+    return supabaseService.getFreshUserByIdOrUsername(criteria);
   },
   saveUser: async (user: User) => {
     const res = await supabaseService.saveUser(user);

@@ -58,6 +58,7 @@ import { NepaliDatePicker } from './NepaliDatePicker';
 import {
   resolveCanonicalBranchKey,
   findMatchingBranch,
+  parseUserMfBranchAccess,
   scopeMicroFinanceData
 } from '../utils/mfBranchFilter';
 
@@ -301,7 +302,7 @@ const splitMemberLoansByCategory = (memLoans: MFLoanRecord[]): { microLoan?: MFL
 type SubMenuTab = 'dashboard' | 'centers' | 'groups' | 'members' | 'saving' | 'loan' | 'reports';
 
 export const MicroFinanceManagement: React.FC = () => {
-  const { user, role, isSuperAdmin, hasPermission, branch, branches: authBranches, settings: authSettings } = useAuth();
+  const { user, role, isSuperAdmin, hasPermission, branch, branches: authBranches, settings: authSettings, refreshUser, refreshRoles } = useAuth();
   const isDayEnded = useDayEndLock(branch?.id);
   const [adminBranches, setAdminBranches] = useState<Branch[]>(authBranches || []);
   const [systemSettings, setSystemSettings] = useState<SystemSettings | null>(authSettings || null);
@@ -348,6 +349,8 @@ export const MicroFinanceManagement: React.FC = () => {
     canViewCollectionReport || canViewSignatureReport || canViewDepositSheet || canViewMeetingMinutes || canViewIdCard;
 
   useEffect(() => {
+    void refreshUser().catch(() => {});
+    void refreshRoles().catch(() => {});
     storageService.getBranches().then(b => {
       if (b && b.length > 0) setAdminBranches(b);
     }).catch(() => {});
@@ -405,8 +408,11 @@ export const MicroFinanceManagement: React.FC = () => {
     }
   }, [location.search]);
 
-  // Branch Scope: Super Admin sees ALL branches by default (with optional branch filter);
-  // Non-Super-Admin users strictly see ONLY their logged-in branch across all Micro-Finance sub-menus.
+  // Branch Scope:
+  // - Super Admin: sees ALL branches by default (with branch filter dropdown)
+  // - Designated User (granted 'All Branches' or 'Selected Branches' in Admin Center -> User Management):
+  //   sees their designated branches across all Micro-Finance sub-menus (with branch filter dropdown)
+  // - Standard User (default): strictly sees ONLY their logged-in branch across all Micro-Finance sub-menus
   const [superAdminBranchFilter, setSuperAdminBranchFilter] = useState<string>('ALL');
 
   const loggedInBranchObj = useMemo(() => {
@@ -426,13 +432,46 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const defaultBranchName = loggedInBranchObj?.name || branch?.name || availableBranches[0]?.name || 'Ratauli Head Office';
 
-  const effectiveBranchKey = useMemo(() => {
-    if (isSuperAdmin) {
-      if (!superAdminBranchFilter || superAdminBranchFilter === 'ALL') return '';
-      return resolveCanonicalBranchKey(superAdminBranchFilter, availableBranches);
+  const userMfBranchAccess = useMemo(
+    () => parseUserMfBranchAccess(user?.permissions, role?.permissions, loggedInBranchKey, availableBranches),
+    [user?.permissions, role?.permissions, loggedInBranchKey, availableBranches]
+  );
+
+  const hasAllBranchesAccess = isSuperAdmin || userMfBranchAccess.mode === 'all';
+  const canSwitchBranchView = isSuperAdmin || userMfBranchAccess.canSwitchViewBranch;
+
+  const selectableBranches = useMemo(() => {
+    if (hasAllBranchesAccess) return availableBranches;
+    if (userMfBranchAccess.mode === 'selected') {
+      const allowedSet = new Set(userMfBranchAccess.allowedBranchKeys);
+      const matched = availableBranches.filter(b =>
+        allowedSet.has(resolveCanonicalBranchKey(b.id, availableBranches))
+      );
+      return matched.length > 0 ? matched : availableBranches;
     }
-    return loggedInBranchKey;
-  }, [isSuperAdmin, superAdminBranchFilter, loggedInBranchKey, availableBranches]);
+    return loggedInBranchObj ? [loggedInBranchObj] : availableBranches.slice(0, 1);
+  }, [hasAllBranchesAccess, userMfBranchAccess, availableBranches, loggedInBranchObj]);
+
+  const effectiveBranchKeys = useMemo(() => {
+    if (hasAllBranchesAccess) {
+      if (!superAdminBranchFilter || superAdminBranchFilter === 'ALL') return [];
+      const single = resolveCanonicalBranchKey(superAdminBranchFilter, availableBranches);
+      return single ? [single] : [];
+    }
+    if (userMfBranchAccess.mode === 'selected') {
+      if (!superAdminBranchFilter || superAdminBranchFilter === 'ALL') {
+        return userMfBranchAccess.allowedBranchKeys;
+      }
+      const single = resolveCanonicalBranchKey(superAdminBranchFilter, availableBranches);
+      if (single && userMfBranchAccess.allowedBranchKeys.includes(single)) {
+        return [single];
+      }
+      return userMfBranchAccess.allowedBranchKeys;
+    }
+    return loggedInBranchKey ? [loggedInBranchKey] : [];
+  }, [hasAllBranchesAccess, userMfBranchAccess, superAdminBranchFilter, loggedInBranchKey, availableBranches]);
+
+  const effectiveBranchKey = effectiveBranchKeys.length === 1 ? effectiveBranchKeys[0] : '';
 
   // Raw Datasets (full multi-branch data loaded from service/Supabase)
   const [rawCenters, setCenters] = useState<MFCenter[]>(() => microFinanceService.getCenters());
@@ -468,7 +507,7 @@ export const MicroFinanceManagement: React.FC = () => {
         sheets: rawSheets,
         signatureSheets: rawSignatureSheets,
         meetingMinutes: rawMeetingMinutes,
-        targetBranchKey: effectiveBranchKey,
+        targetBranchKeys: effectiveBranchKeys,
         branches: availableBranches
       }),
     [
@@ -481,7 +520,7 @@ export const MicroFinanceManagement: React.FC = () => {
       rawSheets,
       rawSignatureSheets,
       rawMeetingMinutes,
-      effectiveBranchKey,
+      effectiveBranchKeys,
       availableBranches
     ]
   );
@@ -839,9 +878,10 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const activeHrEmployees = useMemo(() => {
     if (hrEmployees && hrEmployees.length > 0) {
-      if (effectiveBranchKey) {
-        const scopedEmps = hrEmployees.filter(
-          emp => resolveCanonicalBranchKey(emp.branchId, availableBranches) === effectiveBranchKey
+      if (effectiveBranchKeys.length > 0) {
+        const keySet = new Set(effectiveBranchKeys);
+        const scopedEmps = hrEmployees.filter(emp =>
+          keySet.has(resolveCanonicalBranchKey(emp.branchId, availableBranches))
         );
         if (scopedEmps.length > 0) return scopedEmps;
       }
@@ -853,7 +893,7 @@ export const MicroFinanceManagement: React.FC = () => {
       { id: 'emp-3', fullName: 'Sunil Kumar', employeeCode: 'EMP-003', designation: 'Branch Manager', status: 'Active' },
       { id: 'emp-4', fullName: 'Pooja Kumari Yadav', employeeCode: 'EMP-004', designation: 'Loan Officer', status: 'Active' }
     ] as Employee[];
-  }, [hrEmployees, effectiveBranchKey, availableBranches]);
+  }, [hrEmployees, effectiveBranchKeys, availableBranches]);
 
   // Robust Print Preview generator for both Collection and Signature sheets
   const handlePrintElement = (elementId: string) => {
@@ -1247,7 +1287,7 @@ export const MicroFinanceManagement: React.FC = () => {
             code,
             name,
             location: getExcelCell(row, ['Location', 'Address', 'Place']) || 'Mahottari',
-            branch: !isSuperAdmin
+            branch: !canSwitchBranchView
               ? defaultBranchName
               : (getExcelCell(row, ['Branch', 'Branch Name']) || defaultBranchName),
             meetingDay: getExcelCell(row, ['Meeting Day', 'Meeting Date']) || 'Day 15th',
@@ -1346,7 +1386,7 @@ export const MicroFinanceManagement: React.FC = () => {
             citizenshipNo: getExcelCell(row, ['Citizenship No', 'Citizenship']) || '',
             mobile: getExcelCell(row, ['Mobile', 'Phone', 'Contact No']) || '',
             gender,
-            branch: !isSuperAdmin
+            branch: !canSwitchBranchView
               ? (matchedCenter?.branch || defaultBranchName)
               : (getExcelCell(row, ['Branch', 'Branch Name']) || matchedCenter?.branch || defaultBranchName),
             centerId: matchedCenter?.id || '',
@@ -1755,6 +1795,8 @@ export const MicroFinanceManagement: React.FC = () => {
 
   // Keep state in sync with service & hydrate all Micro-Finance entities from Supabase
   const reloadData = () => {
+    void refreshUser().catch(() => {});
+    void refreshRoles().catch(() => {});
     setCenters(microFinanceService.getCenters());
     setGroups(microFinanceService.getGroups());
     setMembers(microFinanceService.getMembers());
@@ -2486,15 +2528,15 @@ export const MicroFinanceManagement: React.FC = () => {
   // Handlers for Center
   const handleOpenAddCenter = () => {
     setEditingCenter(null);
-    const activeSuperBranch =
-      isSuperAdmin && superAdminBranchFilter !== 'ALL'
+    const activeScopedBranch =
+      canSwitchBranchView && superAdminBranchFilter !== 'ALL'
         ? findMatchingBranch(superAdminBranchFilter, availableBranches)?.name || defaultBranchName
         : defaultBranchName;
     setCenterForm({
       code: `C-00${centers.length + 1}`,
       name: '',
       location: '',
-      branch: activeSuperBranch,
+      branch: activeScopedBranch,
       meetingDay: 'Day 15th',
       status: 'ACTIVE',
       fieldOfficer: 'Ramesh Sharma',
@@ -2509,7 +2551,7 @@ export const MicroFinanceManagement: React.FC = () => {
       code: center.code,
       name: center.name,
       location: center.location,
-      branch: !isSuperAdmin ? defaultBranchName : center.branch,
+      branch: !canSwitchBranchView ? defaultBranchName : center.branch,
       meetingDay: center.meetingDay,
       status: center.status,
       fieldOfficer: center.fieldOfficer || 'Ramesh Sharma',
@@ -2529,7 +2571,7 @@ export const MicroFinanceManagement: React.FC = () => {
     }
     const payload = {
       ...centerForm,
-      branch: !isSuperAdmin ? defaultBranchName : (centerForm.branch || defaultBranchName)
+      branch: !canSwitchBranchView ? defaultBranchName : (centerForm.branch || defaultBranchName)
     };
     if (editingCenter) {
       microFinanceService.updateCenter(editingCenter.id, payload);
@@ -2786,7 +2828,7 @@ export const MicroFinanceManagement: React.FC = () => {
 
     const safeAccNo = memberForm.savingsAccountNo || `SAV-${Date.now().toString().slice(-4)}`;
     const safeJoinedDate = memberForm.joinedDate || new Date().toISOString().split('T')[0];
-    const resolvedMemberBranch = c?.branch || (!isSuperAdmin ? defaultBranchName : (memberForm.branch || defaultBranchName));
+    const resolvedMemberBranch = c?.branch || (!canSwitchBranchView ? defaultBranchName : (memberForm.branch || defaultBranchName));
 
     try {
       if (editingMember) {
@@ -4202,7 +4244,7 @@ export const MicroFinanceManagement: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {isSuperAdmin ? (
+            {canSwitchBranchView ? (
               <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2 py-1">
                 <Building2 className="w-3.5 h-3.5 text-[#00593B] shrink-0" />
                 <select
@@ -4218,8 +4260,10 @@ export const MicroFinanceManagement: React.FC = () => {
                   aria-label="Filter Micro-Finance by Branch"
                   className="bg-transparent text-[11px] font-bold text-slate-700 focus:outline-hidden cursor-pointer pr-1"
                 >
-                  <option value="ALL">All Branches</option>
-                  {availableBranches.map(b => (
+                  <option value="ALL">
+                    {hasAllBranchesAccess ? 'All Branches' : `All Assigned (${selectableBranches.length})`}
+                  </option>
+                  {selectableBranches.map(b => (
                     <option key={b.id} value={b.id}>{b.name}</option>
                   ))}
                 </select>
@@ -6788,6 +6832,7 @@ export const MicroFinanceManagement: React.FC = () => {
               }
               branchId={branch?.id}
               activeBranchKey={effectiveBranchKey}
+              activeBranchKeys={effectiveBranchKeys}
               onToast={showToast}
             />
           )}
@@ -6804,6 +6849,7 @@ export const MicroFinanceManagement: React.FC = () => {
               onToast={showToast}
               branchId={branch?.id}
               activeBranchKey={effectiveBranchKey}
+              activeBranchKeys={effectiveBranchKeys}
             />
           )}
 
@@ -6927,15 +6973,15 @@ export const MicroFinanceManagement: React.FC = () => {
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">BRANCH</label>
                   <select
-                    value={!isSuperAdmin ? defaultBranchName : centerForm.branch}
-                    disabled={!isSuperAdmin}
+                    value={!canSwitchBranchView ? defaultBranchName : centerForm.branch}
+                    disabled={!canSwitchBranchView}
                     onChange={e => setCenterForm({ ...centerForm, branch: e.target.value })}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-blue-600 disabled:opacity-80 disabled:cursor-not-allowed"
                   >
-                    {!isSuperAdmin ? (
+                    {!canSwitchBranchView ? (
                       <option value={defaultBranchName}>{defaultBranchName}</option>
                     ) : (
-                      availableBranches.map(b => (
+                      selectableBranches.map(b => (
                         <option key={b.id} value={b.name}>{b.name}</option>
                       ))
                     )}

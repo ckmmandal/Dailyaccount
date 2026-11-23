@@ -1151,7 +1151,17 @@ const saveLocalDB = <T>(key: string, data: T): void => {
       localStorage.setItem(`saccos_db_${key}`, JSON.stringify(data));
       return;
     }
-    const cleaned = cleanDataForStorage(data);
+    const payloadToStore =
+      key === 'users' && Array.isArray(data)
+        ? (data as Record<string, unknown>[]).map(u => {
+            if (!u || typeof u !== 'object') return u;
+            const copy: Record<string, unknown> = { ...u };
+            if (typeof copy.profilePhoto === 'string' && copy.profilePhoto.length > 4000) copy.profilePhoto = '';
+            if (typeof copy.profile_photo === 'string' && copy.profile_photo.length > 4000) copy.profile_photo = '';
+            return copy;
+          })
+        : data;
+    const cleaned = cleanDataForStorage(payloadToStore);
     localStorage.setItem(`saccos_db_${key}`, JSON.stringify(cleaned));
   } catch (e) {
     try {
@@ -3757,7 +3767,111 @@ export const supabaseService = {
   },
 
   // Users
-  async getUsers(): Promise<User[]> {
+  async getFreshUserByIdOrUsername(criteria: { id?: string; username?: string }): Promise<User | null> {
+    const id = (criteria.id || '').trim();
+    const username = (criteria.username || '').trim();
+    if (!id && !username) return null;
+
+    const normalizePerms = (raw: unknown): string[] => {
+      if (Array.isArray(raw)) {
+        return raw.filter((p): p is string => typeof p === 'string' && p.trim().length > 0);
+      }
+      if (typeof raw === 'string' && raw.trim()) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            return parsed.filter((p): p is string => typeof p === 'string' && p.trim().length > 0);
+          }
+        } catch {
+          return raw
+            .replace(/^\{|\}$/g, '')
+            .split(',')
+            .map(s => s.replace(/^"|"$/g, '').trim())
+            .filter(Boolean);
+        }
+      }
+      return [];
+    };
+
+    const mapRow = (u: Record<string, unknown>): User => ({
+      ...(u as Partial<User>),
+      id: String(u.id || ''),
+      username: String(u.username || ''),
+      password: String(u.password || ''),
+      fullName: String(u.full_name ?? u.fullName ?? ''),
+      roleId: String(u.role_id ?? u.roleId ?? '3'),
+      branchId: String(u.branch_id ?? u.branchId ?? 'main'),
+      permissions: normalizePerms(u.permissions) as User['permissions'],
+      status: (u.status === 'Inactive' ? 'Inactive' : 'Active'),
+      email: u.email ? String(u.email) : undefined,
+      mobile: String(u.mobile || ''),
+      department: u.department ? String(u.department) : undefined,
+      designation: u.designation ? String(u.designation) : undefined,
+      profilePhoto: (u.profile_photo ?? u.profilePhoto) ? String(u.profile_photo ?? u.profilePhoto) : undefined,
+      accountCreated: Number(u.account_created ?? u.accountCreated ?? Date.now()),
+      passwordUpdatedAt: (u.password_updated_at ?? u.passwordUpdatedAt) ? Number(u.password_updated_at ?? u.passwordUpdatedAt) : undefined,
+      forcePasswordChange: Boolean(u.force_password_change ?? u.forcePasswordChange ?? false)
+    });
+
+    try {
+      let row: Record<string, unknown> | null = null;
+      if (id && id !== 'admin-temp') {
+        const { data, error } = await withTimeout(
+          supabase.from('users').select('*').eq('id', id).maybeSingle(),
+          10000,
+          'Fetch single user by id timed out'
+        );
+        if (!error && data) row = data;
+      }
+      if (!row && username) {
+        const { data, error } = await withTimeout(
+          supabase.from('users').select('*').ilike('username', username).limit(1),
+          10000,
+          'Fetch single user by username timed out'
+        );
+        if (!error && Array.isArray(data) && data.length > 0) {
+          row = data[0];
+        }
+      }
+      if (row) {
+        const mapped = mapRow(row);
+        const local = getLocalDB<User[]>('users', []);
+        const safeLocal = Array.isArray(local) ? local : [];
+        saveLocalDB('users', [mapped, ...safeLocal.filter(u => u && u.id !== mapped.id)]);
+        return mapped;
+      }
+    } catch (e) {
+      console.warn('Direct single-user fetch failed:', e);
+    }
+    return null;
+  },
+
+  async getUsers(options?: { forceRefresh?: boolean }): Promise<User[]> {
+    const normalizePerms = (raw: unknown): string[] => {
+      if (Array.isArray(raw)) {
+        return raw.filter((p): p is string => typeof p === 'string' && p.trim().length > 0);
+      }
+      if (typeof raw === 'string' && raw.trim()) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            return parsed.filter((p): p is string => typeof p === 'string' && p.trim().length > 0);
+          }
+        } catch {
+          return raw
+            .replace(/^\{|\}$/g, '')
+            .split(',')
+            .map(s => s.replace(/^"|"$/g, '').trim())
+            .filter(Boolean);
+        }
+      }
+      return [];
+    };
+
+    if (options?.forceRefresh) {
+      invalidateMemoryCache('users');
+    }
+
     try {
       const res = await fetchWithCache('users', async () => {
         try {
@@ -3768,6 +3882,7 @@ export const supabaseService = {
             fullName: u.full_name,
             roleId: u.role_id,
             branchId: u.branch_id,
+            permissions: normalizePerms(u.permissions),
             profilePhoto: u.profile_photo,
             accountCreated: u.account_created,
             passwordUpdatedAt: u.password_updated_at ?? u.passwordUpdatedAt,
@@ -3785,7 +3900,7 @@ export const supabaseService = {
           const local = getLocalDB<User[]>('users', []);
           return Array.isArray(local) ? local : [];
         }
-      }, { ttlMs: 60000, fallbackLocalKey: 'users', defaultVal: [] });
+      }, { ttlMs: 60000, timeoutMs: 20000, fallbackLocalKey: 'users', defaultVal: [] });
       return Array.isArray(res) ? res : [];
     } catch (err) {
       console.warn("Falling back to localStorage for getUsers on outer catch:", err);
@@ -3795,48 +3910,55 @@ export const supabaseService = {
   },
   async saveUser(user: User) {
     invalidateMemoryCache('users');
+    const normalizedPerms = Array.isArray(user.permissions)
+      ? user.permissions.filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
+      : [];
+    const normalizedUser: User = {
+      ...user,
+      permissions: normalizedPerms as User['permissions']
+    };
     const local = getLocalDB<User[]>('users', []);
-    const updated = [user, ...local.filter(u => u.id !== user.id)];
+    const updated = [normalizedUser, ...local.filter(u => u.id !== normalizedUser.id)];
     saveLocalDB('users', updated);
 
     try {
       // Attempt 1: Full payload including password_updated_at & force_password_change
       const { error } = await supabase.from('users').upsert({
-        id: user.id,
-        username: user.username,
-        password: user.password,
-        full_name: user.fullName,
-        role_id: user.roleId,
-        branch_id: user.branchId,
-        permissions: user.permissions || [],
-        status: user.status || 'Active',
-        email: user.email || null,
-        mobile: user.mobile || null,
-        department: user.department || null,
-        designation: user.designation || null,
-        profile_photo: user.profilePhoto || null,
-        account_created: user.accountCreated || null,
-        password_updated_at: user.passwordUpdatedAt || null,
-        force_password_change: user.forcePasswordChange || false
+        id: normalizedUser.id,
+        username: normalizedUser.username,
+        password: normalizedUser.password,
+        full_name: normalizedUser.fullName,
+        role_id: normalizedUser.roleId,
+        branch_id: normalizedUser.branchId,
+        permissions: normalizedPerms,
+        status: normalizedUser.status || 'Active',
+        email: normalizedUser.email || null,
+        mobile: normalizedUser.mobile || null,
+        department: normalizedUser.department || null,
+        designation: normalizedUser.designation || null,
+        profile_photo: normalizedUser.profilePhoto || null,
+        account_created: normalizedUser.accountCreated || null,
+        password_updated_at: normalizedUser.passwordUpdatedAt || null,
+        force_password_change: normalizedUser.forcePasswordChange || false
       });
       if (!error) return;
 
       // Fallback 2: without optional new columns if table schema differs
       const { error: fbErr } = await supabase.from('users').upsert({
-        id: user.id,
-        username: user.username,
-        password: user.password,
-        full_name: user.fullName,
-        role_id: user.roleId,
-        branch_id: user.branchId,
-        permissions: user.permissions || [],
-        status: user.status || 'Active',
-        email: user.email || null,
-        mobile: user.mobile || null,
-        department: user.department || null,
-        designation: user.designation || null,
-        profile_photo: user.profilePhoto || null,
-        account_created: user.accountCreated || null
+        id: normalizedUser.id,
+        username: normalizedUser.username,
+        password: normalizedUser.password,
+        full_name: normalizedUser.fullName,
+        role_id: normalizedUser.roleId,
+        branch_id: normalizedUser.branchId,
+        permissions: normalizedPerms,
+        status: normalizedUser.status || 'Active',
+        email: normalizedUser.email || null,
+        mobile: normalizedUser.mobile || null,
+        department: normalizedUser.department || null,
+        designation: normalizedUser.designation || null,
+        profile_photo: normalizedUser.profilePhoto || null,
+        account_created: normalizedUser.accountCreated || null
       });
       if (fbErr) throw fbErr;
     } catch (e) {

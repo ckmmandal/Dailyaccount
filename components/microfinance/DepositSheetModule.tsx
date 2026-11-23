@@ -35,6 +35,7 @@ interface DepositSheetModuleProps {
   organizationName?: string;
   branchId?: string;
   activeBranchKey?: string;
+  activeBranchKeys?: string[];
   onToast?: (msg: string) => void;
 }
 
@@ -126,6 +127,7 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
   organizationName = 'RATAULI SAVING AND CREDIT COOPERATIVE LTD',
   branchId,
   activeBranchKey,
+  activeBranchKeys,
   onToast = () => {}
 }) => {
   const isDayEnded = useDayEndLock(branchId);
@@ -749,15 +751,15 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
     setIsSheetDetailOpen(true);
   };
 
-  // Filtered saved sheets for the Deposit Sheets Record table (branch-scoped when activeBranchKey is set)
+  // Filtered saved sheets for the Deposit Sheets Record table (branch-scoped when activeBranchKey/activeBranchKeys is set)
   const filteredSavedSheets = useMemo(() => {
     return savedSheets.filter(sheet => {
-      if (!matchesScopedSheetOrMeeting(sheet, centers, groups, activeBranchKey, branches)) return false;
+      if (!matchesScopedSheetOrMeeting(sheet, centers, groups, activeBranchKey, branches, activeBranchKeys)) return false;
       if (recordFilterYear !== 'ALL' && String(sheet.year) !== recordFilterYear) return false;
       if (recordFilterMonth !== 'ALL' && String(sheet.month) !== recordFilterMonth) return false;
       return true;
     });
-  }, [savedSheets, centers, groups, activeBranchKey, branches, recordFilterYear, recordFilterMonth]);
+  }, [savedSheets, centers, groups, activeBranchKey, activeBranchKeys, branches, recordFilterYear, recordFilterMonth]);
 
   // Load a previously saved sheet back into the filter bar & open editable detail sheet
   const handleLoadSavedSheet = (sheet: MFDepositSheet) => {

@@ -10,6 +10,21 @@ import type {
 } from '../services/microFinanceService';
 import type { GroupMeetingRecord } from '../services/meetingMinutesService';
 
+export const MF_BRANCH_SCOPE_PREFIX = 'mf_branch_scope:';
+export const MF_BRANCH_SCOPE_ALL = 'mf_branch_scope:all';
+
+export type UserMfBranchAccessMode = 'login_only' | 'all' | 'selected';
+
+export interface UserMfBranchAccess {
+  mode: UserMfBranchAccessMode;
+  /** Empty array when mode === 'all' (unrestricted). Otherwise canonical branch keys allowed for viewing. */
+  allowedBranchKeys: string[];
+  /** Selected branch keys explicitly stored on user (excluding implicit login branch fallback). */
+  explicitBranchKeys: string[];
+  /** True if user can view more than just their own logged-in branch (shows branch filter dropdown). */
+  canSwitchViewBranch: boolean;
+}
+
 const normalizeText = (val?: string | null): string =>
   String(val || '').replace(/\s+/g, ' ').trim().toLowerCase();
 
@@ -86,6 +101,123 @@ export const findMatchingBranch = (
   );
 };
 
+/**
+ * Parses designated per-user (or role) Micro-Finance branch access tokens stored in permissions.
+ * - No token => 'login_only' (strictly logged-in branch)
+ * - 'mf_branch_scope:all' => 'all' (can view all branches across all MF sub-menus)
+ * - 'mf_branch_scope:<branchKey>' => 'selected' (can view explicitly selected branches + own login branch)
+ */
+export const parseUserMfBranchAccess = (
+  userPermissions?: string[] | null,
+  rolePermissions?: string[] | null,
+  loggedInBranchKey?: string,
+  branches: Branch[] = []
+): UserMfBranchAccess => {
+  const combined = [
+    ...(Array.isArray(userPermissions) ? userPermissions : []),
+    ...(Array.isArray(rolePermissions) ? rolePermissions : [])
+  ].filter((p): p is string => typeof p === 'string');
+
+  const scopeTokens = combined
+    .filter(p => p.toLowerCase().startsWith(MF_BRANCH_SCOPE_PREFIX))
+    .map(p => p.slice(MF_BRANCH_SCOPE_PREFIX.length).trim().toLowerCase())
+    .filter(Boolean);
+
+  const normalizedLoginKey = resolveCanonicalBranchKey(loggedInBranchKey, branches);
+
+  if (scopeTokens.includes('all')) {
+    return {
+      mode: 'all',
+      allowedBranchKeys: [],
+      explicitBranchKeys: [],
+      canSwitchViewBranch: true
+    };
+  }
+
+  const explicitKeys = Array.from(
+    new Set(
+      scopeTokens
+        .map(tok => resolveCanonicalBranchKey(tok, branches))
+        .filter(Boolean)
+    )
+  );
+
+  if (explicitKeys.length > 0) {
+    const allowedSet = new Set<string>(explicitKeys);
+    if (normalizedLoginKey) allowedSet.add(normalizedLoginKey);
+    const allowedBranchKeys = Array.from(allowedSet);
+    return {
+      mode: 'selected',
+      allowedBranchKeys,
+      explicitBranchKeys: explicitKeys,
+      canSwitchViewBranch:
+        allowedBranchKeys.length > 1 ||
+        (allowedBranchKeys.length === 1 && allowedBranchKeys[0] !== normalizedLoginKey)
+    };
+  }
+
+  return {
+    mode: 'login_only',
+    allowedBranchKeys: normalizedLoginKey ? [normalizedLoginKey] : [],
+    explicitBranchKeys: [],
+    canSwitchViewBranch: false
+  };
+};
+
+/**
+ * Updates a user's permissions array with the chosen Micro-Finance branch access mode
+ * while preserving all unrelated permissions untouched.
+ */
+export const applyUserMfBranchAccessToPermissions = (
+  existingPermissions: string[] | undefined | null,
+  mode: UserMfBranchAccessMode,
+  selectedBranchIds: string[] = [],
+  branches: Branch[] = []
+): string[] => {
+  const cleaned = (Array.isArray(existingPermissions) ? existingPermissions : []).filter(
+    p => typeof p === 'string' && !p.toLowerCase().startsWith(MF_BRANCH_SCOPE_PREFIX)
+  );
+
+  if (mode === 'all') {
+    return [...cleaned, MF_BRANCH_SCOPE_ALL];
+  }
+
+  if (mode === 'selected') {
+    const canonicalKeys = Array.from(
+      new Set(
+        selectedBranchIds
+          .map(id => resolveCanonicalBranchKey(id, branches))
+          .filter(Boolean)
+      )
+    );
+    if (canonicalKeys.length === 0) return cleaned;
+    return [...cleaned, ...canonicalKeys.map(k => `${MF_BRANCH_SCOPE_PREFIX}${k}`)];
+  }
+
+  return cleaned;
+};
+
+/**
+ * Short display badge summary for User Management table (returns null for default login-only users).
+ */
+export const getMfBranchAccessSummary = (
+  userPermissions?: string[] | null,
+  branches: Branch[] = []
+): { label: string; isAll: boolean } | null => {
+  const parsed = parseUserMfBranchAccess(userPermissions, [], undefined, branches);
+  if (parsed.mode === 'all') {
+    return { label: 'MF: All Branches', isAll: true };
+  }
+  if (parsed.mode === 'selected' && parsed.explicitBranchKeys.length > 0) {
+    if (parsed.explicitBranchKeys.length === 1) {
+      const b = findMatchingBranch(parsed.explicitBranchKeys[0], branches);
+      return { label: `MF: ${b?.name || parsed.explicitBranchKeys[0]}`, isAll: false };
+    }
+    return { label: `MF: ${parsed.explicitBranchKeys.length} Branches`, isAll: false };
+  }
+  return null;
+};
+
 export interface ScopedMicroFinanceInput {
   centers: MFCenter[];
   groups: MFSamuhGroup[];
@@ -96,7 +228,10 @@ export interface ScopedMicroFinanceInput {
   sheets?: MFCollectionSheet[];
   signatureSheets?: MFSignatureSheet[];
   meetingMinutes?: GroupMeetingRecord[];
-  targetBranchKey: string; // Empty string or 'all' => unfiltered (Super Admin "All Branches")
+  /** Single branch key (empty or 'ALL' => unfiltered) */
+  targetBranchKey?: string;
+  /** Optional list of allowed canonical branch keys (empty => unfiltered when targetBranchKey is also empty) */
+  targetBranchKeys?: string[];
   branches?: Branch[];
 }
 
@@ -112,9 +247,29 @@ export interface ScopedMicroFinanceResult {
   meetingMinutes: GroupMeetingRecord[];
 }
 
+const buildNormalizedBranchKeySet = (
+  targetBranchKey?: string,
+  targetBranchKeys?: string[],
+  branches: Branch[] = []
+): Set<string> | null => {
+  if (Array.isArray(targetBranchKeys)) {
+    if (targetBranchKeys.length === 0) return null; // Unfiltered
+    const keys = targetBranchKeys
+      .map(k => resolveCanonicalBranchKey(k === 'ALL' || k === 'all' ? '' : k, branches))
+      .filter(Boolean);
+    return keys.length > 0 ? new Set(keys) : null;
+  }
+
+  const single = resolveCanonicalBranchKey(
+    targetBranchKey === 'ALL' || targetBranchKey === 'all' ? '' : targetBranchKey,
+    branches
+  );
+  return single ? new Set([single]) : null;
+};
+
 /**
- * Filters all Micro-Finance datasets cleanly to a single branch when targetBranchKey is provided.
- * If targetBranchKey is empty or 'all', returns all records unfiltered (Super Admin view).
+ * Filters all Micro-Finance datasets cleanly to one or more allowed branches.
+ * If no target branch keys are specified (empty / 'ALL'), returns all records unfiltered.
  */
 export const scopeMicroFinanceData = ({
   centers: rawCenters,
@@ -127,14 +282,12 @@ export const scopeMicroFinanceData = ({
   signatureSheets: rawSignatureSheets = [],
   meetingMinutes: rawMeetingMinutes = [],
   targetBranchKey,
+  targetBranchKeys,
   branches = []
 }: ScopedMicroFinanceInput): ScopedMicroFinanceResult => {
-  const normalizedTargetKey = resolveCanonicalBranchKey(
-    targetBranchKey === 'ALL' || targetBranchKey === 'all' ? '' : targetBranchKey,
-    branches
-  );
+  const allowedBranchKeys = buildNormalizedBranchKeySet(targetBranchKey, targetBranchKeys, branches);
 
-  if (!normalizedTargetKey) {
+  if (!allowedBranchKeys) {
     return {
       centers: rawCenters,
       groups: rawGroups,
@@ -148,6 +301,11 @@ export const scopeMicroFinanceData = ({
     };
   }
 
+  const isAllowedBranch = (raw?: string | null): boolean => {
+    const k = resolveCanonicalBranchKey(raw, branches);
+    return Boolean(k && allowedBranchKeys.has(k));
+  };
+
   // Index all raw centers & groups for accurate parent-branch resolution
   const rawCenterById = new Map<string, MFCenter>();
   const rawCenterByName = new Map<string, MFCenter>();
@@ -157,10 +315,8 @@ export const scopeMicroFinanceData = ({
     if (n && !rawCenterByName.has(n)) rawCenterByName.set(n, c);
   });
 
-  // 1. Centers belonging to targetBranchKey
-  const centers = rawCenters.filter(
-    c => resolveCanonicalBranchKey(c.branch, branches) === normalizedTargetKey
-  );
+  // 1. Centers belonging to allowedBranchKeys
+  const centers = rawCenters.filter(c => isAllowedBranch(c.branch));
   const allowedCenterIds = new Set(centers.map(c => c.id).filter(Boolean));
   const allowedCenterNames = new Set(centers.map(c => normalizeText(c.name)).filter(Boolean));
 
@@ -202,7 +358,7 @@ export const scopeMicroFinanceData = ({
     if (parentGroup) {
       return allowedGroupIds.has(parentGroup.id);
     }
-    return resolveCanonicalBranchKey(m.branch, branches) === normalizedTargetKey;
+    return isAllowedBranch(m.branch);
   });
 
   // Build lookup of ALL raw members vs ALLOWED scoped members so savings/loans resolve cleanly
@@ -290,7 +446,7 @@ export const scopeMicroFinanceData = ({
       rawCenterByName.get(normalizeText(sig.centerName));
     if (parentCenter) return allowedCenterIds.has(parentCenter.id);
     if (sig.branchName) {
-      return resolveCanonicalBranchKey(sig.branchName, branches) === normalizedTargetKey;
+      return isAllowedBranch(sig.branchName);
     }
     if (sig.groupId && rawGroupById.has(sig.groupId)) {
       return allowedGroupIds.has(sig.groupId);
@@ -308,7 +464,7 @@ export const scopeMicroFinanceData = ({
       rawCenterByName.get(normalizeText(m.centerName));
     if (parentCenter) return allowedCenterIds.has(parentCenter.id);
     if (m.branchName) {
-      return resolveCanonicalBranchKey(m.branchName, branches) === normalizedTargetKey;
+      return isAllowedBranch(m.branchName);
     }
     if (m.groupId && rawGroupById.has(m.groupId)) {
       return allowedGroupIds.has(m.groupId);
@@ -341,13 +497,11 @@ export const matchesScopedSheetOrMeeting = (
   scopedCenters: MFCenter[],
   scopedGroups: MFSamuhGroup[],
   activeBranchKey?: string,
-  branches: Branch[] = []
+  branches: Branch[] = [],
+  activeBranchKeys?: string[]
 ): boolean => {
-  const targetKey = resolveCanonicalBranchKey(
-    activeBranchKey === 'ALL' || activeBranchKey === 'all' ? '' : activeBranchKey,
-    branches
-  );
-  if (!targetKey) return true; // Super Admin viewing all branches
+  const allowedBranchKeys = buildNormalizedBranchKeySet(activeBranchKey, activeBranchKeys, branches);
+  if (!allowedBranchKeys) return true; // Unfiltered (All Branches)
 
   const allowedCenterIds = new Set(scopedCenters.map(c => c.id).filter(Boolean));
   const allowedCenterNames = new Set(scopedCenters.map(c => normalizeText(c.name)).filter(Boolean));
@@ -359,7 +513,8 @@ export const matchesScopedSheetOrMeeting = (
   if (record.groupId && allowedGroupIds.has(record.groupId)) return true;
   if (record.groupName && allowedGroupNames.has(normalizeText(record.groupName))) return true;
   if (record.branchName) {
-    return resolveCanonicalBranchKey(record.branchName, branches) === targetKey;
+    const key = resolveCanonicalBranchKey(record.branchName, branches);
+    return Boolean(key && allowedBranchKeys.has(key));
   }
   return false;
 };

@@ -79,17 +79,27 @@ export const LoginPage: React.FC = () => {
     setError('');
     
     try {
-      const users = await supabaseService.getUsers().catch(() => []);
-      const userList = Array.isArray(users) ? users : [];
-      
       const enteredUsername = (credentials.username || '').trim().toLowerCase();
       const enteredPassword = credentials.password || '';
 
-      const foundUser = userList.find(u => 
-        u && u.username &&
-        u.username.toLowerCase() === enteredUsername && 
-        u.password === enteredPassword
-      );
+      // Always fetch the latest uncached user row directly from Supabase first so newly updated permissions/branches take effect immediately
+      let foundUser: User | undefined;
+      const directUser = await supabaseService
+        .getFreshUserByIdOrUsername({ username: enteredUsername })
+        .catch(() => null);
+      if (directUser && directUser.password === enteredPassword) {
+        foundUser = directUser;
+      } else {
+        const users = await supabaseService.getUsers({ forceRefresh: true }).catch(() => []);
+        const userList = Array.isArray(users) ? users : [];
+        foundUser = userList.find(
+          u =>
+            u &&
+            u.username &&
+            u.username.toLowerCase() === enteredUsername &&
+            u.password === enteredPassword
+        );
+      }
       
       if (foundUser) {
         if (foundUser.status === 'Inactive') {
@@ -97,7 +107,7 @@ export const LoginPage: React.FC = () => {
           return;
         }
 
-        // Try to fetch linked employee to ensure latest branchId is used
+        // Try to fetch linked employee to fill missing branchId/designation without overwriting Admin's User Edit settings
         try {
           const employees = await supabaseService.getEmployees().catch(() => []);
           const empList = Array.isArray(employees) ? employees : [];
@@ -118,7 +128,7 @@ export const LoginPage: React.FC = () => {
             return sameName || sameEmail || sameCode;
           });
 
-          if (linked && linked.branchId && (!foundUser.branchId || foundUser.branchId === 'main' || foundUser.branchId !== linked.branchId)) {
+          if (linked && linked.branchId && !foundUser.branchId) {
             foundUser.branchId = linked.branchId;
           }
           if (linked && linked.designation && !foundUser.designation) {
