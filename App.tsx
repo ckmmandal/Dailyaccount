@@ -52,6 +52,7 @@ import { isPasswordExpired } from './utils/passwordPolicy';
 import { getUserChatProfile, isMessageFromMe, isMessageForMe, playChatNotificationSound, triggerBrowserNotification } from './utils/chatHelpers';
 import { isDayEndedForBranch, canPerformDayOpen, normalizeLockBranchId } from './utils/dayEndLock';
 import { getTodayBsDateStr, toNormalizedBsDateStr } from './utils/backDateControl';
+import { resolveCanonicalBranchKey, scopeMicroFinanceData } from './utils/mfBranchFilter';
 
 // Individual Slip Print View for Profile Link
 const InternalSalarySlipPrintView = ({ slip, employee, onClose }: { slip: PayrollRecord, employee: any, onClose: () => void }) => {
@@ -838,24 +839,59 @@ const AppLayout: React.FC = () => {
       }
 
       try {
-        const loans = await microFinanceService.fetchActiveLoansFromSupabase().catch(() => microFinanceService.getLoans());
-        const loanToday = (Array.isArray(loans) ? loans : []).filter(l => {
+        const targetBranchKey = isSuperAdmin
+          ? ''
+          : resolveCanonicalBranchKey(branch?.id || branch?.name || user?.branchId, combinedBranches);
+
+        let centersRaw = microFinanceService.getCenters();
+        let groupsRaw = microFinanceService.getGroups();
+        let membersRaw = microFinanceService.getMembers();
+        let loansRaw: Awaited<ReturnType<typeof microFinanceService.fetchActiveLoansFromSupabase>>;
+        let savingsRaw: Awaited<ReturnType<typeof microFinanceService.fetchSavingsFromSupabase>>;
+
+        if (targetBranchKey && (centersRaw.length === 0 || membersRaw.length === 0)) {
+          const allMf = await microFinanceService.fetchAllFromSupabase().catch(() => null);
+          if (allMf) {
+            centersRaw = allMf.centers;
+            groupsRaw = allMf.groups;
+            membersRaw = allMf.members;
+            loansRaw = allMf.loans;
+            savingsRaw = allMf.savings;
+          } else {
+            [loansRaw, savingsRaw] = await Promise.all([
+              microFinanceService.fetchActiveLoansFromSupabase().catch(() => microFinanceService.getLoans()),
+              microFinanceService.fetchSavingsFromSupabase().catch(() => microFinanceService.getSavings())
+            ]);
+          }
+        } else {
+          [loansRaw, savingsRaw] = await Promise.all([
+            microFinanceService.fetchActiveLoansFromSupabase().catch(() => microFinanceService.getLoans()),
+            microFinanceService.fetchSavingsFromSupabase().catch(() => microFinanceService.getSavings())
+          ]);
+        }
+
+        const scopedMf = scopeMicroFinanceData({
+          centers: centersRaw,
+          groups: groupsRaw,
+          members: membersRaw,
+          savings: Array.isArray(savingsRaw) ? savingsRaw : [],
+          loans: Array.isArray(loansRaw) ? loansRaw : [],
+          targetBranchKey,
+          branches: combinedBranches
+        });
+
+        const loanToday = scopedMf.loans.filter(l => {
           if (l.status === 'CLOSED') return false;
           return isDateToday(l.maturityDate);
         });
         setLoanMaturityCount(loanToday.length);
-      } catch (error) {
-        console.error("Failed to check Loan maturity alerts", error);
-      }
 
-      try {
-        const savings = await microFinanceService.fetchSavingsFromSupabase().catch(() => microFinanceService.getSavings());
-        const maturedSavings = (Array.isArray(savings) ? savings : []).filter(
+        const maturedSavings = scopedMf.savings.filter(
           s => getEffectiveSavingStatus(s) === 'MATURED'
         );
         setSavingMaturityCount(maturedSavings.length);
       } catch (error) {
-        console.error("Failed to check Saving maturity alerts", error);
+        console.error("Failed to check Loan/Saving maturity alerts", error);
       }
 
       try {
@@ -882,7 +918,7 @@ const AppLayout: React.FC = () => {
       window.removeEventListener('saccos_popup_notice_updated', checkDailyAlerts);
       window.removeEventListener('mf_savings_updated', checkDailyAlerts);
     };
-  }, [branch]);
+  }, [branch, isSuperAdmin, user?.branchId, combinedBranches]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {

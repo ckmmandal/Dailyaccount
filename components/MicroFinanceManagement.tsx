@@ -55,6 +55,11 @@ import { isBackDateBlockedForEntry, getBackDateBlockedMessage } from '../utils/b
 import { isDayEndedForBranch, getDayEndedBlockMessage, useDayEndLock } from '../utils/dayEndLock';
 import { DayEndFieldset } from './DayEndFieldset';
 import { NepaliDatePicker } from './NepaliDatePicker';
+import {
+  resolveCanonicalBranchKey,
+  findMatchingBranch,
+  scopeMicroFinanceData
+} from '../utils/mfBranchFilter';
 
 // Helper to calculate BS Maturity Date based on BS Open Date (YYYY-MM-DD) and Period in months
 const calculateBsMaturityDate = (openBs: string, periodMonths: number): string => {
@@ -400,14 +405,86 @@ export const MicroFinanceManagement: React.FC = () => {
     }
   }, [location.search]);
 
-  // Datasets
-  const [centers, setCenters] = useState<MFCenter[]>(() => microFinanceService.getCenters());
-  const [groups, setGroups] = useState<MFSamuhGroup[]>(() => microFinanceService.getGroups());
-  const [members, setMembers] = useState<MFMember[]>(() => microFinanceService.getMembers());
-  const [savings, setSavings] = useState<MFSavingsRecord[]>(() => microFinanceService.getSavings());
-  const [loans, setLoans] = useState<MFLoanRecord[]>(() => microFinanceService.getLoans());
-  const [sheets, setSheets] = useState<MFCollectionSheet[]>(() => microFinanceService.getSheets());
-  const [meetingMinutes, setMeetingMinutes] = useState<GroupMeetingRecord[]>(() => meetingMinutesService.getMeetings());
+  // Branch Scope: Super Admin sees ALL branches by default (with optional branch filter);
+  // Non-Super-Admin users strictly see ONLY their logged-in branch across all Micro-Finance sub-menus.
+  const [superAdminBranchFilter, setSuperAdminBranchFilter] = useState<string>('ALL');
+
+  const loggedInBranchObj = useMemo(() => {
+    return (
+      findMatchingBranch(branch?.id || branch?.name || user?.branchId, availableBranches) ||
+      branch ||
+      availableBranches[0]
+    );
+  }, [branch, user?.branchId, availableBranches]);
+
+  const loggedInBranchKey = useMemo(() => {
+    return resolveCanonicalBranchKey(
+      loggedInBranchObj?.id || loggedInBranchObj?.name || branch?.id || branch?.name || user?.branchId,
+      availableBranches
+    );
+  }, [loggedInBranchObj, branch?.id, branch?.name, user?.branchId, availableBranches]);
+
+  const defaultBranchName = loggedInBranchObj?.name || branch?.name || availableBranches[0]?.name || 'Ratauli Head Office';
+
+  const effectiveBranchKey = useMemo(() => {
+    if (isSuperAdmin) {
+      if (!superAdminBranchFilter || superAdminBranchFilter === 'ALL') return '';
+      return resolveCanonicalBranchKey(superAdminBranchFilter, availableBranches);
+    }
+    return loggedInBranchKey;
+  }, [isSuperAdmin, superAdminBranchFilter, loggedInBranchKey, availableBranches]);
+
+  // Raw Datasets (full multi-branch data loaded from service/Supabase)
+  const [rawCenters, setCenters] = useState<MFCenter[]>(() => microFinanceService.getCenters());
+  const [rawGroups, setGroups] = useState<MFSamuhGroup[]>(() => microFinanceService.getGroups());
+  const [rawMembers, setMembers] = useState<MFMember[]>(() => microFinanceService.getMembers());
+  const [rawSavings, setSavings] = useState<MFSavingsRecord[]>(() => microFinanceService.getSavings());
+  const [rawLoans, setLoans] = useState<MFLoanRecord[]>(() => microFinanceService.getLoans());
+  const [rawSheets, setSheets] = useState<MFCollectionSheet[]>(() => microFinanceService.getSheets());
+  const [rawSignatureSheets, setSignatureSheets] = useState<MFSignatureSheet[]>(() => microFinanceService.getSignatureSheets());
+  const [rawMeetingMinutes, setMeetingMinutes] = useState<GroupMeetingRecord[]>(() => meetingMinutesService.getMeetings());
+  const [rawClosedLoansArchive, setClosedLoansArchive] = useState<MFLoanRecord[]>([]);
+
+  // Branch-Scoped Datasets used across EVERY Micro-Finance sub-menu (Dashboard, Centers, Groups, Members, Saving, Loan, Reports)
+  const {
+    centers,
+    groups,
+    members,
+    savings,
+    loans,
+    closedLoansArchive,
+    sheets,
+    signatureSheets,
+    meetingMinutes
+  } = useMemo(
+    () =>
+      scopeMicroFinanceData({
+        centers: rawCenters,
+        groups: rawGroups,
+        members: rawMembers,
+        savings: rawSavings,
+        loans: rawLoans,
+        closedLoansArchive: rawClosedLoansArchive,
+        sheets: rawSheets,
+        signatureSheets: rawSignatureSheets,
+        meetingMinutes: rawMeetingMinutes,
+        targetBranchKey: effectiveBranchKey,
+        branches: availableBranches
+      }),
+    [
+      rawCenters,
+      rawGroups,
+      rawMembers,
+      rawSavings,
+      rawLoans,
+      rawClosedLoansArchive,
+      rawSheets,
+      rawSignatureSheets,
+      rawMeetingMinutes,
+      effectiveBranchKey,
+      availableBranches
+    ]
+  );
 
   // Search & Center/Group Filter states
   const [dashboardCenterSearch, setDashboardCenterSearch] = useState('');
@@ -434,7 +511,6 @@ export const MicroFinanceManagement: React.FC = () => {
   const [appliedLoanCenterId, setAppliedLoanCenterId] = useState('');
   const [appliedLoanGroupId, setAppliedLoanGroupId] = useState('');
   const [loanStatusTab, setLoanStatusTab] = useState<'ACTIVE' | 'MATURED' | 'CLOSED'>('ACTIVE');
-  const [closedLoansArchive, setClosedLoansArchive] = useState<MFLoanRecord[]>([]);
   const [isLoadingClosedLoans, setIsLoadingClosedLoans] = useState(false);
 
   // Current BS Date calculation for default values
@@ -514,7 +590,7 @@ export const MicroFinanceManagement: React.FC = () => {
     code: '',
     name: '',
     location: '',
-    branch: availableBranches[0]?.name || branch?.name || 'Ratauli Central Head Office',
+    branch: defaultBranchName,
     meetingDay: 'Day 15th',
     status: 'ACTIVE' as 'ACTIVE' | 'INACTIVE',
     fieldOfficer: 'Ramesh Sharma',
@@ -550,7 +626,7 @@ export const MicroFinanceManagement: React.FC = () => {
     citizenshipNo: '',
     mobile: '',
     gender: 'Female' as 'Female' | 'Male' | 'Other',
-    branch: availableBranches[0]?.name || branch?.name || 'Ratauli Central Head Office',
+    branch: defaultBranchName,
     centerId: '',
     samuhId: '',
     role: 'Member' as 'Leader' | 'Secretary' | 'Treasurer' | 'Member',
@@ -690,8 +766,7 @@ export const MicroFinanceManagement: React.FC = () => {
   const [isLoadingCollectionSheet, setIsLoadingCollectionSheet] = useState(false);
   const [isLoadingSignatureSheet, setIsLoadingSignatureSheet] = useState(false);
 
-  // Signature Sheets State (Permanent records)
-  const [signatureSheets, setSignatureSheets] = useState<MFSignatureSheet[]>(() => microFinanceService.getSignatureSheets());
+  // Signature Sheets Modal State (data derived above with branch scoping)
   const [selectedSignatureSheetToPrint, setSelectedSignatureSheetToPrint] = useState<MFSignatureSheet | null>(null);
   const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
   const [selectedSignatureSheetToDelete, setSelectedSignatureSheetToDelete] = useState<MFSignatureSheet | null>(null);
@@ -763,14 +838,22 @@ export const MicroFinanceManagement: React.FC = () => {
   }, []);
 
   const activeHrEmployees = useMemo(() => {
-    if (hrEmployees && hrEmployees.length > 0) return hrEmployees;
+    if (hrEmployees && hrEmployees.length > 0) {
+      if (effectiveBranchKey) {
+        const scopedEmps = hrEmployees.filter(
+          emp => resolveCanonicalBranchKey(emp.branchId, availableBranches) === effectiveBranchKey
+        );
+        if (scopedEmps.length > 0) return scopedEmps;
+      }
+      return hrEmployees;
+    }
     return [
       { id: 'emp-1', fullName: 'Chandan', employeeCode: 'EMP-001', designation: 'कर्मचारी', status: 'Active' },
       { id: 'emp-2', fullName: 'Ramesh Sharma', employeeCode: 'EMP-002', designation: 'Field Officer', status: 'Active' },
       { id: 'emp-3', fullName: 'Sunil Kumar', employeeCode: 'EMP-003', designation: 'Branch Manager', status: 'Active' },
       { id: 'emp-4', fullName: 'Pooja Kumari Yadav', employeeCode: 'EMP-004', designation: 'Loan Officer', status: 'Active' }
     ] as Employee[];
-  }, [hrEmployees]);
+  }, [hrEmployees, effectiveBranchKey, availableBranches]);
 
   // Robust Print Preview generator for both Collection and Signature sheets
   const handlePrintElement = (elementId: string) => {
@@ -900,7 +983,7 @@ export const MicroFinanceManagement: React.FC = () => {
     let sampleRows: Record<string, string | number>[] = [];
     const defaultCenter = centers[0]?.name || 'Center 01 (Janaki Chowk)';
     const defaultGroup = groups[0]?.name || 'Laxmi Mahila Samuh';
-    const defaultBranch = availableBranches[0]?.name || 'Ratauli Central Head Office';
+    const defaultBranch = defaultBranchName;
     const todayBs = getTodayBsDate();
 
     if (bulkType === 'Centers') {
@@ -1164,7 +1247,9 @@ export const MicroFinanceManagement: React.FC = () => {
             code,
             name,
             location: getExcelCell(row, ['Location', 'Address', 'Place']) || 'Mahottari',
-            branch: getExcelCell(row, ['Branch', 'Branch Name']) || availableBranches[0]?.name || 'Ratauli Central Head Office',
+            branch: !isSuperAdmin
+              ? defaultBranchName
+              : (getExcelCell(row, ['Branch', 'Branch Name']) || defaultBranchName),
             meetingDay: getExcelCell(row, ['Meeting Day', 'Meeting Date']) || 'Day 15th',
             fieldOfficer: getExcelCell(row, ['Field Officer', 'Officer', 'Staff']) || 'Ramesh Sharma',
             contactNo: getExcelCell(row, ['Contact No', 'Mobile', 'Phone']) || '',
@@ -1261,7 +1346,9 @@ export const MicroFinanceManagement: React.FC = () => {
             citizenshipNo: getExcelCell(row, ['Citizenship No', 'Citizenship']) || '',
             mobile: getExcelCell(row, ['Mobile', 'Phone', 'Contact No']) || '',
             gender,
-            branch: getExcelCell(row, ['Branch', 'Branch Name']) || matchedCenter?.branch || availableBranches[0]?.name || 'Ratauli Central Head Office',
+            branch: !isSuperAdmin
+              ? (matchedCenter?.branch || defaultBranchName)
+              : (getExcelCell(row, ['Branch', 'Branch Name']) || matchedCenter?.branch || defaultBranchName),
             centerId: matchedCenter?.id || '',
             centerName: matchedCenter?.name || centerQuery || '',
             samuhId: matchedGroup?.id || '',
@@ -2399,11 +2486,15 @@ export const MicroFinanceManagement: React.FC = () => {
   // Handlers for Center
   const handleOpenAddCenter = () => {
     setEditingCenter(null);
+    const activeSuperBranch =
+      isSuperAdmin && superAdminBranchFilter !== 'ALL'
+        ? findMatchingBranch(superAdminBranchFilter, availableBranches)?.name || defaultBranchName
+        : defaultBranchName;
     setCenterForm({
       code: `C-00${centers.length + 1}`,
       name: '',
       location: '',
-      branch: availableBranches[0]?.name || branch?.name || 'Ratauli Central Head Office',
+      branch: activeSuperBranch,
       meetingDay: 'Day 15th',
       status: 'ACTIVE',
       fieldOfficer: 'Ramesh Sharma',
@@ -2418,7 +2509,7 @@ export const MicroFinanceManagement: React.FC = () => {
       code: center.code,
       name: center.name,
       location: center.location,
-      branch: center.branch,
+      branch: !isSuperAdmin ? defaultBranchName : center.branch,
       meetingDay: center.meetingDay,
       status: center.status,
       fieldOfficer: center.fieldOfficer || 'Ramesh Sharma',
@@ -2436,11 +2527,15 @@ export const MicroFinanceManagement: React.FC = () => {
       alert('Please enter center name');
       return;
     }
+    const payload = {
+      ...centerForm,
+      branch: !isSuperAdmin ? defaultBranchName : (centerForm.branch || defaultBranchName)
+    };
     if (editingCenter) {
-      microFinanceService.updateCenter(editingCenter.id, centerForm);
+      microFinanceService.updateCenter(editingCenter.id, payload);
       showToast('Center updated successfully');
     } else {
-      microFinanceService.addCenter(centerForm);
+      microFinanceService.addCenter(payload);
       showToast('New center added successfully');
     }
     setCenters(microFinanceService.getCenters());
@@ -2610,7 +2705,7 @@ export const MicroFinanceManagement: React.FC = () => {
       citizenshipNo: '',
       mobile: '',
       gender: 'Female',
-      branch: availableBranches[0]?.name || branch?.name || 'Ratauli Central Head Office',
+      branch: defaultBranchName,
       centerId: defaultCenterId,
       samuhId: defaultGroupId,
       role: 'Member',
@@ -2691,11 +2786,13 @@ export const MicroFinanceManagement: React.FC = () => {
 
     const safeAccNo = memberForm.savingsAccountNo || `SAV-${Date.now().toString().slice(-4)}`;
     const safeJoinedDate = memberForm.joinedDate || new Date().toISOString().split('T')[0];
+    const resolvedMemberBranch = c?.branch || (!isSuperAdmin ? defaultBranchName : (memberForm.branch || defaultBranchName));
 
     try {
       if (editingMember) {
         microFinanceService.updateMember(editingMember.id, {
           ...memberForm,
+          branch: resolvedMemberBranch,
           memberId: memberForm.memberId.trim(),
           name: memberForm.name.trim(),
           citizenshipNo: memberForm.citizenshipNo.trim(),
@@ -2708,6 +2805,7 @@ export const MicroFinanceManagement: React.FC = () => {
       } else {
         microFinanceService.addMember({
           ...memberForm,
+          branch: resolvedMemberBranch,
           memberId: memberForm.memberId.trim(),
           name: memberForm.name.trim(),
           citizenshipNo: memberForm.citizenshipNo.trim(),
@@ -3686,7 +3784,10 @@ export const MicroFinanceManagement: React.FC = () => {
     }
 
     const center = centers.find(c => c.id === activeSheetToPrint.centerId || c.name === activeSheetToPrint.centerName);
-    const branchInfo = adminBranches.find(b => b.name === center?.branch) || availableBranches[0];
+    const branchInfo =
+      findMatchingBranch(center?.branch, adminBranches.length > 0 ? adminBranches : availableBranches) ||
+      loggedInBranchObj ||
+      availableBranches[0];
     const groupMembers = members.filter(m => (!activeSheetToPrint.groupId || activeSheetToPrint.groupId === 'all') ? (m.centerId === activeSheetToPrint.centerId || m.centerName === activeSheetToPrint.centerName) : m.samuhId === activeSheetToPrint.groupId);
 
     const nepMonth = nepaliMonthMapNp[activeSheetToPrint.month] || activeSheetToPrint.month;
@@ -3832,7 +3933,10 @@ export const MicroFinanceManagement: React.FC = () => {
     const groupMembers = members.filter(m => (!targetGroupId || targetGroupId === 'all')
       ? (m.centerId === targetCenterId || m.centerName === targetCenterName)
       : (m.samuhId === targetGroupId || m.samuhName === targetGroupName));
-    const branchInfo = adminBranches.find(b => b.name === targetCenter?.branch) || availableBranches[0];
+    const branchInfo =
+      findMatchingBranch(targetCenter?.branch, adminBranches.length > 0 ? adminBranches : availableBranches) ||
+      loggedInBranchObj ||
+      availableBranches[0];
 
     const membersToUse = sortByNameAZ(groupMembers);
 
@@ -4098,6 +4202,37 @@ export const MicroFinanceManagement: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            {isSuperAdmin ? (
+              <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2 py-1">
+                <Building2 className="w-3.5 h-3.5 text-[#00593B] shrink-0" />
+                <select
+                  value={superAdminBranchFilter}
+                  onChange={e => {
+                    setSuperAdminBranchFilter(e.target.value);
+                    clearAllSubMenuSearchFilters();
+                    setReportCenterId('');
+                    setReportGroupId('');
+                    setSigFilterCenterId('');
+                    setSigFilterGroupId('');
+                  }}
+                  aria-label="Filter Micro-Finance by Branch"
+                  className="bg-transparent text-[11px] font-bold text-slate-700 focus:outline-hidden cursor-pointer pr-1"
+                >
+                  <option value="ALL">All Branches</option>
+                  {availableBranches.map(b => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <div
+                className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-[#00593B] rounded-xl px-2.5 py-1 text-[11px] font-bold"
+                title="Logged-in Branch Scope"
+              >
+                <Building2 className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate max-w-[170px]">{defaultBranchName}</span>
+              </div>
+            )}
             <button
               type="button"
               onClick={reloadData}
@@ -6652,6 +6787,7 @@ export const MicroFinanceManagement: React.FC = () => {
                 'RATAULI SAVING AND CREDIT COOPERATIVE LTD'
               }
               branchId={branch?.id}
+              activeBranchKey={effectiveBranchKey}
               onToast={showToast}
             />
           )}
@@ -6667,6 +6803,7 @@ export const MicroFinanceManagement: React.FC = () => {
               logoUrl={logoUrl}
               onToast={showToast}
               branchId={branch?.id}
+              activeBranchKey={effectiveBranchKey}
             />
           )}
 
@@ -6790,13 +6927,18 @@ export const MicroFinanceManagement: React.FC = () => {
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">BRANCH</label>
                   <select
-                    value={centerForm.branch}
+                    value={!isSuperAdmin ? defaultBranchName : centerForm.branch}
+                    disabled={!isSuperAdmin}
                     onChange={e => setCenterForm({ ...centerForm, branch: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-blue-600"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-blue-600 disabled:opacity-80 disabled:cursor-not-allowed"
                   >
-                    {availableBranches.map(b => (
-                      <option key={b.id} value={b.name}>{b.name}</option>
-                    ))}
+                    {!isSuperAdmin ? (
+                      <option value={defaultBranchName}>{defaultBranchName}</option>
+                    ) : (
+                      availableBranches.map(b => (
+                        <option key={b.id} value={b.name}>{b.name}</option>
+                      ))
+                    )}
                   </select>
                 </div>
                 <div>
@@ -8352,7 +8494,10 @@ export const MicroFinanceManagement: React.FC = () => {
       {/* ============================================================== */}
       {isPrintSheetModalOpen && activeSheetToPrint && (() => {
         const centerObj = centers.find(c => c.id === activeSheetToPrint.centerId || c.name === activeSheetToPrint.centerName);
-        const centerBranch = adminBranches.find(b => b.name === centerObj?.branch) || availableBranches[0];
+        const centerBranch =
+          findMatchingBranch(centerObj?.branch, adminBranches.length > 0 ? adminBranches : availableBranches) ||
+          loggedInBranchObj ||
+          availableBranches[0];
         const groupMembers = members.filter(m => (!activeSheetToPrint.groupId || activeSheetToPrint.groupId === 'all') ? (m.centerId === activeSheetToPrint.centerId || m.centerName === activeSheetToPrint.centerName) : m.samuhId === activeSheetToPrint.groupId);
         const nepMonth = nepaliMonthMapNp[activeSheetToPrint.month] || activeSheetToPrint.month;
         const nepYear = toNepaliDigits(activeSheetToPrint.year);

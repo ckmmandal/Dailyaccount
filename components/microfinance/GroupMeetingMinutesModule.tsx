@@ -26,6 +26,7 @@ import { Branch } from '../../types';
 import { isBackDateBlockedForEntry, getBackDateBlockedMessage } from '../../utils/backDateControl';
 import { isDayEndedForBranch, getDayEndedBlockMessage, useDayEndLock } from '../../utils/dayEndLock';
 import { DayEndFieldset } from '../DayEndFieldset';
+import { findMatchingBranch, matchesScopedSheetOrMeeting } from '../../utils/mfBranchFilter';
 
 interface GroupMeetingMinutesModuleProps {
   groups: MFSamuhGroup[];
@@ -36,6 +37,7 @@ interface GroupMeetingMinutesModuleProps {
   logoUrl?: string;
   onToast?: (msg: string) => void;
   branchId?: string;
+  activeBranchKey?: string;
 }
 
 const nepaliMonthsEnglish = [
@@ -79,7 +81,8 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
   hrEmployees = [],
   logoUrl = '/system_logo.png',
   onToast = () => {},
-  branchId
+  branchId,
+  activeBranchKey
 }) => {
   const isDayEnded = useDayEndLock(branchId);
   // Current BS Date calculation
@@ -242,8 +245,8 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
 
   const activeSelectedBranch = useMemo(() => {
     const branchName = activeSelectedCenter?.branch;
-    return branches.find(b => b.name === branchName) || branches[0];
-  }, [branches, activeSelectedCenter]);
+    return findMatchingBranch(branchName, branches) || findMatchingBranch(branchId, branches) || branches[0];
+  }, [branches, activeSelectedCenter, branchId]);
 
   // Handle clicking Top "View" button -> Open Minute Generation Modal
   const handleOpenMinuteGenerator = () => {
@@ -639,9 +642,12 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
     setPendingTemplateConfirm(null);
   };
 
-  // Filtered meetings for records table
+  // Filtered meetings for records table (branch-scoped when activeBranchKey is set)
   const filteredRecords = useMemo(() => {
     return meetings.filter(m => {
+      if (!matchesScopedSheetOrMeeting(m, centers, groups, activeBranchKey, branches)) {
+        return false;
+      }
       const dateRaw = m.meetingDateBs || '';
       const dateAscii = fromNepaliDigits(dateRaw);
       const matchYear =
@@ -665,7 +671,7 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
 
       return matchYear && matchMonth;
     });
-  }, [meetings, recordFilterYear, recordFilterMonth]);
+  }, [meetings, centers, groups, activeBranchKey, branches, recordFilterYear, recordFilterMonth]);
 
   return (
     <div className="space-y-2.5">

@@ -439,7 +439,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         'sub_mf_dashboard_view', 'sub_mf_centers_view', 'sub_mf_groups_view',
         'sub_mf_members_view', 'sub_mf_saving_view', 'sub_mf_loan_view',
         'sub_mf_reports_view', 'sub_mf_signature_sheet_view',
-        'sub_mf_meeting_minutes_view', 'sub_mf_id_card_view'
+        'sub_mf_deposit_sheet_view', 'sub_mf_meeting_minutes_view', 'sub_mf_id_card_view'
       ],
       view_depreciation: [
         'sub_dep_dashboard_view', 'sub_dep_assets_view', 'sub_dep_calculate_view',
@@ -484,6 +484,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const subs = coarseSubMap[p];
     if (subs && subs.some(k => userPerms.includes(k) || rolePerms.includes(k))) {
       return true;
+    }
+
+    // If any granular Micro-Finance sub-menu permission (view/edit/delete) is granted, allow entering Micro-Finance
+    if (p === 'view_microfinance') {
+      if (
+        userPerms.some(k => typeof k === 'string' && k.startsWith('sub_mf_')) ||
+        rolePerms.some(k => typeof k === 'string' && k.startsWith('sub_mf_'))
+      ) {
+        return true;
+      }
     }
 
     return false;

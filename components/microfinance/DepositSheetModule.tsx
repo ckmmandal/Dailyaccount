@@ -22,6 +22,7 @@ import {
 import { Branch } from '../../types';
 import { isBackDateBlockedForEntry, getBackDateBlockedMessage } from '../../utils/backDateControl';
 import { isDayEndedForBranch, getDayEndedBlockMessage, useDayEndLock } from '../../utils/dayEndLock';
+import { findMatchingBranch, matchesScopedSheetOrMeeting } from '../../utils/mfBranchFilter';
 
 interface DepositSheetModuleProps {
   centers: MFCenter[];
@@ -33,6 +34,7 @@ interface DepositSheetModuleProps {
   organizationNameNp?: string;
   organizationName?: string;
   branchId?: string;
+  activeBranchKey?: string;
   onToast?: (msg: string) => void;
 }
 
@@ -123,6 +125,7 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
   organizationNameNp = 'रतौली बचत तथा ऋण सहकारी संस्था लिमिटेड',
   organizationName = 'RATAULI SAVING AND CREDIT COOPERATIVE LTD',
   branchId,
+  activeBranchKey,
   onToast = () => {}
 }) => {
   const isDayEnded = useDayEndLock(branchId);
@@ -246,8 +249,8 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
 
   const activeBranch = useMemo(() => {
     const bName = activeCenter?.branch;
-    return branches.find(b => b.name === bName) || branches[0];
-  }, [branches, activeCenter]);
+    return findMatchingBranch(bName, branches) || findMatchingBranch(branchId, branches) || branches[0];
+  }, [branches, activeCenter, branchId]);
 
   const effectiveDay = filterDay === 'ALL' ? currentBsDate.day : filterDay;
   const targetDateBs = useMemo(
@@ -746,14 +749,15 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
     setIsSheetDetailOpen(true);
   };
 
-  // Filtered saved sheets for the Deposit Sheets Record table
+  // Filtered saved sheets for the Deposit Sheets Record table (branch-scoped when activeBranchKey is set)
   const filteredSavedSheets = useMemo(() => {
     return savedSheets.filter(sheet => {
+      if (!matchesScopedSheetOrMeeting(sheet, centers, groups, activeBranchKey, branches)) return false;
       if (recordFilterYear !== 'ALL' && String(sheet.year) !== recordFilterYear) return false;
       if (recordFilterMonth !== 'ALL' && String(sheet.month) !== recordFilterMonth) return false;
       return true;
     });
-  }, [savedSheets, recordFilterYear, recordFilterMonth]);
+  }, [savedSheets, centers, groups, activeBranchKey, branches, recordFilterYear, recordFilterMonth]);
 
   // Load a previously saved sheet back into the filter bar & open editable detail sheet
   const handleLoadSavedSheet = (sheet: MFDepositSheet) => {
