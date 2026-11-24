@@ -8,7 +8,7 @@ import {
   Edit2, Trash2, CheckCircle2, Ban,
   Calendar, Clock, Building2, UserPlus,
   Printer, CreditCard, X, Camera, User, Eye, FileSpreadsheet,
-  Lock, Loader2, AlertCircle
+  Lock, Loader2, AlertCircle, AlertTriangle
 } from 'lucide-react';
 import { 
   ResponsiveContainer,
@@ -93,11 +93,12 @@ const getEffectiveMemberStatus = (status?: string): 'ACTIVE' | 'INACTIVE' => {
 };
 
 const getEffectiveLoanStatus = (loan: MFLoanRecord): 'ACTIVE' | 'MATURED' | 'CLOSED' => {
-  if (loan.status === 'CLOSED') return 'CLOSED';
-  if (loan.status === 'MATURED') return 'MATURED';
+  const rawStatus = String(loan.status || '').trim().toUpperCase();
+  if (rawStatus === 'CLOSED' || rawStatus === 'CLOSE') return 'CLOSED';
+  if (rawStatus === 'MATURED') return 'MATURED';
   const matNorm = normalizeBsDate(loan.maturityDate);
   const isBsDate = /^20[7-9]\d-/.test(matNorm);
-  if (loan.status === 'ACTIVE' && isBsDate && matNorm <= getTodayBsDate()) {
+  if (rawStatus === 'ACTIVE' && isBsDate && matNorm <= getTodayBsDate()) {
     return 'MATURED';
   }
   return 'ACTIVE';
@@ -810,6 +811,12 @@ export const MicroFinanceManagement: React.FC = () => {
   const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
   const [selectedSignatureSheetToDelete, setSelectedSignatureSheetToDelete] = useState<MFSignatureSheet | null>(null);
   const [isDeleteSignatureModalOpen, setIsDeleteSignatureModalOpen] = useState(false);
+  const [alreadyGeneratedNotice, setAlreadyGeneratedNotice] = useState<{
+    reportName: string;
+    groupName: string;
+    periodLabel: string;
+    existingDetail?: string;
+  } | null>(null);
 
   const [selectedSavingToView, setSelectedSavingToView] = useState<MFSavingsRecord | null>(null);
   const [isViewSavingModalOpen, setIsViewSavingModalOpen] = useState(false);
@@ -3569,6 +3576,7 @@ export const MicroFinanceManagement: React.FC = () => {
       const finalBs = normalizeBsDate(closeLoanDateBs || getTodayBsDate());
       const updated = await microFinanceService.closeLoan(selectedLoanToClose.id, finalBs);
       setLoans(updated);
+      setCollectionSheetLoans(prev => prev.filter(l => l.id !== selectedLoanToClose.id));
       setMembers(microFinanceService.getMembers());
       if (closedLoansArchive.length > 0) {
         setClosedLoansArchive(prev => [
@@ -3604,21 +3612,20 @@ export const MicroFinanceManagement: React.FC = () => {
     }
     const updated = microFinanceService.deleteLoan(selectedLoanToDelete.id);
     setLoans(updated);
+    setCollectionSheetLoans(prev => prev.filter(l => l.id !== selectedLoanToDelete.id));
     setClosedLoansArchive(prev => prev.filter(l => l.id !== selectedLoanToDelete.id));
     setIsDeleteLoanModalOpen(false);
     setSelectedLoanToDelete(null);
     showToast('Loan record deleted successfully');
   };
 
-  // Helper: checks if a loan was active on a given BS report date
+  // Helper: checks if an open (non-closed) loan is active on a given BS report date.
+  // Closed loans are strictly excluded from all sheets regardless of report date.
   const isLoanActiveOnBsDate = (loan: MFLoanRecord, targetDateBs: string): boolean => {
+    if (getEffectiveLoanStatus(loan) === 'CLOSED') return false;
     const target = normalizeBsDate(targetDateBs);
     const openBs = normalizeBsDate(loan.loanDateBs || loan.loanDate);
     if (openBs && target && openBs > target) return false;
-    if (loan.status === 'CLOSED') {
-      const closedBs = normalizeBsDate(loan.closedDateBs || loan.closedDate || loan.maturityDate);
-      return Boolean(closedBs && target && closedBs > target);
-    }
     return true;
   };
 
@@ -3706,9 +3713,13 @@ export const MicroFinanceManagement: React.FC = () => {
     return false;
   };
 
-  // Helper: returns matching ACTIVE (unclosed) saving accounts in Savings Management for a member
-  const getMemberActiveSavings = (mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string; savingsAccountNo?: string }): MFSavingsRecord[] => {
-    return savings.filter(
+  // Helper: returns matching ACTIVE/MATURED (unclosed) saving accounts in Savings Management for a member
+  const getMemberActiveSavings = (
+    mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string; savingsAccountNo?: string },
+    savingsPool?: MFSavingsRecord[]
+  ): MFSavingsRecord[] => {
+    const source = savingsPool ?? savings;
+    return source.filter(
       s => getEffectiveSavingStatus(s) !== 'CLOSED' && doesSavingBelongToMember(s, mem)
     );
   };
@@ -3729,9 +3740,12 @@ export const MicroFinanceManagement: React.FC = () => {
     });
   };
 
-  // Helper: sums recurring amounts from ACTIVE saving accounts in Savings Management for a member
-  const getMemberRecurringSavingAmount = (mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string }): number => {
-    return getMemberActiveSavings(mem).reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+  // Helper: sums recurring amounts from unclosed saving accounts in Savings Management for a member
+  const getMemberRecurringSavingAmount = (
+    mem: { memberId?: string; name?: string; centerName?: string; samuhName?: string; savingsAccountNo?: string },
+    savingsPool?: MFSavingsRecord[]
+  ): number => {
+    return getMemberActiveSavings(mem, savingsPool).reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
   };
 
   // Helper: calculates inclusive saving kista count from the earliest active saving account open date (BS)
@@ -3768,10 +3782,20 @@ export const MicroFinanceManagement: React.FC = () => {
     }
 
     const targetDateBs = buildBsDateFromParts(reportYear, reportMonth, reportDay);
-    let dateAwareLoans: MFLoanRecord[] = loans;
+    let dateAwareLoans: MFLoanRecord[] = loans.filter(l => getEffectiveLoanStatus(l) !== 'CLOSED');
+    let freshSavingsPool: MFSavingsRecord[] = savings;
     setIsLoadingCollectionSheet(true);
     try {
-      dateAwareLoans = await microFinanceService.fetchLoansForReportDate(targetDateBs);
+      const [fetchedLoans, fetchedSavings] = await Promise.all([
+        microFinanceService.fetchLoansForReportDate(targetDateBs),
+        microFinanceService.fetchSavingsFromSupabase().catch(() => null)
+      ]);
+      dateAwareLoans = fetchedLoans.filter(l => getEffectiveLoanStatus(l) !== 'CLOSED');
+      if (fetchedSavings) {
+        freshSavingsPool = fetchedSavings;
+        setSavings(fetchedSavings);
+      }
+      setLoans(microFinanceService.getLoans());
       setCollectionSheetLoans(dateAwareLoans);
       setCollectionSheetTargetBs(targetDateBs);
     } finally {
@@ -3781,7 +3805,7 @@ export const MicroFinanceManagement: React.FC = () => {
     const groupMembers = members.filter(m => (!group || group.id === 'all')
       ? (m.centerId === center.id || m.centerName === center.name)
       : m.samuhId === group.id);
-    const totalRecurringSaving = groupMembers.reduce((sum, m) => sum + getMemberRecurringSavingAmount(m), 0);
+    const totalRecurringSaving = groupMembers.reduce((sum, m) => sum + getMemberRecurringSavingAmount(m, freshSavingsPool), 0);
     const totalLoanDue = groupMembers.reduce((sum, m) => {
       const mLoans = dateAwareLoans.filter(l =>
         doesLoanBelongToMember(l, m) &&
@@ -3816,12 +3840,94 @@ export const MicroFinanceManagement: React.FC = () => {
     setIsPrintSheetModalOpen(true);
   };
 
+  const isSameReportCenterAndGroup = (
+    rec: { centerId?: string; centerName?: string; groupId?: string; groupName?: string },
+    target: { centerId?: string; centerName?: string; groupId?: string; groupName?: string }
+  ): boolean => {
+    const recGroupId = String(rec.groupId || '').trim();
+    const targetGroupId = String(target.groupId || '').trim();
+
+    if (targetGroupId === 'all' || recGroupId === 'all') {
+      if (recGroupId !== targetGroupId) return false;
+      if (rec.centerId && target.centerId && rec.centerId === target.centerId) return true;
+      return normalizeMfText(rec.centerName) !== '' && normalizeMfText(rec.centerName) === normalizeMfText(target.centerName);
+    }
+
+    const sameGroup =
+      (recGroupId !== '' && targetGroupId !== '' && recGroupId === targetGroupId) ||
+      (normalizeMfText(rec.groupName) !== '' && normalizeMfText(rec.groupName) === normalizeMfText(target.groupName));
+    if (!sameGroup) return false;
+
+    if (rec.centerId && target.centerId && rec.centerId !== target.centerId) {
+      if (normalizeMfText(rec.centerName) !== normalizeMfText(target.centerName)) return false;
+    }
+    return true;
+  };
+
+  const extractReportBsYearMonth = (
+    dateText?: string,
+    fallbackYear?: string,
+    fallbackMonth?: string
+  ): { year: string; month: string } => {
+    const raw = String(dateText || '');
+    const ascii = fromNepaliDigits(raw);
+
+    const yearMatch = ascii.match(/\b(20\d{2})\b/);
+    const year = yearMatch ? yearMatch[1] : (fallbackYear && fallbackYear !== 'ALL' ? fallbackYear : currentBsDate.year);
+
+    let month = '';
+    for (const enMonth of nepaliMonthsEnglishList) {
+      const npMonth = nepaliMonthMapNp[enMonth];
+      if (
+        raw.toLowerCase().includes(enMonth.toLowerCase()) ||
+        (npMonth && raw.includes(npMonth))
+      ) {
+        month = enMonth;
+        break;
+      }
+    }
+    if (!month) {
+      const numMatch = ascii.match(/20\d{2}[-/](\d{1,2})(?:[-/]|$)/);
+      if (numMatch) {
+        const mIdx = parseInt(numMatch[1], 10) - 1;
+        if (mIdx >= 0 && mIdx < nepaliMonthsEnglishList.length) {
+          month = nepaliMonthsEnglishList[mIdx];
+        }
+      }
+    }
+    if (!month) {
+      month = fallbackMonth && fallbackMonth !== 'ALL' ? fallbackMonth : currentBsDate.month;
+    }
+    return { year, month };
+  };
+
   // Handler when user clicks "Generate Sheet" in Collection Sheet preview modal
-  // Saves the sheet permanently into the Signature Sheet table and Available Collection Sheets!
+  // Saves the sheet permanently into Available Collection Sheets (once per Group + Year + Month)!
   const handleGenerateSignatureSheetFromModal = () => {
     if (!activeSheetToPrint) return;
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
+      return;
+    }
+
+    const { year: targetYear, month: targetMonth } = extractReportBsYearMonth(
+      activeSheetToPrint.dateDisplay,
+      activeSheetToPrint.year,
+      activeSheetToPrint.month
+    );
+    const allSavedCollectionSheets = [...sheets, ...microFinanceService.getSheets()];
+    const existingCollectionForMonth = allSavedCollectionSheets.find(
+      s =>
+        isSameReportCenterAndGroup(s, activeSheetToPrint) &&
+        matchesBsDateFilter(s.dateDisplay, targetYear, targetMonth, s.year, s.month)
+    );
+    if (existingCollectionForMonth) {
+      setAlreadyGeneratedNotice({
+        reportName: 'Collection Sheet',
+        groupName: activeSheetToPrint.groupName || existingCollectionForMonth.groupName,
+        periodLabel: `${targetYear} ${targetMonth}`,
+        existingDetail: `Existing Record: ${existingCollectionForMonth.dateDisplay || `${targetYear} ${targetMonth}`}`
+      });
       return;
     }
 
@@ -3837,7 +3943,9 @@ export const MicroFinanceManagement: React.FC = () => {
     const nepDay = toNepaliDigits(activeSheetToPrint.day);
     const nepaliDateStr = `${nepYear} ${nepMonth} ${nepDay}`;
     const targetDateBs = collectionSheetTargetBs || buildBsDateFromParts(activeSheetToPrint.year, activeSheetToPrint.month, activeSheetToPrint.day);
-    const loanPool = collectionSheetLoans.length > 0 ? collectionSheetLoans : loans;
+    const loanPool = (collectionSheetLoans.length > 0 ? collectionSheetLoans : loans).filter(
+      l => getEffectiveLoanStatus(l) !== 'CLOSED'
+    );
 
     const membersToUse = sortByNameAZ(groupMembers);
 
@@ -3882,39 +3990,44 @@ export const MicroFinanceManagement: React.FC = () => {
     const totalLoans = sigMembers.reduce((acc, m) => acc + m.loanAmount, 0);
     const totalDue = sigMembers.reduce((acc, m) => acc + (m.dueAmount || 0), 0);
 
-    // Save permanent signature sheet
-    const newSigSheet = microFinanceService.addSignatureSheet({
-      sheetNo: `SS-${activeSheetToPrint.year}-${Date.now().toString().slice(-4)}`,
-      centerId: activeSheetToPrint.centerId,
-      centerName: activeSheetToPrint.centerName,
-      groupId: activeSheetToPrint.groupId,
-      groupName: activeSheetToPrint.groupName,
-      dateBs: nepaliDateStr,
-      location: center?.location || 'रतौली',
-      branchName: branchInfo?.name || 'सहोडवा सेवा केन्द्र',
-      branchAddress: branchInfo?.location || systemSettings?.address || 'पिपरा गाँउपालिका-६, महोत्तरी',
-      members: sigMembers,
-      totalMembers: sigMembers.length,
-      totalSavings,
-      totalLoans,
-      totalDue,
-      officerName: activeHrEmployees.find(e => e.id === sigFilterEmployeeId || e.fullName === sigFilterEmployeeId)?.fullName || user?.fullName || 'Chandan'
+    // Save permanent Collection Sheet
+    microFinanceService.addSheet({
+      ...activeSheetToPrint,
+      status: 'GENERATED',
+      totalCollected: totalSavings + totalLoans + totalDue
     });
+    setSheets(microFinanceService.getSheets());
 
-    // Also add to available collection sheets if not exists
-    const existingSheet = sheets.find(s => s.id === activeSheetToPrint.id);
-    if (!existingSheet) {
-      microFinanceService.addSheet({
-        ...activeSheetToPrint,
-        status: 'GENERATED',
-        totalCollected: totalSavings + totalLoans + totalDue
+    // Also save paired Signature Sheet only if one does not already exist for this Group + Year + Month
+    const allSavedSignatureSheets = [...signatureSheets, ...microFinanceService.getSignatureSheets()];
+    const existingSigForMonth = allSavedSignatureSheets.find(
+      s => isSameReportCenterAndGroup(s, activeSheetToPrint) && matchesBsDateFilter(s.dateBs, targetYear, targetMonth)
+    );
+    let savedSheetLabel = `${targetYear} ${targetMonth}`;
+    if (!existingSigForMonth) {
+      const newSigSheet = microFinanceService.addSignatureSheet({
+        sheetNo: `SS-${activeSheetToPrint.year}-${Date.now().toString().slice(-4)}`,
+        centerId: activeSheetToPrint.centerId,
+        centerName: activeSheetToPrint.centerName,
+        groupId: activeSheetToPrint.groupId,
+        groupName: activeSheetToPrint.groupName,
+        dateBs: nepaliDateStr,
+        location: center?.location || 'रतौली',
+        branchName: branchInfo?.name || 'सहोडवा सेवा केन्द्र',
+        branchAddress: branchInfo?.location || systemSettings?.address || 'पिपरा गाँउपालिका-६, महोत्तरी',
+        members: sigMembers,
+        totalMembers: sigMembers.length,
+        totalSavings,
+        totalLoans,
+        totalDue,
+        officerName: activeHrEmployees.find(e => e.id === sigFilterEmployeeId || e.fullName === sigFilterEmployeeId)?.fullName || user?.fullName || 'Chandan'
       });
-      setSheets(microFinanceService.getSheets());
+      setSignatureSheets(microFinanceService.getSignatureSheets());
+      savedSheetLabel = newSigSheet.sheetNo;
     }
 
-    setSignatureSheets(microFinanceService.getSignatureSheets());
     setIsPrintSheetModalOpen(false);
-    showToast(`Sheet generated successfully & saved to table! (${newSigSheet.sheetNo})`);
+    showToast(`Collection Sheet generated successfully & saved to table! (${savedSheetLabel})`);
   };
 
   // Handler when user clicks "View" on the Signature Sheet filter bar
@@ -3948,26 +4061,27 @@ export const MicroFinanceManagement: React.FC = () => {
     const selectedHrEmp = activeHrEmployees.find(e => e.id === sigFilterEmployeeId || e.fullName === sigFilterEmployeeId);
     const officerName = selectedHrEmp?.fullName || (sigFilterEmployeeId && sigFilterEmployeeId !== 'ALL' ? sigFilterEmployeeId : user?.fullName || 'Chandan');
 
-    // 5. Check if already saved in signatureSheets
+    // 5. Check if already saved in signatureSheets (preserve id/sheetNo while recalculating live non-closed accounts)
     const existing = signatureSheets.find(s =>
       (s.groupId === targetGroupId || s.groupName === targetGroupName) &&
       matchesBsDateFilter(s.dateBs, yr, mo)
     );
 
-    if (existing) {
-      setSelectedSignatureSheetToPrint({
-        ...existing,
-        officerName: officerName || existing.officerName
-      });
-      setIsSignatureModalOpen(true);
-      return;
-    }
-
-    // 6. Dynamically build signature sheet with group members + date-aware loans (includes loans closed after targetDateBs)
+    // 6. Dynamically build signature sheet with group members + live non-closed savings & loans
     setIsLoadingSignatureSheet(true);
-    let dateAwareLoans: MFLoanRecord[] = loans;
+    let dateAwareLoans: MFLoanRecord[] = loans.filter(l => getEffectiveLoanStatus(l) !== 'CLOSED');
+    let freshSavingsPool: MFSavingsRecord[] = savings;
     try {
-      dateAwareLoans = await microFinanceService.fetchLoansForReportDate(targetDateBs);
+      const [fetchedLoans, fetchedSavings] = await Promise.all([
+        microFinanceService.fetchLoansForReportDate(targetDateBs),
+        microFinanceService.fetchSavingsFromSupabase().catch(() => null)
+      ]);
+      dateAwareLoans = fetchedLoans.filter(l => getEffectiveLoanStatus(l) !== 'CLOSED');
+      if (fetchedSavings) {
+        freshSavingsPool = fetchedSavings;
+        setSavings(fetchedSavings);
+      }
+      setLoans(microFinanceService.getLoans());
     } finally {
       setIsLoadingSignatureSheet(false);
     }
@@ -3991,7 +4105,7 @@ export const MicroFinanceManagement: React.FC = () => {
       const microInstallmentAmt = microLoan ? (microLoan.installmentAmount || 0) : 0;
       const emergencyInstallmentAmt = emergencyLoan ? (emergencyLoan.installmentAmount || 0) : 0;
       const totalLoanAmt = microInstallmentAmt + emergencyInstallmentAmt;
-      const savingAmt = getMemberRecurringSavingAmount(m);
+      const savingAmt = getMemberRecurringSavingAmount(m, freshSavingsPool);
 
       return {
         memberId: m.memberId,
@@ -4012,23 +4126,23 @@ export const MicroFinanceManagement: React.FC = () => {
     });
 
     const previewSheet: MFSignatureSheet = {
-      id: `preview-${Date.now()}`,
-      sheetNo: `SS-${yr}-${Date.now().toString().slice(-4)}`,
+      id: existing?.id || `preview-${Date.now()}`,
+      sheetNo: existing?.sheetNo || `SS-${yr}-${Date.now().toString().slice(-4)}`,
       centerId: targetCenterId,
       centerName: targetCenterName,
       groupId: targetGroupId,
       groupName: targetGroupName,
-      dateBs: nepaliDateStr,
-      location: targetCenter?.location || 'सहोडवा, महोत्तरी',
-      branchName: branchInfo?.name || 'सहोडवा सेवा केन्द्र',
-      branchAddress: branchInfo?.location || systemSettings?.address || 'पिपरा गाँउपालिका-६, महोत्तरी',
+      dateBs: existing?.dateBs || nepaliDateStr,
+      location: targetCenter?.location || existing?.location || 'सहोडवा, महोत्तरी',
+      branchName: branchInfo?.name || existing?.branchName || 'सहोडवा सेवा केन्द्र',
+      branchAddress: branchInfo?.location || systemSettings?.address || existing?.branchAddress || 'पिपरा गाँउपालिका-६, महोत्तरी',
       members: sigMembers,
       totalMembers: sigMembers.length,
       totalSavings: sigMembers.reduce((a, b) => a + b.savingsAmount, 0),
       totalLoans: sigMembers.reduce((a, b) => a + b.loanAmount, 0),
       totalDue: sigMembers.reduce((a, b) => a + (b.dueAmount || 0), 0),
-      officerName: officerName,
-      createdAt: new Date().toISOString()
+      officerName: officerName || existing?.officerName || 'Chandan',
+      createdAt: existing?.createdAt || new Date().toISOString()
     };
 
     setSelectedSignatureSheetToPrint(previewSheet);
@@ -4036,7 +4150,7 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   // Handler when user clicks "Generate Sheet" in the Signature Sheet preview modal
-  // Saves the sheet permanently into the Signature Sheets records table and opens print preview!
+  // Saves the sheet permanently into the Signature Sheets records table (once per Group + Year + Month)!
   const handleSaveAndGenerateSignatureSheet = () => {
     if (!selectedSignatureSheetToPrint) return;
     if (isDayEndedForBranch(branch?.id)) {
@@ -4048,43 +4162,49 @@ export const MicroFinanceManagement: React.FC = () => {
       return;
     }
 
-    const existingIndex = signatureSheets.findIndex(s => 
-      s.id === selectedSignatureSheetToPrint.id ||
-      s.sheetNo === selectedSignatureSheetToPrint.sheetNo ||
-      (s.groupId === selectedSignatureSheetToPrint.groupId && s.dateBs === selectedSignatureSheetToPrint.dateBs)
+    const { year: targetYear, month: targetMonth } = extractReportBsYearMonth(
+      selectedSignatureSheetToPrint.dateBs,
+      sigFilterYear,
+      sigFilterMonth
+    );
+    const allSavedSignatureSheets = [...signatureSheets, ...microFinanceService.getSignatureSheets()];
+    const existingSigForMonth = allSavedSignatureSheets.find(
+      s =>
+        isSameReportCenterAndGroup(s, selectedSignatureSheetToPrint) &&
+        matchesBsDateFilter(s.dateBs, targetYear, targetMonth)
     );
 
-    let savedSheet: MFSignatureSheet;
-    if (existingIndex >= 0) {
-      savedSheet = {
-        ...signatureSheets[existingIndex],
-        ...selectedSignatureSheetToPrint,
-        id: signatureSheets[existingIndex].id
-      };
-      const updated = microFinanceService.updateSignatureSheet(savedSheet.id, savedSheet);
-      setSignatureSheets(updated);
-    } else {
-      savedSheet = microFinanceService.addSignatureSheet({
-        sheetNo: selectedSignatureSheetToPrint.sheetNo.startsWith('SS-') && !selectedSignatureSheetToPrint.sheetNo.includes('preview')
-          ? selectedSignatureSheetToPrint.sheetNo 
-          : `SS-${sigFilterYear !== 'ALL' ? sigFilterYear : '2083'}-${Date.now().toString().slice(-4)}`,
-        centerId: selectedSignatureSheetToPrint.centerId,
-        centerName: selectedSignatureSheetToPrint.centerName,
-        groupId: selectedSignatureSheetToPrint.groupId,
-        groupName: selectedSignatureSheetToPrint.groupName,
-        dateBs: selectedSignatureSheetToPrint.dateBs,
-        location: selectedSignatureSheetToPrint.location,
-        branchName: selectedSignatureSheetToPrint.branchName,
-        branchAddress: selectedSignatureSheetToPrint.branchAddress,
-        members: selectedSignatureSheetToPrint.members,
-        totalMembers: selectedSignatureSheetToPrint.totalMembers,
-        totalSavings: selectedSignatureSheetToPrint.totalSavings,
-        totalLoans: selectedSignatureSheetToPrint.totalLoans,
-        totalDue: selectedSignatureSheetToPrint.totalDue,
-        officerName: selectedSignatureSheetToPrint.officerName
+    if (existingSigForMonth) {
+      setAlreadyGeneratedNotice({
+        reportName: 'Signature Sheet',
+        groupName: selectedSignatureSheetToPrint.groupName || existingSigForMonth.groupName,
+        periodLabel: `${targetYear} ${targetMonth}`,
+        existingDetail: `Sheet No: ${existingSigForMonth.sheetNo} (${existingSigForMonth.dateBs})`
       });
-      setSignatureSheets(microFinanceService.getSignatureSheets());
+      return;
     }
+
+    const savedSheet = microFinanceService.addSignatureSheet({
+      sheetNo:
+        selectedSignatureSheetToPrint.sheetNo.startsWith('SS-') && !selectedSignatureSheetToPrint.sheetNo.includes('preview')
+          ? selectedSignatureSheetToPrint.sheetNo
+          : `SS-${targetYear}-${Date.now().toString().slice(-4)}`,
+      centerId: selectedSignatureSheetToPrint.centerId,
+      centerName: selectedSignatureSheetToPrint.centerName,
+      groupId: selectedSignatureSheetToPrint.groupId,
+      groupName: selectedSignatureSheetToPrint.groupName,
+      dateBs: selectedSignatureSheetToPrint.dateBs,
+      location: selectedSignatureSheetToPrint.location,
+      branchName: selectedSignatureSheetToPrint.branchName,
+      branchAddress: selectedSignatureSheetToPrint.branchAddress,
+      members: selectedSignatureSheetToPrint.members,
+      totalMembers: selectedSignatureSheetToPrint.totalMembers,
+      totalSavings: selectedSignatureSheetToPrint.totalSavings,
+      totalLoans: selectedSignatureSheetToPrint.totalLoans,
+      totalDue: selectedSignatureSheetToPrint.totalDue,
+      officerName: selectedSignatureSheetToPrint.officerName
+    });
+    setSignatureSheets(microFinanceService.getSignatureSheets());
 
     // Set history filters so the saved sheet is immediately visible in the table
     if (sigFilterYear && sigFilterYear !== 'ALL') {
@@ -6498,7 +6618,12 @@ export const MicroFinanceManagement: React.FC = () => {
                               <div className="flex items-center justify-end gap-2">
                                 <button
                                   type="button"
-                                  onClick={() => { setActiveSheetToPrint(sheet); setIsPrintSheetModalOpen(true); }}
+                                  onClick={() => {
+                                    setCollectionSheetLoans([]);
+                                    setCollectionSheetTargetBs(buildBsDateFromParts(sheet.year, sheet.month, sheet.day));
+                                    setActiveSheetToPrint(sheet);
+                                    setIsPrintSheetModalOpen(true);
+                                  }}
                                   className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-[11px] transition-colors cursor-pointer whitespace-nowrap"
                                 >
                                   <Eye className="w-3.5 h-3.5" />
@@ -8562,7 +8687,9 @@ export const MicroFinanceManagement: React.FC = () => {
         const membersToRender = sortByNameAZ(groupMembers);
 
         const targetReportDateBs = collectionSheetTargetBs || buildBsDateFromParts(activeSheetToPrint.year, activeSheetToPrint.month, activeSheetToPrint.day);
-        const sheetLoansPool = collectionSheetLoans.length > 0 ? collectionSheetLoans : loans;
+        const sheetLoansPool = (collectionSheetLoans.length > 0 ? collectionSheetLoans : loans).filter(
+          l => getEffectiveLoanStatus(l) !== 'CLOSED'
+        );
 
         const rowsData = membersToRender.map((mem, i) => {
           const memLoans = sheetLoansPool.filter(l =>
@@ -10394,6 +10521,47 @@ export const MicroFinanceManagement: React.FC = () => {
                 type="button"
                 onClick={() => setBulkUploadSuccess(null)}
                 className="min-w-[120px] px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL: ALREADY GENERATED WARNING (ONCE PER YEAR & MONTH) */}
+      {/* ============================================================== */}
+      {alreadyGeneratedNotice && (
+        <div
+          className="fixed inset-0 z-[10010] bg-slate-950/75 backdrop-blur-xs flex justify-center items-center p-4"
+          onClick={() => setAlreadyGeneratedNotice(null)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-amber-200 overflow-hidden p-6 text-center space-y-4 animate-in zoom-in-95 duration-200"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="w-14 h-14 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto">
+              <AlertTriangle className="w-7 h-7" />
+            </div>
+
+            <div className="space-y-1.5">
+              <h3 className="text-base font-extrabold text-slate-900">Already Generated</h3>
+              <p className="text-xs text-slate-700 font-semibold leading-relaxed">
+                You have already generated <strong>{alreadyGeneratedNotice.reportName}</strong> for{' '}
+                <strong>{alreadyGeneratedNotice.groupName}</strong> ({alreadyGeneratedNotice.periodLabel}).
+              </p>
+              <div className="mt-2 p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-900 font-semibold space-y-0.5">
+                {alreadyGeneratedNotice.existingDetail && <div>{alreadyGeneratedNotice.existingDetail}</div>}
+                <div>Only one {alreadyGeneratedNotice.reportName} can be generated per Year &amp; Month.</div>
+              </div>
+            </div>
+
+            <div className="flex justify-center pt-1">
+              <button
+                type="button"
+                onClick={() => setAlreadyGeneratedNotice(null)}
+                className="min-w-[120px] px-6 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors"
               >
                 OK
               </button>

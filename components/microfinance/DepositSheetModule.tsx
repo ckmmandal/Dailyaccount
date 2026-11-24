@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import NepaliDate from 'nepali-date-converter';
 import {
+  AlertTriangle,
   CheckCircle2,
   Eye,
   FileSpreadsheet,
@@ -158,6 +159,12 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
     microFinanceService.getDepositSheets()
   );
   const [isSheetDetailOpen, setIsSheetDetailOpen] = useState<boolean>(false);
+  const [isMonthSheetLocked, setIsMonthSheetLocked] = useState<boolean>(false);
+  const [alreadyGeneratedNotice, setAlreadyGeneratedNotice] = useState<{
+    groupName: string;
+    periodLabel: string;
+    existingDetail?: string;
+  } | null>(null);
   const [recordFilterYear, setRecordFilterYear] = useState<string>('ALL');
   const [recordFilterMonth, setRecordFilterMonth] = useState<string>('ALL');
   const [pendingDeleteSheet, setPendingDeleteSheet] = useState<MFDepositSheet | null>(null);
@@ -285,11 +292,53 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
     );
   }, [members, activeGroup, activeCenter]);
 
-  // Existing saved sheet for current Group + BS Date (if any)
+  // Matches any Deposit Sheet for the same Group + Year + Month (regardless of day)
+  const matchesDepositSheetGroupAndMonth = (
+    sheet: MFDepositSheet,
+    group: MFSamuhGroup | undefined,
+    center: MFCenter | undefined,
+    year: string,
+    month: string
+  ): boolean => {
+    if (!group) return false;
+    const sameGroup =
+      (sheet.groupId && group.id && sheet.groupId === group.id) ||
+      (normalizeText(sheet.groupName) !== '' && normalizeText(sheet.groupName) === normalizeText(group.name));
+    if (!sameGroup) return false;
+
+    if (center && sheet.centerId && center.id && sheet.centerId !== center.id) {
+      if (normalizeText(sheet.centerName) !== normalizeText(center.name)) return false;
+    }
+
+    const sheetYear = fromNepaliDigits(String(sheet.year || '')).trim();
+    const targetYear = fromNepaliDigits(String(year || '')).trim();
+    const dateAscii = fromNepaliDigits(String(sheet.dateBs || sheet.dateDisplay || ''));
+    const yearMatches =
+      (sheetYear !== '' && sheetYear === targetYear) ||
+      (targetYear !== '' && dateAscii.includes(targetYear));
+    if (!yearMatches) return false;
+
+    const sheetMonth = String(sheet.month || '').trim().toLowerCase();
+    const targetMonth = String(month || '').trim().toLowerCase();
+    const nepMonth = NEPALI_MONTH_NP[month] || '';
+    const monthIdx = NEPALI_MONTHS_EN.indexOf(month) + 1;
+    const numericMatch = monthIdx > 0 ? new RegExp(`[-/]0?${monthIdx}(?:[-/]|$)`).test(dateAscii) : false;
+
+    return (
+      (sheetMonth !== '' && sheetMonth === targetMonth) ||
+      String(sheet.dateDisplay || '').toLowerCase().includes(targetMonth) ||
+      (nepMonth !== '' && String(sheet.dateDisplay || '').includes(nepMonth)) ||
+      numericMatch
+    );
+  };
+
+  // Existing saved sheet for current Group + Year + Month (if any)
   const existingSheetForSelection = useMemo(() => {
     if (!activeGroup) return undefined;
-    return savedSheets.find(s => s.groupId === activeGroup.id && s.dateBs === targetDateBs);
-  }, [savedSheets, activeGroup, targetDateBs]);
+    return savedSheets.find(s =>
+      matchesDepositSheetGroupAndMonth(s, activeGroup, activeCenter, filterYear, filterMonth)
+    );
+  }, [savedSheets, activeGroup, activeCenter, filterYear, filterMonth]);
 
   // Hydrate editable row entries whenever Group, Date, or saved sheet changes
   useEffect(() => {
@@ -381,6 +430,15 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
     }
     if (isBackDateBlockedForEntry(targetDateBs)) {
       onToast(getBackDateBlockedMessage(targetDateBs));
+      return;
+    }
+
+    if (isMonthSheetLocked && existingSheetForSelection) {
+      setAlreadyGeneratedNotice({
+        groupName: activeGroup.name,
+        periodLabel: `${filterYear} ${filterMonth}`,
+        existingDetail: `Sheet No: ${existingSheetForSelection.sheetNo} (${existingSheetForSelection.dateDisplay || existingSheetForSelection.dateBs})`
+      });
       return;
     }
 
@@ -480,6 +538,20 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
       return;
     }
 
+    const existingForMonth =
+      existingSheetForSelection ||
+      microFinanceService
+        .getDepositSheets()
+        .find(s => matchesDepositSheetGroupAndMonth(s, activeGroup, activeCenter, filterYear, filterMonth));
+    if (isMonthSheetLocked && existingForMonth) {
+      setAlreadyGeneratedNotice({
+        groupName: activeGroup.name,
+        periodLabel: `${filterYear} ${filterMonth}`,
+        existingDetail: `Sheet No: ${existingForMonth.sheetNo} (${existingForMonth.dateDisplay || existingForMonth.dateBs})`
+      });
+      return;
+    }
+
     const nowIso = new Date().toISOString();
     const allRows: MFDepositSheetRow[] = groupMembers.map(mem => {
       const entry = rowEntries[mem.memberId];
@@ -522,6 +594,7 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
     });
 
     setSavedSheets(allSheets);
+    setIsMonthSheetLocked(true);
     const nextEntries: Record<string, RowEntryDraft> = {};
     allRows.forEach(r => {
       nextEntries[r.memberId] = {
@@ -748,6 +821,12 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
       onToast('यस केन्द्रमा कुनै समूह फेला परेन । कृपया मान्य समूह चयन गर्नुहोस् ।');
       return;
     }
+    const existingForMonth =
+      savedSheets.find(s => matchesDepositSheetGroupAndMonth(s, activeGroup, activeCenter, filterYear, filterMonth)) ||
+      microFinanceService
+        .getDepositSheets()
+        .find(s => matchesDepositSheetGroupAndMonth(s, activeGroup, activeCenter, filterYear, filterMonth));
+    setIsMonthSheetLocked(Boolean(existingForMonth));
     setIsSheetDetailOpen(true);
   };
 
@@ -761,7 +840,7 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
     });
   }, [savedSheets, centers, groups, activeBranchKey, activeBranchKeys, branches, recordFilterYear, recordFilterMonth]);
 
-  // Load a previously saved sheet back into the filter bar & open editable detail sheet
+  // Load a previously saved sheet back into the filter bar & open detail sheet
   const handleLoadSavedSheet = (sheet: MFDepositSheet) => {
     setFilterYear(sheet.year || currentBsDate.year);
     setFilterMonth(sheet.month || currentBsDate.month);
@@ -777,6 +856,7 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
     setFilterCenterId(sheet.centerId);
     setFilterGroupId(sheet.groupId);
     if (sheet.employeeName) setFilterEmployeeName(sheet.employeeName);
+    setIsMonthSheetLocked(true);
     setIsSheetDetailOpen(true);
     onToast(`${sheet.groupName} (${sheet.dateDisplay}) लोड गरियो ।`);
   };
@@ -1428,6 +1508,45 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
                 className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold cursor-pointer"
               >
                 Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Already Generated Warning Modal (Once per Group + Year + Month) */}
+      {alreadyGeneratedNotice && (
+        <div
+          className="fixed inset-0 z-[10010] bg-slate-950/75 backdrop-blur-xs flex justify-center items-center p-4"
+          onClick={() => setAlreadyGeneratedNotice(null)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-amber-200 overflow-hidden p-6 text-center space-y-4 animate-in zoom-in-95 duration-200"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="w-14 h-14 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto">
+              <AlertTriangle className="w-7 h-7" />
+            </div>
+
+            <div className="space-y-1.5">
+              <h3 className="text-base font-extrabold text-slate-900">Already Generated</h3>
+              <p className="text-xs text-slate-700 font-semibold leading-relaxed">
+                You have already generated <strong>Deposit Sheet</strong> for{' '}
+                <strong>{alreadyGeneratedNotice.groupName}</strong> ({alreadyGeneratedNotice.periodLabel}).
+              </p>
+              <div className="mt-2 p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-900 font-semibold space-y-0.5">
+                {alreadyGeneratedNotice.existingDetail && <div>{alreadyGeneratedNotice.existingDetail}</div>}
+                <div>Only one Deposit Sheet can be generated per Year &amp; Month.</div>
+              </div>
+            </div>
+
+            <div className="flex justify-center pt-1">
+              <button
+                type="button"
+                onClick={() => setAlreadyGeneratedNotice(null)}
+                className="min-w-[120px] px-6 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors"
+              >
+                OK
               </button>
             </div>
           </div>

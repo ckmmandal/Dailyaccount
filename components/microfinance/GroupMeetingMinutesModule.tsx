@@ -10,7 +10,8 @@ import {
   X,
   Edit,
   Save,
-  RotateCcw
+  RotateCcw,
+  AlertTriangle
 } from 'lucide-react';
 import NepaliDate from 'nepali-date-converter';
 import {
@@ -153,6 +154,11 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
   // Delete Confirmation Modal States (iframe-safe, no native window.confirm)
   const [selectedMeetingToDelete, setSelectedMeetingToDelete] = useState<GroupMeetingRecord | null>(null);
   const [isDeletingMeeting, setIsDeletingMeeting] = useState(false);
+  const [alreadyGeneratedNotice, setAlreadyGeneratedNotice] = useState<{
+    groupName: string;
+    periodLabel: string;
+    existingDetail?: string;
+  } | null>(null);
   const [pendingTemplateConfirm, setPendingTemplateConfirm] = useState<
     { type: 'delete'; id: string; title: string } | { type: 'reset' } | null
   >(null);
@@ -323,13 +329,69 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
     setSelectedTemplateIds(updated);
   };
 
-  // Handle Generate Minute Click
+  const findExistingMeetingForGroupMonth = (
+    list: GroupMeetingRecord[],
+    center: MFCenter,
+    group: MFSamuhGroup,
+    year: string,
+    month: string
+  ): GroupMeetingRecord | undefined => {
+    const norm = (val?: string) => String(val || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const targetYear = fromNepaliDigits(String(year || '')).trim();
+    const targetMonthLower = String(month || '').trim().toLowerCase();
+    const nepMonth = nepaliMonthMapNp[month] || '';
+    const monthIdx = nepaliMonthsEnglish.indexOf(month) + 1;
+
+    return list.find(m => {
+      const sameGroup =
+        (m.groupId && group.id && m.groupId === group.id) ||
+        (norm(m.groupName) !== '' && norm(m.groupName) === norm(group.name));
+      if (!sameGroup) return false;
+
+      if (m.centerId && center.id && m.centerId !== center.id) {
+        if (norm(m.centerName) !== norm(center.name)) return false;
+      }
+
+      const dateRaw = String(m.meetingDateBs || '');
+      const dateAscii = fromNepaliDigits(dateRaw);
+      const yearMatch =
+        targetYear !== '' && (dateRaw.includes(targetYear) || dateAscii.includes(targetYear));
+      if (!yearMatch) return false;
+
+      const numericMatch =
+        monthIdx > 0 ? new RegExp(`[-/]0?${monthIdx}(?:[-/]|$)`).test(dateAscii) : false;
+      const monthMatch =
+        dateRaw.toLowerCase().includes(targetMonthLower) ||
+        (nepMonth !== '' && dateRaw.includes(nepMonth)) ||
+        numericMatch;
+      return monthMatch;
+    });
+  };
+
+  // Handle Generate Minute Click (strictly once per Group + Year + Month)
   const handleGenerateAndSaveMinute = async () => {
     if (isDayEndedForBranch(branchId)) {
       onToast(getDayEndedBlockMessage());
       return;
     }
     if (!activeSelectedGroup || !activeSelectedCenter) return;
+
+    const allSavedMeetings = [...meetings, ...meetingMinutesService.getMeetings()];
+    const existingForMonth = findExistingMeetingForGroupMonth(
+      allSavedMeetings,
+      activeSelectedCenter,
+      activeSelectedGroup,
+      filterYear,
+      filterMonth
+    );
+    if (existingForMonth) {
+      setAlreadyGeneratedNotice({
+        groupName: activeSelectedGroup.name,
+        periodLabel: `${filterYear} ${filterMonth}`,
+        existingDetail: `Meeting No: ${existingForMonth.meetingNo} (${existingForMonth.meetingDateBs})`
+      });
+      return;
+    }
 
     // Check at least one proposal is checked
     const checkedTemplates = templates.filter(t => selectedTemplateIds[t.id]);
@@ -1691,6 +1753,47 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
                 className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isDeletingMeeting ? 'Deleting...' : 'Yes, Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* 6. MODAL: ALREADY GENERATED WARNING (ONCE PER YEAR & MONTH) */}
+      {/* ============================================================== */}
+      {alreadyGeneratedNotice && (
+        <div
+          className="fixed inset-0 z-[10010] bg-slate-950/75 backdrop-blur-xs flex justify-center items-center p-4"
+          onClick={() => setAlreadyGeneratedNotice(null)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-amber-200 overflow-hidden p-6 text-center space-y-4 animate-in zoom-in-95 duration-200"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="w-14 h-14 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto">
+              <AlertTriangle className="w-7 h-7" />
+            </div>
+
+            <div className="space-y-1.5">
+              <h3 className="text-base font-extrabold text-slate-900">Already Generated</h3>
+              <p className="text-xs text-slate-700 font-semibold leading-relaxed">
+                You have already generated <strong>Meeting Minute</strong> for{' '}
+                <strong>{alreadyGeneratedNotice.groupName}</strong> ({alreadyGeneratedNotice.periodLabel}).
+              </p>
+              <div className="mt-2 p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-900 font-semibold space-y-0.5">
+                {alreadyGeneratedNotice.existingDetail && <div>{alreadyGeneratedNotice.existingDetail}</div>}
+                <div>Only one Meeting Minute can be generated per Year &amp; Month.</div>
+              </div>
+            </div>
+
+            <div className="flex justify-center pt-1">
+              <button
+                type="button"
+                onClick={() => setAlreadyGeneratedNotice(null)}
+                className="min-w-[120px] px-6 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold cursor-pointer shadow-sm transition-colors"
+              >
+                OK
               </button>
             </div>
           </div>

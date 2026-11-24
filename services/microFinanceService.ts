@@ -430,8 +430,13 @@ export const resolveSavingMaturityDateBs = (
 };
 
 export const isSavingStatusClosed = (status?: string): boolean => {
-  const raw = String(status || '').toUpperCase();
-  return raw === 'CLOSED' || raw === 'INACTIVE' || raw === 'DUE' || raw === 'PENDING';
+  const raw = String(status || '').trim().toUpperCase();
+  return raw === 'CLOSED' || raw === 'CLOSE' || raw === 'INACTIVE' || raw === 'DUE' || raw === 'PENDING';
+};
+
+export const isLoanStatusClosed = (status?: string): boolean => {
+  const raw = String(status || '').trim().toUpperCase();
+  return raw === 'CLOSED' || raw === 'CLOSE';
 };
 
 export const getEffectiveSavingStatus = (
@@ -1761,16 +1766,17 @@ export const microFinanceService = {
         const parsed: MFLoanRecord[] = JSON.parse(data);
         if (Array.isArray(parsed)) {
           // Separate any CLOSED loans so main active table never carries closed rows
-          const closedInMain = parsed.filter(l => l.status === 'CLOSED');
+          const closedInMain = parsed.filter(l => isLoanStatusClosed(l.status));
           if (closedInMain.length > 0) {
             closedInMain.forEach(cl => {
               mergeClosedLoanArchive({
                 ...cl,
+                status: 'CLOSED',
                 closedDate: cl.closedDate || cl.maturityDate || new Date().toISOString().split('T')[0],
                 closedDateBs: normalizeBsDate(cl.closedDateBs || cl.maturityDate || getTodayBsDate())
               });
             });
-            const activeOnly = parsed.filter(l => l.status !== 'CLOSED');
+            const activeOnly = parsed.filter(l => !isLoanStatusClosed(l.status));
             localStorage.setItem(STORAGE_KEYS.LOANS, JSON.stringify(activeOnly));
             return activeOnly;
           }
@@ -1780,14 +1786,14 @@ export const microFinanceService = {
     } catch (e) {
       console.error(e);
     }
-    const defaultActive = DEFAULT_LOANS.filter(l => l.status !== 'CLOSED');
+    const defaultActive = DEFAULT_LOANS.filter(l => !isLoanStatusClosed(l.status));
     getClosedLoansLocalRaw();
     localStorage.setItem(STORAGE_KEYS.LOANS, JSON.stringify(defaultActive));
     return defaultActive;
   },
 
   saveLoans: (loans: MFLoanRecord[]): void => {
-    const activeOnly = loans.filter(l => l.status !== 'CLOSED');
+    const activeOnly = loans.filter(l => !isLoanStatusClosed(l.status));
     localStorage.setItem(STORAGE_KEYS.LOANS, JSON.stringify(activeOnly));
   },
 
@@ -1839,7 +1845,7 @@ export const microFinanceService = {
 
       if (!error && Array.isArray(data)) {
         if (data.length > 0) {
-          const mapped = data.map(r => mapRowToLoan(r as unknown as SupabaseLoanRow)).filter(l => l.status !== 'CLOSED');
+          const mapped = data.map(r => mapRowToLoan(r as unknown as SupabaseLoanRow)).filter(l => !isLoanStatusClosed(l.status));
           safeSetLocalStorage(STORAGE_KEYS.LOANS, mapped);
           return mapped;
         }
@@ -1862,7 +1868,7 @@ export const microFinanceService = {
         .maybeSingle();
 
       if (fallbackRow?.data?.loans && Array.isArray(fallbackRow.data.loans)) {
-        const remoteActive = (fallbackRow.data.loans as MFLoanRecord[]).filter(l => l.status !== 'CLOSED');
+        const remoteActive = (fallbackRow.data.loans as MFLoanRecord[]).filter(l => !isLoanStatusClosed(l.status));
         safeSetLocalStorage(STORAGE_KEYS.LOANS, remoteActive);
         return remoteActive;
       }
@@ -2029,64 +2035,26 @@ export const microFinanceService = {
     return loans;
   },
 
-  // On-demand Report Query: Fetches active loans + ONLY closed loans whose closedDateBs > selectedDateBs
+  // On-demand Report Query: Fetches ONLY open (non-closed) loans eligible on selectedDateBs.
+  // Closed loans are strictly excluded from all sheets regardless of report date.
   fetchLoansForReportDate: async (selectedDateBs: string): Promise<MFLoanRecord[]> => {
     const targetBs = normalizeBsDate(selectedDateBs);
-    const todayBs = getTodayBsDate();
-    const activeLoans = microFinanceService.getLoans();
+    let activeLoans: MFLoanRecord[] = [];
+    try {
+      activeLoans = await microFinanceService.fetchActiveLoansFromSupabase();
+    } catch {
+      activeLoans = microFinanceService.getLoans();
+    }
 
     const isEligibleForDate = (l: MFLoanRecord): boolean => {
+      if (isLoanStatusClosed(l.status)) return false;
       const openBs = normalizeBsDate(l.loanDateBs || l.loanDate);
       if (openBs && targetBs && openBs > targetBs) return false;
-      if (l.status === 'CLOSED') {
-        const closedBs = normalizeBsDate(l.closedDateBs || l.closedDate || l.maturityDate);
-        // Must have been closed STRICTLY AFTER the selected report date
-        return Boolean(closedBs && targetBs && closedBs > targetBs);
-      }
       return true;
     };
 
     const resultMap = new Map<string, MFLoanRecord>();
     activeLoans.filter(isEligibleForDate).forEach(l => resultMap.set(l.id, l));
-
-    // Include any matching closed loans from local archive cache
-    const localClosed = getClosedLoansLocalRaw();
-    localClosed.filter(isEligibleForDate).forEach(l => {
-      if (!resultMap.has(l.id)) resultMap.set(l.id, l);
-    });
-
-    // Only query Supabase for historical closed loans if target date is before or equal to today
-    if (targetBs && targetBs <= todayBs) {
-      try {
-        const { data, error } = await supabase
-          .from('mf_loans')
-          .select('*')
-          .eq('status', 'CLOSED')
-          .gt('closed_date_bs', targetBs);
-
-        if (!error && Array.isArray(data)) {
-          data
-            .map((r: SupabaseLoanRow) => mapRowToLoan(r))
-            .filter(isEligibleForDate)
-            .forEach(l => resultMap.set(l.id, l));
-        } else if (error) {
-          // Fallback to daily_data archive store
-          const { data: fallbackRow } = await supabase
-            .from('daily_data')
-            .select('data')
-            .eq('id', 'MF_CLOSED_LOANS_ARCHIVE')
-            .maybeSingle();
-          if (fallbackRow?.data?.loans && Array.isArray(fallbackRow.data.loans)) {
-            (fallbackRow.data.loans as MFLoanRecord[])
-              .filter(isEligibleForDate)
-              .forEach(l => resultMap.set(l.id, l));
-          }
-        }
-      } catch (e) {
-        console.warn('Historical closed loan query failed, using local archive:', e);
-      }
-    }
-
     return Array.from(resultMap.values());
   },
 
