@@ -168,6 +168,8 @@ interface MemberIdCardModuleProps {
   defaultIssueDate: string;
   onMembersUpdated: (updated: MFMember[]) => void;
   onToast: (msg: string) => void;
+  canEdit?: boolean;
+  canDelete?: boolean;
 }
 
 const fromNepaliDigitsLocal = (str: string): string => {
@@ -370,7 +372,9 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
   panNo,
   defaultIssueDate,
   onMembersUpdated,
-  onToast
+  onToast,
+  canEdit = true,
+  canDelete = true
 }) => {
   const effectiveSavings = useMemo(
     () => (savings !== undefined ? savings : microFinanceService.getSavings()),
@@ -857,6 +861,10 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
   });
 
   const handleSaveCardSettings = async () => {
+    if (!canEdit) {
+      onToast('You do not have permission to edit ID Card settings.');
+      return;
+    }
     setIsSavingSettings(true);
     try {
       const payload = buildCurrentSettingsPayload();
@@ -968,6 +976,10 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
   };
 
   const handleRemoveSignatoryPhoto = async () => {
+    if (!canDelete) {
+      onToast('You do not have permission to remove signature photo.');
+      return;
+    }
     setSignatoryPhotoUrl('');
     try {
       localStorage.removeItem(SIGNATORY_STORAGE_KEY);
@@ -2161,15 +2173,17 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
                     />
                   </div>
                 )}
-                <button
-                  type="button"
-                  onClick={() => signatoryPhotoInputRef.current?.click()}
-                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-[11px] font-bold cursor-pointer inline-flex items-center gap-1.5 transition-colors"
-                >
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>{signatoryPhotoUrl ? 'Replace' : 'Upload Signature'}</span>
-                </button>
-                {signatoryPhotoUrl && (
+                {canEdit && (
+                  <button
+                    type="button"
+                    onClick={() => signatoryPhotoInputRef.current?.click()}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-[11px] font-bold cursor-pointer inline-flex items-center gap-1.5 transition-colors"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>{signatoryPhotoUrl ? 'Replace' : 'Upload Signature'}</span>
+                  </button>
+                )}
+                {signatoryPhotoUrl && canDelete && (
                   <button
                     type="button"
                     onClick={handleRemoveSignatoryPhoto}
@@ -2210,15 +2224,17 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100">
-            <button
-              type="button"
-              disabled={isSavingSettings}
-              onClick={() => void handleResetCardSettings()}
-              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-lg text-xs font-bold cursor-pointer inline-flex items-center gap-1.5 transition-colors"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Reset Default</span>
-            </button>
+            {canEdit ? (
+              <button
+                type="button"
+                disabled={isSavingSettings}
+                onClick={() => void handleResetCardSettings()}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-lg text-xs font-bold cursor-pointer inline-flex items-center gap-1.5 transition-colors"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset Default</span>
+              </button>
+            ) : <span />}
 
             <div className="flex items-center gap-2">
               <button
@@ -2228,15 +2244,17 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
               >
                 Cancel
               </button>
-              <button
-                type="button"
-                disabled={isSavingSettings}
-                onClick={() => void handleSaveCardSettings()}
-                className="px-4 py-1.5 bg-[#00593B] hover:bg-[#00472f] disabled:opacity-50 text-white rounded-lg text-xs font-bold cursor-pointer inline-flex items-center gap-1.5 shadow-xs transition-colors"
-              >
-                <Save className="w-3.5 h-3.5" />
-                <span>{isSavingSettings ? 'Saving...' : 'Save Settings'}</span>
-              </button>
+              {canEdit && (
+                <button
+                  type="button"
+                  disabled={isSavingSettings}
+                  onClick={() => void handleSaveCardSettings()}
+                  className="px-4 py-1.5 bg-[#00593B] hover:bg-[#00472f] disabled:opacity-50 text-white rounded-lg text-xs font-bold cursor-pointer inline-flex items-center gap-1.5 shadow-xs transition-colors"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>{isSavingSettings ? 'Saving...' : 'Save Settings'}</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

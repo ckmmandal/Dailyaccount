@@ -40,6 +40,8 @@ interface GroupMeetingMinutesModuleProps {
   branchId?: string;
   activeBranchKey?: string;
   activeBranchKeys?: string[];
+  canEdit?: boolean;
+  canDelete?: boolean;
 }
 
 const nepaliMonthsEnglish = [
@@ -85,7 +87,9 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
   onToast = () => {},
   branchId,
   activeBranchKey,
-  activeBranchKeys
+  activeBranchKeys,
+  canEdit = true,
+  canDelete = true
 }) => {
   const isDayEnded = useDayEndLock(branchId);
   // Current BS Date calculation
@@ -370,6 +374,10 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
 
   // Handle Generate Minute Click (strictly once per Group + Year + Month)
   const handleGenerateAndSaveMinute = async () => {
+    if (!canEdit) {
+      onToast('तपाईंलाई बैठक माइन्युट तयार/सुरक्षित गर्ने अनुमति छैन ।');
+      return;
+    }
     if (isDayEndedForBranch(branchId)) {
       onToast(getDayEndedBlockMessage());
       return;
@@ -519,6 +527,10 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
 
   // Open Delete Meeting Confirmation Modal
   const handleOpenDeleteMeeting = (meeting: GroupMeetingRecord) => {
+    if (!canDelete) {
+      onToast('तपाईंलाई बैठक रेकर्ड हटाउने अनुमति छैन ।');
+      return;
+    }
     if (isDayEndedForBranch(branchId)) {
       onToast(getDayEndedBlockMessage());
       return;
@@ -529,6 +541,11 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
   // Confirm Delete Meeting Record
   const handleConfirmDeleteMeeting = async () => {
     if (!selectedMeetingToDelete) return;
+    if (!canDelete) {
+      onToast('तपाईंलाई बैठक रेकर्ड हटाउने अनुमति छैन ।');
+      setSelectedMeetingToDelete(null);
+      return;
+    }
     if (isDayEndedForBranch(branchId)) {
       onToast(getDayEndedBlockMessage());
       setSelectedMeetingToDelete(null);
@@ -1025,15 +1042,17 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
                         <Printer className="w-3.5 h-3.5" />
                         <span>View / Print</span>
                       </button>
-                      <button
-                        type="button"
-                        disabled={isDayEnded}
-                        onClick={() => handleOpenDeleteMeeting(m)}
-                        className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                        title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Meeting Record'}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {canDelete && (
+                        <button
+                          type="button"
+                          disabled={isDayEnded}
+                          onClick={() => handleOpenDeleteMeeting(m)}
+                          className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Meeting Record'}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -1083,28 +1102,30 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
                 <p className="text-xs text-slate-500 font-medium">
                   माइन्युट तयार गर्दा प्रयोग हुने नियमित प्रस्ताव, छलफल र निर्णयका पूर्वनिर्धारित ढाँचाहरू ।
                 </p>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={isDayEnded}
-                    onClick={handleResetTemplatesToDefault}
-                    className="px-2.5 py-1 text-[11px] font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg flex items-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                    title={isDayEnded ? 'Day Ended - Action Locked' : 'Reset Default'}
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Reset Default</span>
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isDayEnded}
-                    onClick={() => setIsAddingTemplate(true)}
-                    className="px-3 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer shadow-xs disabled:opacity-40 disabled:cursor-not-allowed"
-                    title={isDayEnded ? 'Day Ended - Action Locked' : 'Add New Template'}
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>+ नयाँ टेम्प्लेट</span>
-                  </button>
-                </div>
+                {canEdit && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={isDayEnded}
+                      onClick={handleResetTemplatesToDefault}
+                      className="px-2.5 py-1 text-[11px] font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg flex items-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                      title={isDayEnded ? 'Day Ended - Action Locked' : 'Reset Default'}
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Reset Default</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isDayEnded}
+                      onClick={() => setIsAddingTemplate(true)}
+                      className="px-3 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer shadow-xs disabled:opacity-40 disabled:cursor-not-allowed"
+                      title={isDayEnded ? 'Day Ended - Action Locked' : 'Add New Template'}
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>+ नयाँ टेम्प्लेट</span>
+                    </button>
+                  </div>
+                )}
               </div>
 
               {pendingTemplateConfirm && (
@@ -1324,24 +1345,28 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
                       </div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0 pt-0.5">
-                      <button
-                        type="button"
-                        disabled={isDayEnded}
-                        onClick={() => setEditingTemplate(tpl)}
-                        className="p-1.5 text-slate-400 hover:text-blue-600 rounded-lg hover:bg-white transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                        title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Template'}
-                      >
-                        <Edit className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={isDayEnded}
-                        onClick={() => handleDeleteTemplate(tpl)}
-                        className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-white transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                        title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Template'}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {canEdit && (
+                        <button
+                          type="button"
+                          disabled={isDayEnded}
+                          onClick={() => setEditingTemplate(tpl)}
+                          className="p-1.5 text-slate-400 hover:text-blue-600 rounded-lg hover:bg-white transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Template'}
+                        >
+                          <Edit className="w-4 h-4" />
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button
+                          type="button"
+                          disabled={isDayEnded}
+                          onClick={() => handleDeleteTemplate(tpl)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-white transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Template'}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1691,16 +1716,18 @@ export const GroupMeetingMinutesModule: React.FC<GroupMeetingMinutesModuleProps>
                   Close
                 </button>
                 {modalMode === 'create' ? (
-                  <button
-                    type="button"
-                    disabled={isDayEnded}
-                    onClick={handleGenerateAndSaveMinute}
-                    title={isDayEnded ? 'Day Ended - Action Locked' : 'Generate & Save Minute'}
-                    className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <FileText className="w-4 h-4" />
-                    <span>Generate Minute</span>
-                  </button>
+                  canEdit ? (
+                    <button
+                      type="button"
+                      disabled={isDayEnded}
+                      onClick={handleGenerateAndSaveMinute}
+                      title={isDayEnded ? 'Day Ended - Action Locked' : 'Generate & Save Minute'}
+                      className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <FileText className="w-4 h-4" />
+                      <span>Generate Minute</span>
+                    </button>
+                  ) : null
                 ) : (
                   <button
                     type="button"

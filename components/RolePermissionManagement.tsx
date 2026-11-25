@@ -1389,6 +1389,7 @@ export const RolePermissionManagement: React.FC = () => {
       setOriginalPermissions([...workingRole.permissions]);
 
       await refreshRoles();
+      window.dispatchEvent(new Event('userPermissionsUpdated'));
 
       showNotice('success', `Role '${roleToSave.name}' permissions saved & synced!`);
     } catch (err) {

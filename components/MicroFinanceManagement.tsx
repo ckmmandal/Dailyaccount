@@ -310,10 +310,14 @@ export const MicroFinanceManagement: React.FC = () => {
 
   // Granular Role Permission Helpers synced with Admin Center -> Role & Permission Management
   const mfPermState = useMemo(() => {
-    const combined = new Set<string>([
-      ...(Array.isArray(user?.permissions) ? user.permissions : []),
-      ...(Array.isArray(role?.permissions) ? role.permissions : [])
-    ]);
+    const rolePerms = Array.isArray(role?.permissions) ? role.permissions : [];
+    const userPerms = Array.isArray(user?.permissions) ? user.permissions : [];
+    const roleHasGranular = rolePerms.some(p => typeof p === 'string' && p.startsWith('sub_'));
+    // When the user's Role uses the granular Admin Center Role Matrix, role.permissions is authoritative
+    // so revoking Edit/Delete on the Role takes effect even if legacy user.permissions exist.
+    const combined = roleHasGranular
+      ? new Set<string>(rolePerms)
+      : new Set<string>([...userPerms, ...rolePerms]);
     const hasGranularMf = Array.from(combined).some(p => typeof p === 'string' && p.startsWith('sub_mf_'));
     return { combined, hasGranularMf };
   }, [user?.permissions, role?.permissions]);
@@ -337,15 +341,35 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const canViewDashboard = canMfAccess('mf_dashboard', 'view');
   const canViewCenters = canMfAccess('mf_centers', 'view');
+  const canEditCenters = canMfAccess('mf_centers', 'edit');
+  const canDeleteCenters = canMfAccess('mf_centers', 'delete');
   const canViewGroups = canMfAccess('mf_groups', 'view');
+  const canEditGroups = canMfAccess('mf_groups', 'edit');
+  const canDeleteGroups = canMfAccess('mf_groups', 'delete');
   const canViewMembers = canMfAccess('mf_members', 'view');
+  const canEditMembers = canMfAccess('mf_members', 'edit');
+  const canDeleteMembers = canMfAccess('mf_members', 'delete');
   const canViewSaving = canMfAccess('mf_saving', 'view');
+  const canEditSaving = canMfAccess('mf_saving', 'edit');
+  const canDeleteSaving = canMfAccess('mf_saving', 'delete');
   const canViewLoan = canMfAccess('mf_loan', 'view');
+  const canEditLoan = canMfAccess('mf_loan', 'edit');
+  const canDeleteLoan = canMfAccess('mf_loan', 'delete');
   const canViewCollectionReport = canMfAccess('mf_reports', 'view');
+  const canEditCollectionReport = canMfAccess('mf_reports', 'edit');
+  const canDeleteCollectionReport = canMfAccess('mf_reports', 'delete');
   const canViewSignatureReport = canMfAccess('mf_signature_sheet', 'view');
+  const canEditSignatureReport = canMfAccess('mf_signature_sheet', 'edit');
+  const canDeleteSignatureReport = canMfAccess('mf_signature_sheet', 'delete');
   const canViewDepositSheet = canMfAccess('mf_deposit_sheet', 'view') || canViewSignatureReport;
+  const canEditDepositSheet = canMfAccess('mf_deposit_sheet', 'edit');
+  const canDeleteDepositSheet = canMfAccess('mf_deposit_sheet', 'delete');
   const canViewMeetingMinutes = canMfAccess('mf_meeting_minutes', 'view');
+  const canEditMeetingMinutes = canMfAccess('mf_meeting_minutes', 'edit');
+  const canDeleteMeetingMinutes = canMfAccess('mf_meeting_minutes', 'delete');
   const canViewIdCard = canMfAccess('mf_id_card', 'view');
+  const canEditIdCard = canMfAccess('mf_id_card', 'edit');
+  const canDeleteIdCard = canMfAccess('mf_id_card', 'delete');
   const canViewReports =
     canViewCollectionReport || canViewSignatureReport || canViewDepositSheet || canViewMeetingMinutes || canViewIdCard;
 
@@ -639,7 +663,17 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<MFSamuhGroup | null>(null);
+  const [selectedCenterForGroupsList, setSelectedCenterForGroupsList] = useState<MFCenter | null>(null);
   const [selectedGroupForMembersList, setSelectedGroupForMembersList] = useState<MFSamuhGroup | null>(null);
+  const [actionBlockNotice, setActionBlockNotice] = useState<{
+    title: string;
+    subtitle: string;
+    message: string;
+    items: Array<{ label: string; detail: string; status: string; kind: 'saving' | 'loan' | 'group' | 'member' }>;
+    hint?: string;
+    showGoToSaving?: boolean;
+    showGoToLoan?: boolean;
+  } | null>(null);
   const [groupForm, setGroupForm] = useState({
     code: '',
     name: '',
@@ -800,6 +834,7 @@ export const MicroFinanceManagement: React.FC = () => {
   const [isClosingLoan, setIsClosingLoan] = useState(false);
 
   const [isPrintSheetModalOpen, setIsPrintSheetModalOpen] = useState(false);
+  const [collectionSheetModalMode, setCollectionSheetModalMode] = useState<'preview' | 'record'>('preview');
   const [activeSheetToPrint, setActiveSheetToPrint] = useState<MFCollectionSheet | null>(null);
   const [collectionSheetLoans, setCollectionSheetLoans] = useState<MFLoanRecord[]>([]);
   const [collectionSheetTargetBs, setCollectionSheetTargetBs] = useState<string>('');
@@ -809,6 +844,7 @@ export const MicroFinanceManagement: React.FC = () => {
   // Signature Sheets Modal State (data derived above with branch scoping)
   const [selectedSignatureSheetToPrint, setSelectedSignatureSheetToPrint] = useState<MFSignatureSheet | null>(null);
   const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
+  const [signatureSheetModalMode, setSignatureSheetModalMode] = useState<'preview' | 'record'>('preview');
   const [selectedSignatureSheetToDelete, setSelectedSignatureSheetToDelete] = useState<MFSignatureSheet | null>(null);
   const [isDeleteSignatureModalOpen, setIsDeleteSignatureModalOpen] = useState(false);
   const [alreadyGeneratedNotice, setAlreadyGeneratedNotice] = useState<{
@@ -1266,6 +1302,20 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleProcessBulkUpload = async () => {
+    const canBulkEdit =
+      bulkType === 'Centers'
+        ? canEditCenters
+        : bulkType === 'Groups'
+        ? canEditGroups
+        : bulkType === 'Members'
+        ? canEditMembers
+        : bulkType === 'Savings'
+        ? canEditSaving
+        : canEditLoan;
+    if (!canBulkEdit) {
+      showToast('Permission denied: You do not have edit access for this section.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -2534,6 +2584,10 @@ export const MicroFinanceManagement: React.FC = () => {
 
   // Handlers for Center
   const handleOpenAddCenter = () => {
+    if (!canEditCenters) {
+      showToast('Permission denied: You do not have permission to add centers.');
+      return;
+    }
     setEditingCenter(null);
     const activeScopedBranch =
       canSwitchBranchView && superAdminBranchFilter !== 'ALL'
@@ -2553,6 +2607,10 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleEditCenter = (center: MFCenter) => {
+    if (!canEditCenters) {
+      showToast('Permission denied: You do not have permission to edit centers.');
+      return;
+    }
     setEditingCenter(center);
     setCenterForm({
       code: center.code,
@@ -2568,6 +2626,10 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleSaveCenter = () => {
+    if (!canEditCenters) {
+      showToast('Permission denied: You do not have permission to save centers.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -2591,21 +2653,137 @@ export const MicroFinanceManagement: React.FC = () => {
     setIsCenterModalOpen(false);
   };
 
+  const getMemberAccountBlockInfo = (member: MFMember) => {
+    const targetMemberKey = normalizeDuplicateMemberId(member.memberId);
+    const targetSavingAccKey = normalizeDuplicateMemberId(member.savingsAccountNo);
+
+    const savingsMap = new Map<string, MFSavingsRecord>();
+    [...savings, ...microFinanceService.getSavings()].forEach(s => {
+      if (s && s.id) savingsMap.set(s.id, s);
+    });
+    const allMemberSavings = Array.from(savingsMap.values()).filter(s => {
+      const sMemKey = normalizeDuplicateMemberId(s.memberId);
+      const sAccKey = normalizeDuplicateMemberId(s.accountNo);
+      if (targetMemberKey && sMemKey && sMemKey === targetMemberKey) return true;
+      if (targetSavingAccKey && sAccKey && sAccKey === targetSavingAccKey) return true;
+      return false;
+    });
+    const openSavings = allMemberSavings.filter(s => !isSavingStatusClosed(s.status));
+
+    const loansMap = new Map<string, MFLoanRecord>();
+    [...loans, ...closedLoansArchive, ...microFinanceService.getLoans()].forEach(l => {
+      if (l && l.id) loansMap.set(l.id, l);
+    });
+    const allMemberLoans = Array.from(loansMap.values()).filter(l => {
+      const lMemKey = normalizeDuplicateMemberId(l.memberId);
+      return Boolean(targetMemberKey && lMemKey && lMemKey === targetMemberKey);
+    });
+    const openLoans = allMemberLoans.filter(l => getEffectiveLoanStatus(l) !== 'CLOSED');
+
+    return { allMemberSavings, openSavings, allMemberLoans, openLoans };
+  };
+
+  const getCenterLinkedBlockInfo = (center: MFCenter) => {
+    const centerNameNorm = normalizeMfText(center.name);
+    const allGroups = [...groups, ...microFinanceService.getGroups()].filter(
+      (g, idx, arr) => arr.findIndex(x => x.id === g.id) === idx
+    );
+    const linkedGroups = allGroups.filter(
+      g =>
+        (g.centerId && g.centerId === center.id) ||
+        (centerNameNorm && normalizeMfText(g.centerName) === centerNameNorm)
+    );
+    const allMembers = [...members, ...microFinanceService.getMembers()].filter(
+      (m, idx, arr) => arr.findIndex(x => x.id === m.id) === idx
+    );
+    const linkedMembers = allMembers.filter(
+      m =>
+        (m.centerId && m.centerId === center.id) ||
+        (centerNameNorm && normalizeMfText(m.centerName) === centerNameNorm)
+    );
+    return { linkedGroups, linkedMembers };
+  };
+
+  const getGroupLinkedBlockInfo = (group: MFSamuhGroup) => {
+    const groupNameNorm = normalizeMfText(group.name);
+    const centerNameNorm = normalizeMfText(group.centerName);
+    const allMembers = [...members, ...microFinanceService.getMembers()].filter(
+      (m, idx, arr) => arr.findIndex(x => x.id === m.id) === idx
+    );
+    const linkedMembers = allMembers.filter(m => {
+      if (m.samuhId && group.id && m.samuhId === group.id) return true;
+      if (groupNameNorm && normalizeMfText(m.samuhName) === groupNameNorm) {
+        if (centerNameNorm && m.centerName && normalizeMfText(m.centerName) !== centerNameNorm) {
+          return false;
+        }
+        return true;
+      }
+      return false;
+    });
+    return { linkedMembers };
+  };
+
   const handleDeleteCenter = (id: string) => {
+    if (!canDeleteCenters) {
+      showToast('Permission denied: You do not have permission to delete centers.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
     }
     const target = centers.find(c => c.id === id);
     if (!target) return;
+
+    const { linkedGroups, linkedMembers } = getCenterLinkedBlockInfo(target);
+    if (linkedGroups.length > 0 || linkedMembers.length > 0) {
+      setActionBlockNotice({
+        title: 'Center Delete Garna Mildaina',
+        subtitle: `${target.name} (${target.code})`,
+        message:
+          'Yes center bhitra group wa member raheko chha. Pahila linked group ra member haru hataunu/transfer garnu parcha.',
+        items: [
+          ...linkedGroups.slice(0, 6).map(g => ({
+            label: `${g.code} — ${g.name}`,
+            detail: `${g.membersCount || 0} Member(s)`,
+            status: g.status || 'ACTIVE',
+            kind: 'group' as const
+          })),
+          ...(linkedGroups.length === 0
+            ? linkedMembers.slice(0, 6).map(m => ({
+                label: `${m.memberId} — ${m.name}`,
+                detail: m.samuhName || 'Member',
+                status: getEffectiveMemberStatus(m.status),
+                kind: 'member' as const
+              }))
+            : [])
+        ],
+        hint: `Total Linked: ${linkedGroups.length} Group(s), ${linkedMembers.length} Member(s).`
+      });
+      return;
+    }
+
     setSelectedCenterToDelete(target);
     setIsDeleteCenterModalOpen(true);
   };
 
   const handleConfirmDeleteCenter = () => {
     if (!selectedCenterToDelete) return;
+    if (!canDeleteCenters) {
+      showToast('Permission denied: You do not have permission to delete centers.');
+      setIsDeleteCenterModalOpen(false);
+      setSelectedCenterToDelete(null);
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
+      return;
+    }
+    const { linkedGroups, linkedMembers } = getCenterLinkedBlockInfo(selectedCenterToDelete);
+    if (linkedGroups.length > 0 || linkedMembers.length > 0) {
+      setIsDeleteCenterModalOpen(false);
+      setSelectedCenterToDelete(null);
+      showToast('Cannot delete center while groups or members are still linked to it.');
       return;
     }
     const updated = microFinanceService.deleteCenter(selectedCenterToDelete.id);
@@ -2617,6 +2795,10 @@ export const MicroFinanceManagement: React.FC = () => {
 
   // Handlers for Group
   const handleOpenAddGroup = () => {
+    if (!canEditGroups) {
+      showToast('Permission denied: You do not have permission to add groups.');
+      return;
+    }
     setEditingGroup(null);
     setGroupForm({
       code: `G-00${groups.length + 1}`,
@@ -2632,6 +2814,10 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleEditGroup = (group: MFSamuhGroup) => {
+    if (!canEditGroups) {
+      showToast('Permission denied: You do not have permission to edit groups.');
+      return;
+    }
     setEditingGroup(group);
     setGroupForm({
       code: group.code,
@@ -2677,20 +2863,56 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleDeleteGroup = (id: string) => {
+    if (!canDeleteGroups) {
+      showToast('Permission denied: You do not have permission to delete groups.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
     }
     const target = groups.find(g => g.id === id);
     if (!target) return;
+
+    const { linkedMembers } = getGroupLinkedBlockInfo(target);
+    if (linkedMembers.length > 0) {
+      setActionBlockNotice({
+        title: 'Group Delete Garna Mildaina',
+        subtitle: `${target.name} (${target.code})`,
+        message:
+          'Yes group bhitra sadasya (members) raheko chhan. Pahila sabai linked members hataunu/transfer garnu parcha.',
+        items: linkedMembers.slice(0, 6).map(m => ({
+          label: `${m.memberId} — ${m.name}`,
+          detail: m.role || 'Member',
+          status: getEffectiveMemberStatus(m.status),
+          kind: 'member' as const
+        })),
+        hint: `Total Linked Members: ${linkedMembers.length}`
+      });
+      return;
+    }
+
     setSelectedGroupToDelete(target);
     setIsDeleteGroupModalOpen(true);
   };
 
   const handleConfirmDeleteGroup = () => {
     if (!selectedGroupToDelete) return;
+    if (!canDeleteGroups) {
+      showToast('Permission denied: You do not have permission to delete groups.');
+      setIsDeleteGroupModalOpen(false);
+      setSelectedGroupToDelete(null);
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
+      return;
+    }
+    const { linkedMembers } = getGroupLinkedBlockInfo(selectedGroupToDelete);
+    if (linkedMembers.length > 0) {
+      setIsDeleteGroupModalOpen(false);
+      setSelectedGroupToDelete(null);
+      showToast('Cannot delete group while members are still linked to it.');
       return;
     }
     const updated = microFinanceService.deleteGroup(selectedGroupToDelete.id);
@@ -2727,6 +2949,10 @@ export const MicroFinanceManagement: React.FC = () => {
 
   // Handlers for Member
   const handleOpenAddMember = () => {
+    if (!canEditMembers) {
+      showToast('Permission denied: You do not have permission to add members.');
+      return;
+    }
     setEditingMember(null);
     setMemberFormError(null);
     const existingIdKeys = new Set(
@@ -2770,6 +2996,10 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleEditMember = (member: MFMember) => {
+    if (!canEditMembers) {
+      showToast('Permission denied: You do not have permission to edit members.');
+      return;
+    }
     setEditingMember(member);
     setMemberFormError(null);
     const resolvedCenterId =
@@ -2817,6 +3047,20 @@ export const MicroFinanceManagement: React.FC = () => {
     if (!memberForm.name || !memberForm.name.trim()) {
       setMemberFormError('Please enter member name.');
       return;
+    }
+
+    if (
+      editingMember &&
+      getEffectiveMemberStatus(editingMember.status) === 'ACTIVE' &&
+      getEffectiveMemberStatus(memberForm.status) === 'INACTIVE'
+    ) {
+      const { openSavings, openLoans } = getMemberAccountBlockInfo(editingMember);
+      if (openSavings.length > 0 || openLoans.length > 0) {
+        setMemberFormError(
+          `Cannot mark member Inactive: ${openSavings.length} active Saving account(s) and ${openLoans.length} active Loan account(s) must be closed first.`
+        );
+        return;
+      }
     }
 
     const latestMembers = microFinanceService.getMembers();
@@ -2875,20 +3119,91 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleDeleteMember = (id: string) => {
+    if (!canDeleteMembers) {
+      showToast('Permission denied: You do not have permission to delete members.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
     }
     const target = members.find(m => m.id === id);
     if (!target) return;
+
+    const { allMemberSavings, openSavings, allMemberLoans, openLoans } = getMemberAccountBlockInfo(target);
+    if (openSavings.length > 0 || openLoans.length > 0) {
+      setActionBlockNotice({
+        title: 'Member Delete Garna Mildaina',
+        subtitle: `${target.name} (${target.memberId})`,
+        message:
+          'Yes member ko naam ma active/matured Saving athawa Loan khata chha. Active khata rahunjel member delete garna mildaina.',
+        items: [
+          ...openSavings.map(s => ({
+            label: `Saving A/C: ${s.accountNo}`,
+            detail: `NPR ${(Number(s.amount) || 0).toLocaleString()} (${s.savingType || 'Saving'})`,
+            status: getEffectiveSavingStatus(s),
+            kind: 'saving' as const
+          })),
+          ...openLoans.map(l => ({
+            label: `Loan A/C: ${l.accountNo}`,
+            detail: `NPR ${(Number(l.loanAmount) || 0).toLocaleString()} (${l.loanType || 'Loan'})`,
+            status: getEffectiveLoanStatus(l),
+            kind: 'loan' as const
+          }))
+        ],
+        hint: 'Pahila sabai active Saving ra Loan khata close garnuhos; tyaspachhi member lai Inactive (Close) rakhna sakinchha.',
+        showGoToSaving: openSavings.length > 0 && canViewSaving,
+        showGoToLoan: openLoans.length > 0 && canViewLoan
+      });
+      return;
+    }
+
+    if (allMemberSavings.length > 0 || allMemberLoans.length > 0) {
+      setActionBlockNotice({
+        title: 'Record Bhayeko Member Delete Garna Mildaina',
+        subtitle: `${target.name} (${target.memberId})`,
+        message:
+          'Yes member ko purano Saving/Loan khata record system ma raheko chha. Audit itihas surakshit rakhna ko lagi delete garna mildaina.',
+        items: [
+          ...allMemberSavings.slice(0, 4).map(s => ({
+            label: `Saving A/C: ${s.accountNo}`,
+            detail: `NPR ${(Number(s.amount) || 0).toLocaleString()}`,
+            status: getEffectiveSavingStatus(s),
+            kind: 'saving' as const
+          })),
+          ...allMemberLoans.slice(0, 4).map(l => ({
+            label: `Loan A/C: ${l.accountNo}`,
+            detail: `NPR ${(Number(l.loanAmount) || 0).toLocaleString()}`,
+            status: getEffectiveLoanStatus(l),
+            kind: 'loan' as const
+          }))
+        ],
+        hint: 'Delete garne satta sabai khata close bhayepachhi Member lai Deactivate (Inactive) garera rakhnuhos.'
+      });
+      return;
+    }
+
     setSelectedMemberToDelete(target);
     setIsDeleteMemberModalOpen(true);
   };
 
   const handleConfirmDeleteMember = () => {
     if (!selectedMemberToDelete) return;
+    if (!canDeleteMembers) {
+      showToast('Permission denied: You do not have permission to delete members.');
+      setIsDeleteMemberModalOpen(false);
+      setSelectedMemberToDelete(null);
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
+      return;
+    }
+    const { allMemberSavings, allMemberLoans } = getMemberAccountBlockInfo(selectedMemberToDelete);
+    if (allMemberSavings.length > 0 || allMemberLoans.length > 0) {
+      setIsDeleteMemberModalOpen(false);
+      setSelectedMemberToDelete(null);
+      showToast('Cannot delete member with Saving or Loan records. Use Deactivate instead.');
       return;
     }
     const updated = microFinanceService.deleteMember(selectedMemberToDelete.id);
@@ -2911,9 +3226,43 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleOpenToggleMemberStatus = (member: MFMember) => {
+    if (!canEditMembers) {
+      showToast('Permission denied: You do not have permission to update member status.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
+    }
+    const currentStatus = getEffectiveMemberStatus(member.status);
+    if (currentStatus === 'ACTIVE') {
+      const { openSavings, openLoans } = getMemberAccountBlockInfo(member);
+      if (openSavings.length > 0 || openLoans.length > 0) {
+        setActionBlockNotice({
+          title: 'Member Close / Deactivate Garna Mildaina',
+          subtitle: `${member.name} (${member.memberId})`,
+          message:
+            'Pahila yes member ko sabai active/matured Saving ra Loan khata close garnuhos, tyaspachhi matrai member lai Deactivate (Inactive) garna milchha.',
+          items: [
+            ...openSavings.map(s => ({
+              label: `Saving A/C: ${s.accountNo}`,
+              detail: `NPR ${(Number(s.amount) || 0).toLocaleString()} (${s.savingType || 'Saving'})`,
+              status: getEffectiveSavingStatus(s),
+              kind: 'saving' as const
+            })),
+            ...openLoans.map(l => ({
+              label: `Loan A/C: ${l.accountNo}`,
+              detail: `NPR ${(Number(l.loanAmount) || 0).toLocaleString()} (${l.loanType || 'Loan'})`,
+              status: getEffectiveLoanStatus(l),
+              kind: 'loan' as const
+            }))
+          ],
+          hint: `Active Accounts: ${openSavings.length} Saving, ${openLoans.length} Loan.`,
+          showGoToSaving: openSavings.length > 0 && canViewSaving,
+          showGoToLoan: openLoans.length > 0 && canViewLoan
+        });
+        return;
+      }
     }
     setSelectedMemberToToggleStatus(member);
     setIsToggleMemberStatusModalOpen(true);
@@ -2921,11 +3270,26 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const handleConfirmToggleMemberStatus = () => {
     if (!selectedMemberToToggleStatus) return;
+    if (!canEditMembers) {
+      showToast('Permission denied: You do not have permission to update member status.');
+      setIsToggleMemberStatusModalOpen(false);
+      setSelectedMemberToToggleStatus(null);
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
     }
     const currentStatus = getEffectiveMemberStatus(selectedMemberToToggleStatus.status);
+    if (currentStatus === 'ACTIVE') {
+      const { openSavings, openLoans } = getMemberAccountBlockInfo(selectedMemberToToggleStatus);
+      if (openSavings.length > 0 || openLoans.length > 0) {
+        setIsToggleMemberStatusModalOpen(false);
+        setSelectedMemberToToggleStatus(null);
+        showToast('Please close all active Saving and Loan accounts before deactivating this member.');
+        return;
+      }
+    }
     const nextStatus: 'ACTIVE' | 'INACTIVE' = currentStatus === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
     microFinanceService.updateMember(selectedMemberToToggleStatus.id, { status: nextStatus });
     setMembers(microFinanceService.getMembers());
@@ -2945,6 +3309,10 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleOpenToggleSavingStatus = (item: MFSavingsRecord) => {
+    if (!canEditSaving) {
+      showToast('Permission denied: You do not have permission to update saving status.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -2991,6 +3359,10 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleOpenEditSaving = (item: MFSavingsRecord) => {
+    if (!canEditSaving) {
+      showToast('Permission denied: You do not have permission to edit savings.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -3010,6 +3382,10 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const handleSaveEditSaving = () => {
     if (!editSavingForm) return;
+    if (!canEditSaving) {
+      showToast('Permission denied: You do not have permission to edit savings.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -3058,6 +3434,10 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleOpenDeleteSaving = (item: MFSavingsRecord) => {
+    if (!canDeleteSaving) {
+      showToast('Permission denied: You do not have permission to delete savings.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -3068,6 +3448,12 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const handleConfirmDeleteSaving = () => {
     if (!selectedSavingToDelete) return;
+    if (!canDeleteSaving) {
+      showToast('Permission denied: You do not have permission to delete savings.');
+      setIsDeleteSavingModalOpen(false);
+      setSelectedSavingToDelete(null);
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -3080,6 +3466,10 @@ export const MicroFinanceManagement: React.FC = () => {
   };
 
   const handleOpenDeleteSheet = (sheet: MFCollectionSheet) => {
+    if (!canDeleteCollectionReport) {
+      showToast('Permission denied: You do not have permission to delete collection sheets.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -3090,6 +3480,12 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const handleConfirmDeleteSheet = () => {
     if (!selectedSheetToDelete) return;
+    if (!canDeleteCollectionReport) {
+      showToast('Permission denied: You do not have permission to delete collection sheets.');
+      setIsDeleteSheetModalOpen(false);
+      setSelectedSheetToDelete(null);
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -3103,6 +3499,10 @@ export const MicroFinanceManagement: React.FC = () => {
 
   // Handlers for Savings (Supports search directly in input and multiple accounts)
   const handleOpenAddSaving = () => {
+    if (!canEditSaving) {
+      showToast('Permission denied: You do not have permission to create saving accounts.');
+      return;
+    }
     const defaultProduct = filteredMfSavingProducts[0]?.name || 'General Saving';
     const todayBs = getTodayBsDate();
 
@@ -3313,6 +3713,10 @@ export const MicroFinanceManagement: React.FC = () => {
 
   // Handlers for Loan
   const handleOpenIssueLoan = () => {
+    if (!canEditLoan) {
+      showToast('Permission denied: You do not have permission to issue loans.');
+      return;
+    }
     let todayBs = '2083-07-25';
     try {
       todayBs = new NepaliDate().format('YYYY-MM-DD');
@@ -3500,6 +3904,10 @@ export const MicroFinanceManagement: React.FC = () => {
 
   // Edit Loan
   const handleOpenEditLoan = (loan: MFLoanRecord) => {
+    if (!canEditLoan) {
+      showToast('Permission denied: You do not have permission to edit loans.');
+      return;
+    }
     setSelectedLoanToEdit(loan);
     setEditLoanForm({
       ...loan,
@@ -3510,6 +3918,10 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const handleSaveEditLoan = () => {
     if (!editLoanForm || !selectedLoanToEdit) return;
+    if (!canEditLoan) {
+      showToast('Permission denied: You do not have permission to edit loans.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -3542,6 +3954,10 @@ export const MicroFinanceManagement: React.FC = () => {
 
   // Close Loan (After Maturity)
   const handleOpenCloseLoan = (loan: MFLoanRecord) => {
+    if (!canEditLoan) {
+      showToast('Permission denied: You do not have permission to close loans.');
+      return;
+    }
     setSelectedLoanToClose(loan);
     setCloseLoanDateBs(getTodayBsDate());
     setIsCloseLoanModalOpen(true);
@@ -3600,12 +4016,22 @@ export const MicroFinanceManagement: React.FC = () => {
 
   // Delete Loan
   const handleOpenDeleteLoan = (loan: MFLoanRecord) => {
+    if (!canDeleteLoan) {
+      showToast('Permission denied: You do not have permission to delete loans.');
+      return;
+    }
     setSelectedLoanToDelete(loan);
     setIsDeleteLoanModalOpen(true);
   };
 
   const handleConfirmDeleteLoan = () => {
     if (!selectedLoanToDelete) return;
+    if (!canDeleteLoan) {
+      showToast('Permission denied: You do not have permission to delete loans.');
+      setIsDeleteLoanModalOpen(false);
+      setSelectedLoanToDelete(null);
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -3836,6 +4262,7 @@ export const MicroFinanceManagement: React.FC = () => {
       createdAt: new Date().toISOString().split('T')[0]
     };
 
+    setCollectionSheetModalMode('preview');
     setActiveSheetToPrint(newSheet);
     setIsPrintSheetModalOpen(true);
   };
@@ -3905,6 +4332,10 @@ export const MicroFinanceManagement: React.FC = () => {
   // Saves the sheet permanently into Available Collection Sheets (once per Group + Year + Month)!
   const handleGenerateSignatureSheetFromModal = () => {
     if (!activeSheetToPrint) return;
+    if (!canEditCollectionReport) {
+      showToast('Permission denied: You do not have permission to generate collection sheets.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -4145,6 +4576,7 @@ export const MicroFinanceManagement: React.FC = () => {
       createdAt: existing?.createdAt || new Date().toISOString()
     };
 
+    setSignatureSheetModalMode('preview');
     setSelectedSignatureSheetToPrint(previewSheet);
     setIsSignatureModalOpen(true);
   };
@@ -4153,6 +4585,10 @@ export const MicroFinanceManagement: React.FC = () => {
   // Saves the sheet permanently into the Signature Sheets records table (once per Group + Year + Month)!
   const handleSaveAndGenerateSignatureSheet = () => {
     if (!selectedSignatureSheetToPrint) return;
+    if (!canEditSignatureReport) {
+      showToast('Permission denied: You do not have permission to generate signature sheets.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -4225,6 +4661,12 @@ export const MicroFinanceManagement: React.FC = () => {
 
   const handleConfirmDeleteSignatureSheet = () => {
     if (!selectedSignatureSheetToDelete) return;
+    if (!canDeleteSignatureReport) {
+      showToast('Permission denied: You do not have permission to delete signature sheets.');
+      setIsDeleteSignatureModalOpen(false);
+      setSelectedSignatureSheetToDelete(null);
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -5125,27 +5567,31 @@ export const MicroFinanceManagement: React.FC = () => {
                 />
               </div>
 
-              <button
-                type="button"
-                disabled={isDayEnded}
-                onClick={() => { setBulkType('Centers'); setIsBulkModalOpen(true); }}
-                title={isDayEnded ? 'Day Ended - Action Locked' : 'Bulk Upload Centers'}
-                className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                <span>Bulk</span>
-              </button>
+              {canEditCenters && (
+                <>
+                  <button
+                    type="button"
+                    disabled={isDayEnded}
+                    onClick={() => { setBulkType('Centers'); setIsBulkModalOpen(true); }}
+                    title={isDayEnded ? 'Day Ended - Action Locked' : 'Bulk Upload Centers'}
+                    className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Bulk</span>
+                  </button>
 
-              <button
-                type="button"
-                disabled={isDayEnded}
-                onClick={handleOpenAddCenter}
-                title={isDayEnded ? 'Day Ended - Action Locked' : 'Add Center'}
-                className="flex items-center gap-1.5 px-4 py-2 bg-[#1d4ed8] hover:bg-[#1e40af] text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Add Center</span>
-              </button>
+                  <button
+                    type="button"
+                    disabled={isDayEnded}
+                    onClick={handleOpenAddCenter}
+                    title={isDayEnded ? 'Day Ended - Action Locked' : 'Add Center'}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-[#1d4ed8] hover:bg-[#1e40af] text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Add Center</span>
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
@@ -5195,22 +5641,34 @@ export const MicroFinanceManagement: React.FC = () => {
                         <div className="flex items-center justify-end gap-1.5">
                           <button
                             type="button"
-                            disabled={isDayEnded}
-                            onClick={() => handleEditCenter(center)}
-                            className="p-1 text-slate-400 hover:text-blue-600 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                            title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Center'}
+                            onClick={() => setSelectedCenterForGroupsList(center)}
+                            className="p-1 text-slate-500 hover:text-blue-700 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer"
+                            title="View Groups in this Center"
                           >
-                            <Edit2 className="w-4 h-4" />
+                            <Eye className="w-4 h-4" />
                           </button>
-                          <button
-                            type="button"
-                            disabled={isDayEnded}
-                            onClick={() => handleDeleteCenter(center.id)}
-                            className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                            title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Center'}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {canEditCenters && (
+                            <button
+                              type="button"
+                              disabled={isDayEnded}
+                              onClick={() => handleEditCenter(center)}
+                              className="p-1 text-slate-400 hover:text-blue-600 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                              title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Center'}
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                          )}
+                          {canDeleteCenters && (
+                            <button
+                              type="button"
+                              disabled={isDayEnded}
+                              onClick={() => handleDeleteCenter(center.id)}
+                              className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                              title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Center'}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -5251,27 +5709,31 @@ export const MicroFinanceManagement: React.FC = () => {
                 />
               </div>
 
-              <button
-                type="button"
-                disabled={isDayEnded}
-                onClick={() => { setBulkType('Groups'); setIsBulkModalOpen(true); }}
-                title={isDayEnded ? 'Day Ended - Action Locked' : 'Bulk Upload Groups'}
-                className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                <span>Bulk</span>
-              </button>
+              {canEditGroups && (
+                <>
+                  <button
+                    type="button"
+                    disabled={isDayEnded}
+                    onClick={() => { setBulkType('Groups'); setIsBulkModalOpen(true); }}
+                    title={isDayEnded ? 'Day Ended - Action Locked' : 'Bulk Upload Groups'}
+                    className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Bulk</span>
+                  </button>
 
-              <button
-                type="button"
-                disabled={isDayEnded}
-                onClick={handleOpenAddGroup}
-                title={isDayEnded ? 'Day Ended - Action Locked' : 'Add Group'}
-                className="flex items-center gap-1.5 px-4 py-2 bg-[#1d4ed8] hover:bg-[#1e40af] text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Add Group</span>
-              </button>
+                  <button
+                    type="button"
+                    disabled={isDayEnded}
+                    onClick={handleOpenAddGroup}
+                    title={isDayEnded ? 'Day Ended - Action Locked' : 'Add Group'}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-[#1d4ed8] hover:bg-[#1e40af] text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Add Group</span>
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
@@ -5335,24 +5797,31 @@ export const MicroFinanceManagement: React.FC = () => {
                       </td>
                       <td className="py-2 px-3 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            type="button"
-                            disabled={isDayEnded}
-                            onClick={() => handleEditGroup(group)}
-                            className="p-1 text-slate-400 hover:text-blue-600 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                            title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Group'}
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isDayEnded}
-                            onClick={() => handleDeleteGroup(group.id)}
-                            className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                            title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Group'}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {canEditGroups && (
+                            <button
+                              type="button"
+                              disabled={isDayEnded}
+                              onClick={() => handleEditGroup(group)}
+                              className="p-1 text-slate-400 hover:text-blue-600 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                              title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Group'}
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                          )}
+                          {canDeleteGroups && (
+                            <button
+                              type="button"
+                              disabled={isDayEnded}
+                              onClick={() => handleDeleteGroup(group.id)}
+                              className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                              title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Group'}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                          {!canEditGroups && !canDeleteGroups && (
+                            <span className="text-[10px] font-semibold text-slate-400">View Only</span>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -5503,16 +5972,18 @@ export const MicroFinanceManagement: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                disabled={isDayEnded}
-                onClick={() => { setBulkType('Members'); setIsBulkModalOpen(true); }}
-                title={isDayEnded ? 'Day Ended - Action Locked' : 'Bulk Upload Members'}
-                className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                <span>Bulk Upload</span>
-              </button>
+              {canEditMembers && (
+                <button
+                  type="button"
+                  disabled={isDayEnded}
+                  onClick={() => { setBulkType('Members'); setIsBulkModalOpen(true); }}
+                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Bulk Upload Members'}
+                  className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Bulk Upload</span>
+                </button>
+              )}
 
               <button
                 type="button"
@@ -5523,16 +5994,18 @@ export const MicroFinanceManagement: React.FC = () => {
                 <Download className="w-4 h-4" />
               </button>
 
-              <button
-                type="button"
-                disabled={isDayEnded}
-                onClick={handleOpenAddMember}
-                title={isDayEnded ? 'Day Ended - Action Locked' : 'Add Member'}
-                className="flex items-center gap-1.5 px-4 py-2 bg-[#1d4ed8] hover:bg-[#1e40af] text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <UserPlus className="w-4 h-4" />
-                <span>Add Member</span>
-              </button>
+              {canEditMembers && (
+                <button
+                  type="button"
+                  disabled={isDayEnded}
+                  onClick={handleOpenAddMember}
+                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Add Member'}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-[#1d4ed8] hover:bg-[#1e40af] text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>Add Member</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -5601,29 +6074,31 @@ export const MicroFinanceManagement: React.FC = () => {
                       </td>
                       <td className="py-2 px-3 text-right">
                         <div className="flex items-center justify-end gap-1">
-                          <button
-                            type="button"
-                            disabled={isDayEnded}
-                            onClick={() => handleOpenToggleMemberStatus(member)}
-                            className={`p-1 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                              effMemberStatus === 'ACTIVE'
-                                ? 'text-amber-600 hover:text-amber-700 hover:bg-amber-50'
-                                : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'
-                            }`}
-                            title={
-                              isDayEnded
-                                ? 'Day Ended - Action Locked'
-                                : effMemberStatus === 'ACTIVE'
-                                ? 'Deactivate Member'
-                                : 'Activate Member'
-                            }
-                          >
-                            {effMemberStatus === 'ACTIVE' ? (
-                              <UserX className="w-4 h-4" />
-                            ) : (
-                              <UserCheck className="w-4 h-4" />
-                            )}
-                          </button>
+                          {canEditMembers && (
+                            <button
+                              type="button"
+                              disabled={isDayEnded}
+                              onClick={() => handleOpenToggleMemberStatus(member)}
+                              className={`p-1 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                                effMemberStatus === 'ACTIVE'
+                                  ? 'text-amber-600 hover:text-amber-700 hover:bg-amber-50'
+                                  : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'
+                              }`}
+                              title={
+                                isDayEnded
+                                  ? 'Day Ended - Action Locked'
+                                  : effMemberStatus === 'ACTIVE'
+                                  ? 'Deactivate Member'
+                                  : 'Activate Member'
+                              }
+                            >
+                              {effMemberStatus === 'ACTIVE' ? (
+                                <UserX className="w-4 h-4" />
+                              ) : (
+                                <UserCheck className="w-4 h-4" />
+                              )}
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => handleOpenViewMember(member)}
@@ -5632,24 +6107,28 @@ export const MicroFinanceManagement: React.FC = () => {
                           >
                             <Eye className="w-4 h-4" />
                           </button>
-                          <button
-                            type="button"
-                            disabled={isDayEnded}
-                            onClick={() => handleEditMember(member)}
-                            className="p-1 text-slate-400 hover:text-emerald-700 rounded-lg hover:bg-emerald-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                            title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Member'}
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isDayEnded}
-                            onClick={() => handleDeleteMember(member.id)}
-                            className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                            title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Member'}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {canEditMembers && (
+                            <button
+                              type="button"
+                              disabled={isDayEnded}
+                              onClick={() => handleEditMember(member)}
+                              className="p-1 text-slate-400 hover:text-emerald-700 rounded-lg hover:bg-emerald-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                              title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Member'}
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                          )}
+                          {canDeleteMembers && (
+                            <button
+                              type="button"
+                              disabled={isDayEnded}
+                              onClick={() => handleDeleteMember(member.id)}
+                              className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                              title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Member'}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -5736,16 +6215,18 @@ export const MicroFinanceManagement: React.FC = () => {
                 <span>Refresh</span>
               </button>
 
-              <button
-                type="button"
-                disabled={isDayEnded}
-                onClick={() => { setBulkType('Savings'); setIsBulkModalOpen(true); }}
-                title={isDayEnded ? 'Day Ended - Action Locked' : 'Bulk Upload Savings'}
-                className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                <span>Bulk Upload</span>
-              </button>
+              {canEditSaving && (
+                <button
+                  type="button"
+                  disabled={isDayEnded}
+                  onClick={() => { setBulkType('Savings'); setIsBulkModalOpen(true); }}
+                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Bulk Upload Savings'}
+                  className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Bulk Upload</span>
+                </button>
+              )}
 
               <button
                 type="button"
@@ -5756,16 +6237,18 @@ export const MicroFinanceManagement: React.FC = () => {
                 <Download className="w-4 h-4" />
               </button>
 
-              <button
-                type="button"
-                disabled={isDayEnded}
-                onClick={handleOpenAddSaving}
-                title={isDayEnded ? 'Day Ended - Action Locked' : 'Create Saving Account'}
-                className="flex items-center gap-1.5 px-4 py-2 bg-[#00593B] hover:bg-[#00472f] text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Create Account</span>
-              </button>
+              {canEditSaving && (
+                <button
+                  type="button"
+                  disabled={isDayEnded}
+                  onClick={handleOpenAddSaving}
+                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Create Saving Account'}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-[#00593B] hover:bg-[#00472f] text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Create Account</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -5911,29 +6394,31 @@ export const MicroFinanceManagement: React.FC = () => {
                       </td>
                       <td className="py-2 px-3 text-right">
                         <div className="flex items-center justify-end gap-1">
-                          <button
-                            type="button"
-                            disabled={isDayEnded}
-                            onClick={() => handleOpenToggleSavingStatus(item)}
-                            className={`p-1 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                              isOpenAccount
-                                ? 'text-amber-600 hover:text-amber-700 hover:bg-amber-50'
-                                : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'
-                            }`}
-                            title={
-                              isDayEnded
-                                ? 'Day Ended - Action Locked'
-                                : isOpenAccount
-                                ? 'Deactivate / Close Saving Account'
-                                : 'Activate Saving Account'
-                            }
-                          >
-                            {isOpenAccount ? (
-                              <Ban className="w-4 h-4" />
-                            ) : (
-                              <CheckCircle2 className="w-4 h-4" />
-                            )}
-                          </button>
+                          {canEditSaving && (
+                            <button
+                              type="button"
+                              disabled={isDayEnded}
+                              onClick={() => handleOpenToggleSavingStatus(item)}
+                              className={`p-1 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                                isOpenAccount
+                                  ? 'text-amber-600 hover:text-amber-700 hover:bg-amber-50'
+                                  : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'
+                              }`}
+                              title={
+                                isDayEnded
+                                  ? 'Day Ended - Action Locked'
+                                  : isOpenAccount
+                                  ? 'Deactivate / Close Saving Account'
+                                  : 'Activate Saving Account'
+                              }
+                            >
+                              {isOpenAccount ? (
+                                <Ban className="w-4 h-4" />
+                              ) : (
+                                <CheckCircle2 className="w-4 h-4" />
+                              )}
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => handleOpenViewSaving(item)}
@@ -5942,24 +6427,28 @@ export const MicroFinanceManagement: React.FC = () => {
                           >
                             <Eye className="w-4 h-4" />
                           </button>
-                          <button
-                            type="button"
-                            disabled={isDayEnded}
-                            onClick={() => handleOpenEditSaving(item)}
-                            className="p-1 text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                            title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Saving'}
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isDayEnded}
-                            onClick={() => handleOpenDeleteSaving(item)}
-                            className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                            title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete'}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {canEditSaving && (
+                            <button
+                              type="button"
+                              disabled={isDayEnded}
+                              onClick={() => handleOpenEditSaving(item)}
+                              className="p-1 text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                              title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Saving'}
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                          )}
+                          {canDeleteSaving && (
+                            <button
+                              type="button"
+                              disabled={isDayEnded}
+                              onClick={() => handleOpenDeleteSaving(item)}
+                              className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                              title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete'}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -6041,16 +6530,18 @@ export const MicroFinanceManagement: React.FC = () => {
                 <span>Refresh</span>
               </button>
 
-              <button
-                type="button"
-                disabled={isDayEnded}
-                onClick={() => { setBulkType('Loans'); setIsBulkModalOpen(true); }}
-                title={isDayEnded ? 'Day Ended - Action Locked' : 'Bulk Upload Loans'}
-                className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                <span>Bulk Upload</span>
-              </button>
+              {canEditLoan && (
+                <button
+                  type="button"
+                  disabled={isDayEnded}
+                  onClick={() => { setBulkType('Loans'); setIsBulkModalOpen(true); }}
+                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Bulk Upload Loans'}
+                  className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Bulk Upload</span>
+                </button>
+              )}
 
               <button
                 type="button"
@@ -6061,16 +6552,18 @@ export const MicroFinanceManagement: React.FC = () => {
                 <Download className="w-4 h-4" />
               </button>
 
-              <button
-                type="button"
-                disabled={isDayEnded}
-                onClick={handleOpenIssueLoan}
-                title={isDayEnded ? 'Day Ended - Action Locked' : 'Issue New Loan'}
-                className="flex items-center gap-1.5 px-4 py-2 bg-[#ea580c] hover:bg-[#c2410c] text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Issue New Loan</span>
-              </button>
+              {canEditLoan && (
+                <button
+                  type="button"
+                  disabled={isDayEnded}
+                  onClick={handleOpenIssueLoan}
+                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Issue New Loan'}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-[#ea580c] hover:bg-[#c2410c] text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Issue New Loan</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -6234,7 +6727,7 @@ export const MicroFinanceManagement: React.FC = () => {
                           <td className="py-2 px-3 text-right">
                             <div className="flex items-center justify-end gap-1.5">
                               {/* Close Loan Action: 'Close Loan' on Mature loans, 'LC' on Active loans */}
-                              {effStatus !== 'CLOSED' && (
+                              {effStatus !== 'CLOSED' && canEditLoan && (
                                 <button
                                   type="button"
                                   disabled={isDayEnded}
@@ -6260,25 +6753,29 @@ export const MicroFinanceManagement: React.FC = () => {
                                 <Eye className="w-4 h-4" />
                               </button>
                               {/* Edit Action */}
-                              <button
-                                type="button"
-                                disabled={isDayEnded}
-                                onClick={() => handleOpenEditLoan(loan)}
-                                className="p-1 text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                                title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Loan'}
-                              >
-                                <Edit2 className="w-4 h-4" />
-                              </button>
+                              {canEditLoan && (
+                                <button
+                                  type="button"
+                                  disabled={isDayEnded}
+                                  onClick={() => handleOpenEditLoan(loan)}
+                                  className="p-1 text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Loan'}
+                                >
+                                  <Edit2 className="w-4 h-4" />
+                                </button>
+                              )}
                               {/* Delete Action */}
-                              <button
-                                type="button"
-                                disabled={isDayEnded}
-                                onClick={() => handleOpenDeleteLoan(loan)}
-                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                                title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Loan'}
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
+                              {canDeleteLoan && (
+                                <button
+                                  type="button"
+                                  disabled={isDayEnded}
+                                  onClick={() => handleOpenDeleteLoan(loan)}
+                                  className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Loan'}
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -6621,6 +7118,7 @@ export const MicroFinanceManagement: React.FC = () => {
                                   onClick={() => {
                                     setCollectionSheetLoans([]);
                                     setCollectionSheetTargetBs(buildBsDateFromParts(sheet.year, sheet.month, sheet.day));
+                                    setCollectionSheetModalMode('record');
                                     setActiveSheetToPrint(sheet);
                                     setIsPrintSheetModalOpen(true);
                                   }}
@@ -6629,15 +7127,17 @@ export const MicroFinanceManagement: React.FC = () => {
                                   <Eye className="w-3.5 h-3.5" />
                                   <span>View / Print</span>
                                 </button>
-                                <button
-                                  type="button"
-                                  disabled={isDayEnded}
-                                  onClick={() => handleOpenDeleteSheet(sheet)}
-                                  className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Sheet'}
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
+                                {canDeleteCollectionReport && (
+                                  <button
+                                    type="button"
+                                    disabled={isDayEnded}
+                                    onClick={() => handleOpenDeleteSheet(sheet)}
+                                    className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                    title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Sheet'}
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -6903,6 +7403,7 @@ export const MicroFinanceManagement: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => {
+                                    setSignatureSheetModalMode('record');
                                     setSelectedSignatureSheetToPrint(sig);
                                     setIsSignatureModalOpen(true);
                                   }}
@@ -6912,18 +7413,20 @@ export const MicroFinanceManagement: React.FC = () => {
                                   <Printer className="w-3.5 h-3.5" />
                                   <span>View / Print</span>
                                 </button>
-                                <button
-                                  type="button"
-                                  disabled={isDayEnded}
-                                  onClick={() => {
-                                    setSelectedSignatureSheetToDelete(sig);
-                                    setIsDeleteSignatureModalOpen(true);
-                                  }}
-                                  className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Signature Sheet'}
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
+                                {canDeleteSignatureReport && (
+                                  <button
+                                    type="button"
+                                    disabled={isDayEnded}
+                                    onClick={() => {
+                                      setSelectedSignatureSheetToDelete(sig);
+                                      setIsDeleteSignatureModalOpen(true);
+                                    }}
+                                    className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                    title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Signature Sheet'}
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -6959,6 +7462,8 @@ export const MicroFinanceManagement: React.FC = () => {
               activeBranchKey={effectiveBranchKey}
               activeBranchKeys={effectiveBranchKeys}
               onToast={showToast}
+              canEdit={canEditDepositSheet}
+              canDelete={canDeleteDepositSheet}
             />
           )}
 
@@ -6975,6 +7480,8 @@ export const MicroFinanceManagement: React.FC = () => {
               branchId={branch?.id}
               activeBranchKey={effectiveBranchKey}
               activeBranchKeys={effectiveBranchKeys}
+              canEdit={canEditMeetingMinutes}
+              canDelete={canDeleteMeetingMinutes}
             />
           )}
 
@@ -7021,6 +7528,8 @@ export const MicroFinanceManagement: React.FC = () => {
               defaultIssueDate={getTodayBsDate()}
               onMembersUpdated={setMembers}
               onToast={showToast}
+              canEdit={canEditIdCard}
+              canDelete={canDeleteIdCard}
             />
           )}
         </div>
@@ -7267,6 +7776,144 @@ export const MicroFinanceManagement: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* ============================================================== */}
+      {/* MODAL: CENTER GROUPS LIST (GROUPS UNDER SELECTED CENTER) */}
+      {/* ============================================================== */}
+      {selectedCenterForGroupsList && (() => {
+        const targetCenterNameNorm = normalizeMfText(selectedCenterForGroupsList.name);
+        const centerGroupsList = sortByNameAZ(
+          groups.filter(g => {
+            if (g.centerId && selectedCenterForGroupsList.id && g.centerId === selectedCenterForGroupsList.id) {
+              return true;
+            }
+            if (targetCenterNameNorm && normalizeMfText(g.centerName) === targetCenterNameNorm) {
+              return true;
+            }
+            return false;
+          })
+        );
+        const totalCenterMembers = centerGroupsList.reduce((sum, g) => sum + (Number(g.membersCount) || 0), 0);
+
+        return (
+          <div
+            className="fixed inset-0 z-[9999] bg-slate-950/75 backdrop-blur-xs flex justify-center items-center p-3"
+            onClick={() => setSelectedCenterForGroupsList(null)}
+          >
+            <div
+              className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden max-h-[88vh] flex flex-col"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Compact Header */}
+              <div className="bg-[#00593B] px-4 py-2.5 flex items-center justify-between gap-2 text-white shrink-0">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <MapPin className="w-4 h-4 shrink-0" />
+                    <h3 className="text-xs font-extrabold tracking-wide truncate">
+                      {selectedCenterForGroupsList.name}
+                    </h3>
+                    <span className="px-1.5 py-0.5 rounded bg-white/15 text-[10px] font-mono font-bold shrink-0">
+                      {selectedCenterForGroupsList.code}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-emerald-100 truncate mt-0.5">
+                    {selectedCenterForGroupsList.branch || 'N/A'} • {selectedCenterForGroupsList.meetingDay} • {centerGroupsList.length} Groups
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedCenterForGroupsList(null)}
+                  className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer shrink-0"
+                  aria-label="Close center groups list"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Compact Groups Table */}
+              <div className="overflow-y-auto flex-1">
+                {centerGroupsList.length === 0 ? (
+                  <div className="py-10 text-center text-xs text-slate-400 font-semibold">
+                    No groups found under this center.
+                  </div>
+                ) : (
+                  <table className="w-full text-left border-collapse text-[11px] leading-tight">
+                    <thead className="sticky top-0 bg-slate-50 border-b border-slate-200 z-10">
+                      <tr className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                        <th className="py-2 px-2.5 w-11 text-center border-r border-slate-100">S.N.</th>
+                        <th className="py-2 px-2.5 w-20 border-r border-slate-100">Code</th>
+                        <th className="py-2 px-2.5 border-r border-slate-100">Group Name</th>
+                        <th className="py-2 px-2.5 border-r border-slate-100">Place</th>
+                        <th className="py-2 px-2.5 w-24 text-center border-r border-slate-100">Members</th>
+                        <th className="py-2 px-2.5 w-20 text-center">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {centerGroupsList.map((grp, idx) => (
+                        <tr key={grp.id || idx} className="hover:bg-slate-50/80">
+                          <td className="py-1.5 px-2.5 text-center font-mono tabular-nums text-slate-500 font-semibold border-r border-slate-100">
+                            {idx + 1}
+                          </td>
+                          <td className="py-1.5 px-2.5 border-r border-slate-100 whitespace-nowrap">
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-black font-mono bg-amber-50 text-amber-700 border border-amber-200">
+                              {grp.code}
+                            </span>
+                          </td>
+                          <td className="py-1.5 px-2.5 font-bold text-slate-900 border-r border-slate-100">
+                            {grp.name}
+                          </td>
+                          <td className="py-1.5 px-2.5 text-slate-600 border-r border-slate-100">
+                            {grp.place || 'N/A'}
+                          </td>
+                          <td className="py-1.5 px-2.5 text-center border-r border-slate-100 whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedGroupForMembersList(grp)}
+                              title="View members in this group"
+                              className="text-blue-600 font-bold inline-flex items-center gap-1 cursor-pointer hover:underline"
+                            >
+                              <Users className="w-3 h-3" />
+                              <span>{grp.membersCount}</span>
+                            </button>
+                          </td>
+                          <td className="py-1.5 px-2.5 text-center whitespace-nowrap">
+                            <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                              grp.status === 'ACTIVE'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-slate-100 text-slate-500 border border-slate-200'
+                            }`}>
+                              {grp.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {/* Compact Footer */}
+              <div className="px-4 py-2 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3 text-[11px] font-bold text-slate-500">
+                  <span>
+                    Total Groups: <span className="font-mono tabular-nums text-slate-800">{centerGroupsList.length}</span>
+                  </span>
+                  <span>
+                    Total Members: <span className="font-mono tabular-nums text-slate-800">{totalCenterMembers}</span>
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedCenterForGroupsList(null)}
+                  className="px-3.5 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold cursor-pointer transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ============================================================== */}
       {/* MODAL: GROUP MEMBERS LIST (COMPACT: S.N., NAME, POST) */}
@@ -8304,7 +8951,7 @@ export const MicroFinanceManagement: React.FC = () => {
             </div>
 
             <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
-              {getEffectiveLoanStatus(selectedLoanToView) !== 'CLOSED' && (
+              {getEffectiveLoanStatus(selectedLoanToView) !== 'CLOSED' && canEditLoan && (
                 <button
                   type="button"
                   disabled={isDayEnded}
@@ -8319,19 +8966,21 @@ export const MicroFinanceManagement: React.FC = () => {
                   <span>{getEffectiveLoanStatus(selectedLoanToView) === 'MATURED' ? 'Close Loan' : 'LC'}</span>
                 </button>
               )}
-              <button
-                type="button"
-                disabled={isDayEnded}
-                onClick={() => {
-                  setIsViewLoanModalOpen(false);
-                  handleOpenEditLoan(selectedLoanToView);
-                }}
-                title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Loan'}
-                className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold cursor-pointer transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Edit2 className="w-3.5 h-3.5" />
-                <span>Edit Loan</span>
-              </button>
+              {canEditLoan && (
+                <button
+                  type="button"
+                  disabled={isDayEnded}
+                  onClick={() => {
+                    setIsViewLoanModalOpen(false);
+                    handleOpenEditLoan(selectedLoanToView);
+                  }}
+                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Loan'}
+                  className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold cursor-pointer transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  <span>Edit Loan</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setIsViewLoanModalOpen(false)}
@@ -8758,28 +9407,6 @@ export const MicroFinanceManagement: React.FC = () => {
         return (
           <div className="fixed inset-0 z-[9999] bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
             <div className="bg-white rounded-2xl w-full max-w-6xl max-h-[92vh] shadow-2xl border border-slate-200 overflow-hidden flex flex-col my-auto">
-              {/* Top Header Bar: Print & Close icon buttons only */}
-              <div className="bg-[#0b1329] px-6 py-3 flex justify-end items-center text-white shrink-0">
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handlePrintElement('printable-collection-sheet')}
-                    className="p-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white cursor-pointer shadow-xs transition-colors"
-                    title="Print Sheet"
-                  >
-                    <Printer className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setIsPrintSheetModalOpen(false)}
-                    className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer transition-colors"
-                    title="Close"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
               {/* Modal Body: Proportional suitable column widths, Black & White high-contrast for printing */}
               <div id="printable-collection-sheet" className="flex-1 overflow-auto p-3 sm:p-4 space-y-2.5 bg-white text-black">
                 {/* Organization & Center Heading (Dual language, equal length, no underline) */}
@@ -8983,7 +9610,7 @@ export const MicroFinanceManagement: React.FC = () => {
                 </div>
               </div>
 
-              {/* Modal Footer: 'Generate Sheet' button saves permanently and closes modal */}
+              {/* Modal Footer: 'Generate Sheet' when previewing from filter; 'Print' when viewing saved record */}
               <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end items-center gap-2 shrink-0">
                 <button
                   type="button"
@@ -8992,16 +9619,28 @@ export const MicroFinanceManagement: React.FC = () => {
                 >
                   Close
                 </button>
-                <button
-                  type="button"
-                  disabled={isDayEnded}
-                  onClick={handleGenerateSignatureSheetFromModal}
-                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Generate & Save Sheet'}
-                  className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold flex items-center gap-2 cursor-pointer shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <FileSpreadsheet className="w-4 h-4" />
-                  <span>Generate Sheet</span>
-                </button>
+                {collectionSheetModalMode === 'record' ? (
+                  <button
+                    type="button"
+                    onClick={() => handlePrintElement('printable-collection-sheet')}
+                    title="Print Collection Sheet"
+                    className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold flex items-center gap-2 cursor-pointer shadow-md transition-colors"
+                  >
+                    <Printer className="w-4 h-4" />
+                    <span>Print</span>
+                  </button>
+                ) : canEditCollectionReport ? (
+                  <button
+                    type="button"
+                    disabled={isDayEnded}
+                    onClick={handleGenerateSignatureSheetFromModal}
+                    title={isDayEnded ? 'Day Ended - Action Locked' : 'Generate & Save Sheet'}
+                    className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold flex items-center gap-2 cursor-pointer shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>Generate Sheet</span>
+                  </button>
+                ) : null}
               </div>
             </div>
           </div>
@@ -9022,27 +9661,6 @@ export const MicroFinanceManagement: React.FC = () => {
         return (
           <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-xs flex justify-center items-center p-4 overflow-y-auto">
             <div className="bg-white rounded-3xl max-w-4xl w-full shadow-2xl border border-slate-200 overflow-hidden max-h-[95vh] flex flex-col">
-              {/* Action Bar (Top Print & Close) - Clean bar with icon only per red circle */}
-              <div className="bg-[#0b1329] px-6 py-3.5 flex justify-end items-center text-white shrink-0 print:hidden">
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handlePrintElement('printable-signature-sheet')}
-                    className="p-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white cursor-pointer shadow-xs transition-colors"
-                    title="Print Sheet"
-                  >
-                    <Printer className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setIsSignatureModalOpen(false)}
-                    className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
               {/* Document Sheet Body */}
               <div id="printable-signature-sheet" className="p-6 space-y-3 text-xs overflow-y-auto bg-white print:p-0">
                 {/* Header: Logo, Company Name Nepali & English (Equal balanced compact height) */}
@@ -9228,7 +9846,7 @@ export const MicroFinanceManagement: React.FC = () => {
                 </div>
               </div>
 
-              {/* Modal Footer (Screen only) - Updated to Generate Sheet */}
+              {/* Modal Footer (Screen only): 'Generate Sheet' when previewing; 'Print' when viewing saved record */}
               <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2 shrink-0 print:hidden">
                 <button
                   type="button"
@@ -9237,16 +9855,28 @@ export const MicroFinanceManagement: React.FC = () => {
                 >
                   Close
                 </button>
-                <button
-                  type="button"
-                  disabled={isDayEnded}
-                  onClick={handleSaveAndGenerateSignatureSheet}
-                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Generate & Save Signature Sheet'}
-                  className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold flex items-center gap-2 cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <FileSpreadsheet className="w-4 h-4" />
-                  <span>Generate Sheet</span>
-                </button>
+                {signatureSheetModalMode === 'record' ? (
+                  <button
+                    type="button"
+                    onClick={() => handlePrintElement('printable-signature-sheet')}
+                    title="Print Signature Sheet"
+                    className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold flex items-center gap-2 cursor-pointer shadow-sm transition-colors"
+                  >
+                    <Printer className="w-4 h-4" />
+                    <span>Print</span>
+                  </button>
+                ) : canEditSignatureReport ? (
+                  <button
+                    type="button"
+                    disabled={isDayEnded}
+                    onClick={handleSaveAndGenerateSignatureSheet}
+                    title={isDayEnded ? 'Day Ended - Action Locked' : 'Generate & Save Signature Sheet'}
+                    className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold flex items-center gap-2 cursor-pointer shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>Generate Sheet</span>
+                  </button>
+                ) : null}
               </div>
             </div>
           </div>
@@ -9376,19 +10006,21 @@ export const MicroFinanceManagement: React.FC = () => {
             </div>
 
             <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
-              <button
-                type="button"
-                disabled={isDayEnded}
-                onClick={() => {
-                  setIsViewSavingModalOpen(false);
-                  handleOpenEditSaving(selectedSavingToView);
-                }}
-                title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Saving'}
-                className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold cursor-pointer transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Edit2 className="w-3.5 h-3.5" />
-                <span>Edit Saving</span>
-              </button>
+              {canEditSaving && (
+                <button
+                  type="button"
+                  disabled={isDayEnded}
+                  onClick={() => {
+                    setIsViewSavingModalOpen(false);
+                    handleOpenEditSaving(selectedSavingToView);
+                  }}
+                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Edit Saving'}
+                  className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold cursor-pointer transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  <span>Edit Saving</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setIsViewSavingModalOpen(false)}
@@ -10180,7 +10812,7 @@ export const MicroFinanceManagement: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  {!isDayEnded && (
+                  {!isDayEnded && canEditMembers && (
                     <button
                       type="button"
                       onClick={() => {
@@ -10361,6 +10993,107 @@ export const MicroFinanceManagement: React.FC = () => {
               >
                 Yes
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL: ACTION BLOCKED (ACTIVE ACCOUNTS / LINKED RECORDS GUARD) */}
+      {/* ============================================================== */}
+      {actionBlockNotice && (
+        <div
+          className="fixed inset-0 z-[10000] bg-slate-950/80 backdrop-blur-xs flex justify-center items-center p-4"
+          onClick={() => setActionBlockNotice(null)}
+        >
+          <div
+            className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-amber-200 overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="bg-amber-50 border-b border-amber-200 px-5 py-4 flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-extrabold text-slate-900">{actionBlockNotice.title}</h3>
+                <p className="text-xs font-bold text-amber-800 truncate mt-0.5">{actionBlockNotice.subtitle}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActionBlockNotice(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-amber-100/60 cursor-pointer"
+                aria-label="Close warning"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3">
+              <p className="text-xs text-slate-700 leading-relaxed font-medium">
+                {actionBlockNotice.message}
+              </p>
+
+              {actionBlockNotice.items.length > 0 && (
+                <div className="max-h-52 overflow-y-auto rounded-xl border border-slate-200 divide-y divide-slate-100 bg-slate-50/50">
+                  {actionBlockNotice.items.map((item, idx) => (
+                    <div key={idx} className="px-3 py-2 flex items-center justify-between gap-2 text-xs">
+                      <div className="min-w-0">
+                        <div className="font-bold text-slate-900 truncate">{item.label}</div>
+                        <div className="text-[11px] text-slate-500 truncate">{item.detail}</div>
+                      </div>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase shrink-0 ${
+                        item.status === 'ACTIVE'
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : item.status === 'MATURED'
+                          ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                          : 'bg-slate-100 text-slate-600 border border-slate-200'
+                      }`}>
+                        {item.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {actionBlockNotice.hint && (
+                <div className="p-2.5 bg-blue-50 border border-blue-200 rounded-xl text-[11px] text-blue-800 font-semibold">
+                  {actionBlockNotice.hint}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
+                {actionBlockNotice.showGoToSaving && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActionBlockNotice(null);
+                      setActiveTab('saving');
+                    }}
+                    className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold cursor-pointer transition-colors"
+                  >
+                    Go to Saving
+                  </button>
+                )}
+                {actionBlockNotice.showGoToLoan && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActionBlockNotice(null);
+                      setActiveTab('loan');
+                    }}
+                    className="px-3.5 py-2 bg-orange-50 hover:bg-orange-100 text-orange-800 border border-orange-200 rounded-xl text-xs font-bold cursor-pointer transition-colors"
+                  >
+                    Go to Loan
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setActionBlockNotice(null)}
+                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors"
+                >
+                  OK, Got it
+                </button>
+              </div>
             </div>
           </div>
         </div>

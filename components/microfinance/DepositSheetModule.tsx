@@ -38,6 +38,8 @@ interface DepositSheetModuleProps {
   activeBranchKey?: string;
   activeBranchKeys?: string[];
   onToast?: (msg: string) => void;
+  canEdit?: boolean;
+  canDelete?: boolean;
 }
 
 interface RowEntryDraft {
@@ -129,7 +131,9 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
   branchId,
   activeBranchKey,
   activeBranchKeys,
-  onToast = () => {}
+  onToast = () => {},
+  canEdit = true,
+  canDelete = true
 }) => {
   const isDayEnded = useDayEndLock(branchId);
 
@@ -420,6 +424,10 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
 
   // Persist a single member row into the Deposit Sheet record (awaited to Supabase)
   const handleSaveSingleRow = async (mem: MFMember) => {
+    if (!canEdit) {
+      onToast('तपाईंलाई Deposit Sheet सम्पादन/सुरक्षित गर्ने अनुमति छैन ।');
+      return;
+    }
     if (isDayEndedForBranch(branchId)) {
       onToast(getDayEndedBlockMessage());
       return;
@@ -521,6 +529,10 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
 
   // Persist ALL member rows at once (awaited to Supabase)
   const handleSaveAllRows = async () => {
+    if (!canEdit) {
+      onToast('तपाईंलाई Deposit Sheet सम्पादन/सुरक्षित गर्ने अनुमति छैन ।');
+      return;
+    }
     if (isDayEndedForBranch(branchId)) {
       onToast(getDayEndedBlockMessage());
       return;
@@ -863,6 +875,11 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
 
   const handleConfirmDeleteSheet = async () => {
     if (!pendingDeleteSheet) return;
+    if (!canDelete) {
+      onToast('तपाईंलाई Deposit Sheet हटाउने अनुमति छैन ।');
+      setPendingDeleteSheet(null);
+      return;
+    }
     if (isDayEndedForBranch(branchId)) {
       onToast(getDayEndedBlockMessage());
       setPendingDeleteSheet(null);
@@ -1153,15 +1170,17 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
                           <Printer className="w-3.5 h-3.5" />
                           <span>Print</span>
                         </button>
-                        <button
-                          type="button"
-                          disabled={isDayEnded}
-                          onClick={() => setPendingDeleteSheet(sheet)}
-                          title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Deposit Sheet'}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-40 cursor-pointer transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {canDelete && (
+                          <button
+                            type="button"
+                            disabled={isDayEnded}
+                            onClick={() => setPendingDeleteSheet(sheet)}
+                            title={isDayEnded ? 'Day Ended - Action Locked' : 'Delete Deposit Sheet'}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-40 cursor-pointer transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -1197,16 +1216,18 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
                 )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  disabled={isDayEnded || groupMembers.length === 0}
-                  onClick={handleSaveAllRows}
-                  title={isDayEnded ? 'Day Ended - Action Locked' : 'Save all rows to Deposit Sheets Record'}
-                  className="px-3 py-1.5 rounded-xl bg-[#00593B] hover:bg-[#00704b] disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold cursor-pointer inline-flex items-center gap-1.5 shadow-xs transition-colors"
-                >
-                  <SaveAll className="w-3.5 h-3.5" />
-                  <span>Save All</span>
-                </button>
+                {canEdit && (
+                  <button
+                    type="button"
+                    disabled={isDayEnded || groupMembers.length === 0}
+                    onClick={handleSaveAllRows}
+                    title={isDayEnded ? 'Day Ended - Action Locked' : 'Save all rows to Deposit Sheets Record'}
+                    className="px-3 py-1.5 rounded-xl bg-[#00593B] hover:bg-[#00704b] disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold cursor-pointer inline-flex items-center gap-1.5 shadow-xs transition-colors"
+                  >
+                    <SaveAll className="w-3.5 h-3.5" />
+                    <span>Save All</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={groupMembers.length === 0}
@@ -1290,16 +1311,18 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
                 <th className="py-1.5 px-1.5 border border-slate-900 text-center whitespace-nowrap">ऋण रकम (रु.)</th>
                 <th className="py-1.5 px-1.5 border border-slate-900 text-center whitespace-nowrap">जम्मा (रु.)</th>
                 <th className="py-1 px-1 border border-slate-900 text-center whitespace-nowrap print:hidden">
-                  <button
-                    type="button"
-                    disabled={isDayEnded || groupMembers.length === 0}
-                    onClick={handleSaveAllRows}
-                    title={isDayEnded ? 'Day Ended - Action Locked' : 'Save All Rows'}
-                    className="inline-flex items-center justify-center gap-1 px-1.5 py-0.5 rounded bg-[#00593B] hover:bg-[#00472f] disabled:opacity-40 text-white text-[10px] font-bold cursor-pointer transition-colors"
-                  >
-                    <SaveAll className="w-3 h-3" />
-                    <span>All</span>
-                  </button>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      disabled={isDayEnded || groupMembers.length === 0}
+                      onClick={handleSaveAllRows}
+                      title={isDayEnded ? 'Day Ended - Action Locked' : 'Save All Rows'}
+                      className="inline-flex items-center justify-center gap-1 px-1.5 py-0.5 rounded bg-[#00593B] hover:bg-[#00472f] disabled:opacity-40 text-white text-[10px] font-bold cursor-pointer transition-colors"
+                    >
+                      <SaveAll className="w-3 h-3" />
+                      <span>All</span>
+                    </button>
+                  )}
                 </th>
               </tr>
             </thead>
@@ -1346,7 +1369,7 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
                         <input
                           type="text"
                           inputMode="decimal"
-                          disabled={isDayEnded}
+                          disabled={isDayEnded || !canEdit}
                           value={entry.savingInput}
                           onChange={e => handleFieldChange(mem.memberId, 'savingInput', e.target.value)}
                           onKeyDown={e => {
@@ -1365,7 +1388,7 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
                         <input
                           type="text"
                           inputMode="decimal"
-                          disabled={isDayEnded}
+                          disabled={isDayEnded || !canEdit}
                           value={entry.loanInput}
                           onChange={e => handleFieldChange(mem.memberId, 'loanInput', e.target.value)}
                           onKeyDown={e => {
@@ -1385,32 +1408,34 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
                       </td>
                       {/* Row Save Icon Button (Hidden on Print) */}
                       <td className="py-0.5 px-1 border border-slate-900 text-center print:hidden">
-                        <button
-                          type="button"
-                          disabled={isDayEnded}
-                          onClick={() => handleSaveSingleRow(mem)}
-                          title={
-                            isDayEnded
-                              ? 'Day Ended - Action Locked'
-                              : isRowSavedClean
-                                ? 'Saved (Click to re-save row)'
-                                : 'Save this row'
-                          }
-                          aria-label={`Save row for ${mem.name}`}
-                          className={`p-1.5 rounded-lg inline-flex items-center justify-center transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                            isRowSavedClean
-                              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                              : entry.dirty
-                                ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-2xs'
-                                : 'bg-slate-100 text-slate-700 hover:bg-[#00593B] hover:text-white'
-                          }`}
-                        >
-                          {isRowSavedClean ? (
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                          ) : (
-                            <Save className="w-3.5 h-3.5" />
-                          )}
-                        </button>
+                        {canEdit && (
+                          <button
+                            type="button"
+                            disabled={isDayEnded}
+                            onClick={() => handleSaveSingleRow(mem)}
+                            title={
+                              isDayEnded
+                                ? 'Day Ended - Action Locked'
+                                : isRowSavedClean
+                                  ? 'Saved (Click to re-save row)'
+                                  : 'Save this row'
+                            }
+                            aria-label={`Save row for ${mem.name}`}
+                            className={`p-1.5 rounded-lg inline-flex items-center justify-center transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                              isRowSavedClean
+                                ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                                : entry.dirty
+                                  ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-2xs'
+                                  : 'bg-slate-100 text-slate-700 hover:bg-[#00593B] hover:text-white'
+                            }`}
+                          >
+                            {isRowSavedClean ? (
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                            ) : (
+                              <Save className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -1433,15 +1458,17 @@ export const DepositSheetModule: React.FC<DepositSheetModuleProps> = ({
                     {formatAmount(sheetTotals.grandTotal)}
                   </td>
                   <td className="py-1 px-1 border border-slate-900 text-center print:hidden">
-                    <button
-                      type="button"
-                      disabled={isDayEnded}
-                      onClick={handleSaveAllRows}
-                      title="Save All Rows"
-                      className="p-1.5 rounded-lg bg-[#00593B] hover:bg-[#00472f] disabled:opacity-40 text-white inline-flex items-center justify-center cursor-pointer transition-colors"
-                    >
-                      <SaveAll className="w-3.5 h-3.5" />
-                    </button>
+                    {canEdit && (
+                      <button
+                        type="button"
+                        disabled={isDayEnded}
+                        onClick={handleSaveAllRows}
+                        title="Save All Rows"
+                        className="p-1.5 rounded-lg bg-[#00593B] hover:bg-[#00472f] disabled:opacity-40 text-white inline-flex items-center justify-center cursor-pointer transition-colors"
+                      >
+                        <SaveAll className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </td>
                 </tr>
               )}
