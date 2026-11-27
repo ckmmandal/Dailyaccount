@@ -1,4 +1,4 @@
-import React, { useState, createContext, useContext, useEffect, useRef } from 'react';
+import React, { useState, createContext, useContext, useEffect, useRef, useCallback } from 'react';
 import { User, Permission, Role, Branch, SystemSettings } from './types';
 import { supabaseService } from './services/supabaseService';
 
@@ -392,7 +392,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const refreshRoles = async () => {
+  const refreshRoles = useCallback(async () => {
     try {
       supabaseService.invalidateMemoryCache('roles');
       const r = await supabaseService.getRoles();
@@ -403,14 +403,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (e) {
       console.warn("Failed to refresh roles:", e);
     }
-  };
+  }, []);
 
-  const refreshBranches = async () => {
+  const refreshBranches = useCallback(async () => {
     const b = await supabaseService.getBranches();
     setBranches(b || []);
-  };
+  }, []);
 
-  const refreshUser = async (overrideUser?: User) => {
+  const refreshUser = useCallback(async (overrideUser?: User) => {
     const target = overrideUser || userRef.current;
     if (!target) return;
     try {
@@ -445,7 +445,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (e) {
       console.warn("Could not refresh user:", e);
     }
-  };
+  }, []);
 
   // Auto-sync latest permissions & roles when user returns to tab or User Management updates permissions
   useEffect(() => {
@@ -542,7 +542,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         'sub_hr_payroll_view', 'sub_hr_payroll_edit'
       ],
       view_insurance: [
-        'sub_ins_dashboard_view', 'sub_ins_upload_view', 'sub_ins_report_view', 'sub_ins_alerts_view'
+        'sub_ins_dashboard_view', 'sub_ins_upload_view', 'sub_ins_report_view', 'sub_ins_alerts_view', 'sub_ins_claims_view', 'sub_ins_notice_view'
       ],
       view_microfinance: [
         'sub_mf_dashboard_view', 'sub_mf_centers_view', 'sub_mf_groups_view',
@@ -600,6 +600,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (
         userPerms.some(k => typeof k === 'string' && k.startsWith('sub_mf_')) ||
         rolePerms.some(k => typeof k === 'string' && k.startsWith('sub_mf_'))
+      ) {
+        return true;
+      }
+    }
+
+    // If any granular Insurance sub-menu permission (view/edit/delete) is granted, allow entering Insurance
+    if (p === 'view_insurance') {
+      if (
+        userPerms.some(k => typeof k === 'string' && k.startsWith('sub_ins_')) ||
+        rolePerms.some(k => typeof k === 'string' && k.startsWith('sub_ins_'))
       ) {
         return true;
       }

@@ -5871,19 +5871,17 @@ export const MicroFinanceManagement: React.FC = () => {
                   className={`px-3.5 py-1.5 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
                     memberStatusTab === tab.key
                       ? tab.key === 'INACTIVE'
-                        ? 'bg-white text-rose-600 shadow-2xs'
-                        : 'bg-white text-emerald-700 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
+                        ? 'bg-rose-600 text-white shadow-xs'
+                        : 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
                   }`}
                 >
                   <span>{tab.label}</span>
                   <span
                     className={`px-1.5 py-0.2 rounded-md text-[10px] font-mono ${
                       memberStatusTab === tab.key
-                        ? tab.key === 'INACTIVE'
-                          ? 'bg-rose-50 text-rose-700'
-                          : 'bg-emerald-50 text-emerald-700'
-                        : 'bg-slate-200/70 text-slate-600'
+                        ? 'bg-white/20 text-white'
+                        : 'bg-slate-200/80 text-slate-600'
                     }`}
                   >
                     {tab.count}
@@ -6181,23 +6179,19 @@ export const MicroFinanceManagement: React.FC = () => {
                     className={`px-3.5 py-1.5 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer inline-flex items-center gap-1.5 ${
                       savingStatusTab === tab.key
                         ? tab.key === 'MATURED'
-                          ? 'bg-white text-amber-600 shadow-2xs'
+                          ? 'bg-amber-600 text-white shadow-xs'
                           : tab.key === 'CLOSED'
-                          ? 'bg-white text-rose-600 shadow-2xs'
-                          : 'bg-white text-emerald-700 shadow-2xs'
-                        : 'text-slate-600 hover:text-slate-900'
+                          ? 'bg-rose-600 text-white shadow-xs'
+                          : 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
                     }`}
                   >
                     <span>{tab.label}</span>
                     <span
                       className={`px-1.5 py-0.2 rounded-md text-[10px] font-mono ${
                         savingStatusTab === tab.key
-                          ? tab.key === 'MATURED'
-                            ? 'bg-amber-50 text-amber-700'
-                            : tab.key === 'CLOSED'
-                            ? 'bg-rose-50 text-rose-700'
-                            : 'bg-emerald-50 text-emerald-700'
-                          : 'bg-slate-200/70 text-slate-600'
+                          ? 'bg-white/20 text-white'
+                          : 'bg-slate-200/80 text-slate-600'
                       }`}
                     >
                       {tab.count}
@@ -6506,14 +6500,14 @@ export const MicroFinanceManagement: React.FC = () => {
                     key={tab.key}
                     type="button"
                     onClick={() => void handleSelectLoanStatusTab(tab.key)}
-                    className={`px-3.5 py-1 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
+                    className={`px-3.5 py-1.5 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
                       loanStatusTab === tab.key
                         ? tab.key === 'MATURED'
-                          ? 'bg-white text-amber-600 shadow-2xs'
+                          ? 'bg-amber-600 text-white shadow-xs'
                           : tab.key === 'CLOSED'
-                          ? 'bg-white text-slate-800 shadow-2xs'
-                          : 'bg-white text-emerald-700 shadow-2xs'
-                        : 'text-slate-600 hover:text-slate-900'
+                          ? 'bg-rose-600 text-white shadow-xs'
+                          : 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
                     }`}
                   >
                     {tab.label}
@@ -6816,19 +6810,19 @@ export const MicroFinanceManagement: React.FC = () => {
       {/* ============================================================== */}
       {activeTab === 'reports' && canViewReports && (
         <div className="space-y-2.5">
-          {/* Top Switcher Tabs: Collection Sheet vs Signature Sheet vs Meeting Minute vs ID Card */}
+          {/* Top Switcher Tabs: Collection Sheet vs Signature Sheet vs Deposit Sheet vs Meeting Minute vs ID Card */}
           <div className="flex items-center gap-2 flex-wrap">
             {canViewCollectionReport && (
               <button
                 type="button"
                 onClick={() => setReportTab('collection')}
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer border ${
                   reportTab === 'collection'
-                    ? 'bg-white text-blue-700 shadow-sm border border-slate-200'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 hover:border-slate-300'
                 }`}
               >
-                <LayoutDashboard className="w-4 h-4" />
+                <LayoutDashboard className={`w-4 h-4 ${reportTab === 'collection' ? 'text-white' : 'text-blue-600'}`} />
                 <span>Collection Sheet</span>
               </button>
             )}
@@ -6837,13 +6831,13 @@ export const MicroFinanceManagement: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setReportTab('signature')}
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer border ${
                   reportTab === 'signature'
-                    ? 'bg-white text-blue-700 shadow-sm border border-slate-200'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 hover:border-slate-300'
                 }`}
               >
-                <Printer className="w-4 h-4" />
+                <Printer className={`w-4 h-4 ${reportTab === 'signature' ? 'text-white' : 'text-indigo-600'}`} />
                 <span>Signature Sheet</span>
               </button>
             )}
@@ -6852,13 +6846,13 @@ export const MicroFinanceManagement: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setReportTab('deposit')}
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer border ${
                   reportTab === 'deposit'
-                    ? 'bg-white text-emerald-700 shadow-sm border border-slate-200'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 hover:border-slate-300'
                 }`}
               >
-                <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                <FileSpreadsheet className={`w-4 h-4 ${reportTab === 'deposit' ? 'text-white' : 'text-emerald-600'}`} />
                 <span>Deposit Sheet</span>
               </button>
             )}
@@ -6867,13 +6861,13 @@ export const MicroFinanceManagement: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setReportTab('meeting-minutes')}
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer border ${
                   reportTab === 'meeting-minutes'
-                    ? 'bg-white text-emerald-800 shadow-sm border border-slate-200'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 hover:border-slate-300'
                 }`}
               >
-                <FileText className="w-4 h-4 text-emerald-600" />
+                <FileText className={`w-4 h-4 ${reportTab === 'meeting-minutes' ? 'text-white' : 'text-teal-600'}`} />
                 <span>Meeting Minute</span>
               </button>
             )}
@@ -6882,13 +6876,13 @@ export const MicroFinanceManagement: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setReportTab('id-card')}
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer ${
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer border ${
                   reportTab === 'id-card'
-                    ? 'bg-white text-blue-700 shadow-sm border border-slate-200'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 hover:border-slate-300'
                 }`}
               >
-                <CreditCard className="w-4 h-4 text-blue-600" />
+                <CreditCard className={`w-4 h-4 ${reportTab === 'id-card' ? 'text-white' : 'text-blue-600'}`} />
                 <span>ID Card</span>
               </button>
             )}
@@ -10558,8 +10552,8 @@ export const MicroFinanceManagement: React.FC = () => {
                       onClick={() => setViewMemberDetailTab('all')}
                       className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
                         viewMemberDetailTab === 'all'
-                          ? 'bg-white text-slate-900 shadow-2xs'
-                          : 'text-slate-600 hover:text-slate-900'
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
                       }`}
                     >
                       All Details
@@ -10569,8 +10563,8 @@ export const MicroFinanceManagement: React.FC = () => {
                       onClick={() => setViewMemberDetailTab('saving')}
                       className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5 ${
                         viewMemberDetailTab === 'saving'
-                          ? 'bg-white text-[#00593B] shadow-2xs'
-                          : 'text-slate-600 hover:text-slate-900'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
                       }`}
                     >
                       <PiggyBank className="w-3.5 h-3.5" />
@@ -10581,8 +10575,8 @@ export const MicroFinanceManagement: React.FC = () => {
                       onClick={() => setViewMemberDetailTab('loan')}
                       className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5 ${
                         viewMemberDetailTab === 'loan'
-                          ? 'bg-white text-amber-700 shadow-2xs'
-                          : 'text-slate-600 hover:text-slate-900'
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
                       }`}
                     >
                       <HandCoins className="w-3.5 h-3.5" />

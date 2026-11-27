@@ -1031,6 +1031,10 @@ export interface LoanInsuranceRecord {
   signatureManager?: string;
   signatureOfficer?: string;
   notes?: string;
+  hiddenReportTabs?: Array<'closed' | 'expired' | 'renewal' | 'premium' | 'statement'>;
+  policyHistory?: PolicyHistoryEntry[];
+  recordKind?: 'base' | 'renewal' | 'closed';
+  parentPolicyId?: string;
   // Legacy / Database schema aliases
   name?: string;
   branch?: string;
@@ -1043,6 +1047,24 @@ export interface LoanInsuranceRecord {
   nominee_relation?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface PolicyHistoryEntry {
+  id: string;
+  stage: 'First Policy' | 'Renewal';
+  policyNo: string;
+  branchId: string;
+  policyStartDate: string;
+  policyStartDateBs?: string;
+  policyExpiryDate: string;
+  policyExpiryDateBs?: string;
+  termMonths?: number;
+  loanAmount: number;
+  sumAssured: number;
+  premiumAmount: number;
+  premiumPaymentStatus?: 'Paid' | 'Due';
+  status: string;
+  recordedAt: number;
 }
 
 export type ClaimCauseType = 
@@ -1103,6 +1125,7 @@ export interface InsuranceClaimRecord {
   remarks?: string;
   supportingDocuments?: string[];
   documentUrl?: string;
+  documentFiles?: Record<string, { name: string; dataUrl: string }>;
   createdAt: number;
   updatedAt: number;
 }

@@ -41,12 +41,13 @@ import { DateConverterModal } from './components/DateConverterModal';
 import { StaffChatDrawer } from './components/StaffChatDrawer';
 import { TeamsNotificationToast, TeamsToastData } from './components/TeamsNotificationToast';
 import { LoginPopupNoticeModal } from './components/LoginPopupNoticeModal';
+import { DailyAlertViewerModal, DailyAlertCategory } from './components/DailyAlertViewerModal';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
-import { Permission, PayrollRecord, Employee, Branch, PopupNotice, ChatMessage } from './types';
+import { Permission, PayrollRecord, Employee, Branch, PopupNotice, ChatMessage, LoanInsuranceRecord, Notice } from './types';
 import { storageService } from './services/storageService';
 import { loanInsuranceService } from './services/loanInsuranceService';
-import { microFinanceService, getEffectiveSavingStatus } from './services/microFinanceService';
+import { microFinanceService, resolveSavingMaturityDateBs, isSavingStatusClosed, MFLoanRecord, MFSavingsRecord } from './services/microFinanceService';
 import { isBranchMatch } from './services/supabaseService';
 import { isPasswordExpired } from './utils/passwordPolicy';
 import { getUserChatProfile, isMessageFromMe, isMessageForMe, playChatNotificationSound, triggerBrowserNotification } from './utils/chatHelpers';
@@ -326,10 +327,15 @@ const AppLayout: React.FC = () => {
   const [switchSuccessToast, setSwitchSuccessToast] = useState<string | null>(null);
   const [dayEndBlockedToast, setDayEndBlockedToast] = useState<{ title: string; message: string } | null>(null);
   const [selectedSlip, setSelectedSlip] = useState<PayrollRecord | null>(null);
-  const [bimaMaturityCount, setBimaMaturityCount] = useState(0);
-  const [loanMaturityCount, setLoanMaturityCount] = useState(0);
-  const [savingMaturityCount, setSavingMaturityCount] = useState(0);
-  const [noticeCount, setNoticeCount] = useState(0);
+  const [bimaMaturityItems, setBimaMaturityItems] = useState<LoanInsuranceRecord[]>([]);
+  const [loanMaturityItems, setLoanMaturityItems] = useState<MFLoanRecord[]>([]);
+  const [savingMaturityItems, setSavingMaturityItems] = useState<MFSavingsRecord[]>([]);
+  const [todayNoticeItems, setTodayNoticeItems] = useState<Notice[]>([]);
+  const [activeAlertViewerCategory, setActiveAlertViewerCategory] = useState<DailyAlertCategory | null>(null);
+  const bimaMaturityCount = bimaMaturityItems.length;
+  const loanMaturityCount = loanMaturityItems.length;
+  const savingMaturityCount = savingMaturityItems.length;
+  const noticeCount = todayNoticeItems.length;
   const [activeLoginPopup, setActiveLoginPopup] = useState<PopupNotice | null>(null);
   const dismissedPopupIdsRef = useRef<Set<string>>(new Set());
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -802,7 +808,7 @@ const AppLayout: React.FC = () => {
       setNepaliToday('2083 - Shrawan - 31, Sunday');
     }
     
-    // Check 1-day alerts: Bima Maturity, Loan Maturity, and Active Notices matching today
+    // Check 1-day alerts: Bima Maturity, Loan Maturity, Saving Maturity, and Active Notices matching today
     const checkDailyAlerts = async () => {
       const todayBs = getTodayBsDateStr();
       const now = new Date();
@@ -824,6 +830,8 @@ const AppLayout: React.FC = () => {
       try {
         const insRecords = loanInsuranceService.getRecords();
         const bimaToday = insRecords.filter(r => {
+          if (r.recordKind === 'closed') return false;
+          if (r.hiddenReportTabs?.includes('expired')) return false;
           const st = (r.status || '').toLowerCase();
           if (['closed', 'rejected', 'settled', 'deactivated', 'claimed'].includes(st)) return false;
           return (
@@ -833,7 +841,7 @@ const AppLayout: React.FC = () => {
             isDateToday(r.insuranceTillDateBs)
           );
         });
-        setBimaMaturityCount(bimaToday.length);
+        setBimaMaturityItems(bimaToday);
       } catch (error) {
         console.error("Failed to check Bima maturity alerts", error);
       }
@@ -884,12 +892,14 @@ const AppLayout: React.FC = () => {
           if (l.status === 'CLOSED') return false;
           return isDateToday(l.maturityDate);
         });
-        setLoanMaturityCount(loanToday.length);
+        setLoanMaturityItems(loanToday);
 
-        const maturedSavings = scopedMf.savings.filter(
-          s => getEffectiveSavingStatus(s) === 'MATURED'
-        );
-        setSavingMaturityCount(maturedSavings.length);
+        const savingToday = scopedMf.savings.filter(s => {
+          if (isSavingStatusClosed(s.status)) return false;
+          const maturityBs = resolveSavingMaturityDateBs(s);
+          return isDateToday(maturityBs);
+        });
+        setSavingMaturityItems(savingToday);
       } catch (error) {
         console.error("Failed to check Loan/Saving maturity alerts", error);
       }
@@ -899,7 +909,7 @@ const AppLayout: React.FC = () => {
         const todayNotices = Array.isArray(notices)
           ? notices.filter(n => n.status === 'Active' && (isDateToday(n.date) || isCreatedToday(n.createdAt)))
           : [];
-        setNoticeCount(todayNotices.length);
+        setTodayNoticeItems(todayNotices);
       } catch (error) {
         console.error("Failed to check notices", error);
       }
@@ -1318,7 +1328,7 @@ const AppLayout: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              navigate('/insurance?tab=alerts&period=today');
+                              setActiveAlertViewerCategory('bima');
                               setIsAlertsMenuOpen(false);
                             }}
                             className="w-full flex items-center justify-between px-2 py-1 text-slate-800 hover:bg-amber-50 hover:text-amber-900 rounded-lg transition-all text-[11px] font-bold border border-transparent hover:border-amber-100 cursor-pointer"
@@ -1341,7 +1351,7 @@ const AppLayout: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              navigate('/micro-finance?tab=loan');
+                              setActiveAlertViewerCategory('loan');
                               setIsAlertsMenuOpen(false);
                             }}
                             className="w-full flex items-center justify-between px-2 py-1 text-slate-800 hover:bg-emerald-50 hover:text-emerald-900 rounded-lg transition-all text-[11px] font-bold border border-transparent hover:border-emerald-100 cursor-pointer"
@@ -1364,7 +1374,7 @@ const AppLayout: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              navigate('/micro-finance?tab=saving&status=MATURED');
+                              setActiveAlertViewerCategory('saving');
                               setIsAlertsMenuOpen(false);
                             }}
                             className="w-full flex items-center justify-between px-2 py-1 text-slate-800 hover:bg-teal-50 hover:text-teal-900 rounded-lg transition-all text-[11px] font-bold border border-transparent hover:border-teal-100 cursor-pointer"
@@ -1387,7 +1397,7 @@ const AppLayout: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              navigate('/notice-download');
+                              setActiveAlertViewerCategory('notice');
                               setIsAlertsMenuOpen(false);
                             }}
                             className="w-full flex items-center justify-between px-2 py-1 text-slate-800 hover:bg-sky-50 hover:text-sky-900 rounded-lg transition-all text-[11px] font-bold border border-transparent hover:border-sky-100 cursor-pointer"
@@ -1822,6 +1832,20 @@ const AppLayout: React.FC = () => {
           </div>
         </div>
       </main>
+
+      {/* Read-Only Full-Page Daily Alerts Notification Viewer (Bima, Loan, Saving Maturity & Today's Notice) */}
+      {activeAlertViewerCategory && (
+        <DailyAlertViewerModal
+          activeCategory={activeAlertViewerCategory}
+          onClose={() => setActiveAlertViewerCategory(null)}
+          todayBs={getTodayBsDateStr()}
+          bimaItems={bimaMaturityItems}
+          loanItems={loanMaturityItems}
+          savingItems={savingMaturityItems}
+          noticeItems={todayNoticeItems}
+          branches={combinedBranches}
+        />
+      )}
 
       {/* Super Admin Switch Branch Modal */}
       {isSwitchBranchModalOpen && (

@@ -13,7 +13,12 @@ import type { GroupMeetingRecord } from '../services/meetingMinutesService';
 export const MF_BRANCH_SCOPE_PREFIX = 'mf_branch_scope:';
 export const MF_BRANCH_SCOPE_ALL = 'mf_branch_scope:all';
 
+export const INS_BRANCH_SCOPE_PREFIX = 'ins_branch_scope:';
+export const INS_BRANCH_SCOPE_ALL = 'ins_branch_scope:all';
+export const INS_BRANCH_SCOPE_LOGIN_ONLY = 'ins_branch_scope:login_only';
+
 export type UserMfBranchAccessMode = 'login_only' | 'all' | 'selected';
+export type UserInsBranchOverrideMode = 'inherit_role' | 'login_only' | 'all' | 'selected';
 
 export interface UserMfBranchAccess {
   mode: UserMfBranchAccessMode;
@@ -35,15 +40,15 @@ const stripLeadingZeros = (val?: string | null): string =>
   normalizeId(val).replace(/^0+(?=\d)/, '');
 
 /**
- * Resolves any branch identifier (id, code, display name, uppercase/lowercase variant)
+ * Resolves any branch identifier (id, code, display name, numeric legacy code, uppercase/lowercase variant)
  * to a canonical branch key (e.g. 'main', 'pipra', 'sahodba', 'parsa').
  */
 export const resolveCanonicalBranchKey = (
-  raw?: string | null,
+  raw?: string | number | null,
   branches: Branch[] = []
 ): string => {
-  const norm = normalizeText(raw);
-  if (!norm) return '';
+  const norm = normalizeText(raw !== undefined && raw !== null ? String(raw) : '');
+  if (!norm || norm === 'select branch') return '';
 
   // 1. Direct or partial match against configured branches
   if (Array.isArray(branches) && branches.length > 0) {
@@ -67,11 +72,12 @@ export const resolveCanonicalBranchKey = (
     if (partialMatch) return normalizeText(partialMatch.id);
   }
 
-  // 2. Known cooperative branch aliases (handles legacy / uppercase strings like "PIPRA BRANCH" or "Ratauli Central Head Office")
-  if (norm === 'sahodba' || norm === 'c02' || norm.includes('sahodba')) return 'sahodba';
-  if (norm === 'pipra' || norm === 'c03' || norm.includes('pipra')) return 'pipra';
-  if (norm === 'parsa' || norm === 'c04' || norm.includes('parsa')) return 'parsa';
+  // 2. Known cooperative branch aliases (handles numeric legacy IDs 1-4 and uppercase/display strings)
+  if (norm === '2' || norm === 'sahodba' || norm === 'c02' || norm.includes('sahodba')) return 'sahodba';
+  if (norm === '3' || norm === 'pipra' || norm === 'c03' || norm.includes('pipra')) return 'pipra';
+  if (norm === '4' || norm === 'parsa' || norm === 'c04' || norm.includes('parsa')) return 'parsa';
   if (
+    norm === '1' ||
     norm === 'main' ||
     norm === 'c01' ||
     norm.includes('ratauli') ||
@@ -214,6 +220,172 @@ export const getMfBranchAccessSummary = (
       return { label: `MF: ${b?.name || parsed.explicitBranchKeys[0]}`, isAll: false };
     }
     return { label: `MF: ${parsed.explicitBranchKeys.length} Branches`, isAll: false };
+  }
+  return null;
+};
+
+const extractInsScopeTokens = (perms?: string[] | null): string[] =>
+  (Array.isArray(perms) ? perms : [])
+    .filter((p): p is string => typeof p === 'string' && p.toLowerCase().startsWith(INS_BRANCH_SCOPE_PREFIX))
+    .map(p => p.slice(INS_BRANCH_SCOPE_PREFIX.length).trim().toLowerCase())
+    .filter(Boolean);
+
+/**
+ * Parses Insurance branch access scope from User permissions (explicit override if present)
+ * falling back to Role permissions, and defaulting to 'login_only' (strictly logged-in branch).
+ */
+export const parseUserInsuranceBranchAccess = (
+  userPermissions?: string[] | null,
+  rolePermissions?: string[] | null,
+  loggedInBranchKey?: string,
+  branches: Branch[] = []
+): UserMfBranchAccess => {
+  const userTokens = extractInsScopeTokens(userPermissions);
+  const roleTokens = extractInsScopeTokens(rolePermissions);
+  // Explicit user-level override takes precedence over role-level scope
+  const activeTokens = userTokens.length > 0 ? userTokens : roleTokens;
+  const normalizedLoginKey = resolveCanonicalBranchKey(loggedInBranchKey, branches);
+
+  if (activeTokens.includes('login_only')) {
+    return {
+      mode: 'login_only',
+      allowedBranchKeys: normalizedLoginKey ? [normalizedLoginKey] : [],
+      explicitBranchKeys: [],
+      canSwitchViewBranch: false
+    };
+  }
+
+  if (activeTokens.includes('all')) {
+    return {
+      mode: 'all',
+      allowedBranchKeys: [],
+      explicitBranchKeys: [],
+      canSwitchViewBranch: true
+    };
+  }
+
+  const explicitKeys = Array.from(
+    new Set(
+      activeTokens
+        .map(tok => resolveCanonicalBranchKey(tok, branches))
+        .filter(Boolean)
+    )
+  );
+
+  if (explicitKeys.length > 0) {
+    const allowedSet = new Set<string>(explicitKeys);
+    if (normalizedLoginKey) allowedSet.add(normalizedLoginKey);
+    const allowedBranchKeys = Array.from(allowedSet);
+    return {
+      mode: 'selected',
+      allowedBranchKeys,
+      explicitBranchKeys: explicitKeys,
+      canSwitchViewBranch:
+        allowedBranchKeys.length > 1 ||
+        (allowedBranchKeys.length === 1 && allowedBranchKeys[0] !== normalizedLoginKey)
+    };
+  }
+
+  return {
+    mode: 'login_only',
+    allowedBranchKeys: normalizedLoginKey ? [normalizedLoginKey] : [],
+    explicitBranchKeys: [],
+    canSwitchViewBranch: false
+  };
+};
+
+/**
+ * Parses a user's explicit Insurance branch override state for Admin Center -> User Management.
+ */
+export const parseUserInsuranceOverride = (
+  userPermissions?: string[] | null,
+  branches: Branch[] = []
+): { mode: UserInsBranchOverrideMode; explicitBranchKeys: string[] } => {
+  const userTokens = extractInsScopeTokens(userPermissions);
+  if (userTokens.length === 0) {
+    return { mode: 'inherit_role', explicitBranchKeys: [] };
+  }
+  if (userTokens.includes('login_only')) {
+    return { mode: 'login_only', explicitBranchKeys: [] };
+  }
+  if (userTokens.includes('all')) {
+    return { mode: 'all', explicitBranchKeys: [] };
+  }
+  const explicitKeys = Array.from(
+    new Set(userTokens.map(tok => resolveCanonicalBranchKey(tok, branches)).filter(Boolean))
+  );
+  if (explicitKeys.length > 0) {
+    return { mode: 'selected', explicitBranchKeys: explicitKeys };
+  }
+  return { mode: 'inherit_role', explicitBranchKeys: [] };
+};
+
+/**
+ * Applies Insurance branch scope tokens to a Role or User permissions array while keeping unrelated permissions intact.
+ * Pass `storeExplicitLoginOnly = true` for User-level overrides so 'login_only' can override a multi-branch Role.
+ */
+export const applyInsuranceBranchAccessToPermissions = (
+  existingPermissions: string[] | undefined | null,
+  mode: UserInsBranchOverrideMode,
+  selectedBranchIds: string[] = [],
+  branches: Branch[] = [],
+  storeExplicitLoginOnly: boolean = false
+): string[] => {
+  const cleaned = (Array.isArray(existingPermissions) ? existingPermissions : []).filter(
+    p => typeof p === 'string' && !p.toLowerCase().startsWith(INS_BRANCH_SCOPE_PREFIX)
+  );
+
+  if (mode === 'inherit_role') {
+    return cleaned;
+  }
+
+  if (mode === 'login_only') {
+    return storeExplicitLoginOnly ? [...cleaned, INS_BRANCH_SCOPE_LOGIN_ONLY] : cleaned;
+  }
+
+  if (mode === 'all') {
+    return [...cleaned, INS_BRANCH_SCOPE_ALL];
+  }
+
+  if (mode === 'selected') {
+    const canonicalKeys = Array.from(
+      new Set(
+        selectedBranchIds
+          .map(id => resolveCanonicalBranchKey(id, branches))
+          .filter(Boolean)
+      )
+    );
+    if (canonicalKeys.length === 0) {
+      return storeExplicitLoginOnly ? [...cleaned, INS_BRANCH_SCOPE_LOGIN_ONLY] : cleaned;
+    }
+    return [...cleaned, ...canonicalKeys.map(k => `${INS_BRANCH_SCOPE_PREFIX}${k}`)];
+  }
+
+  return cleaned;
+};
+
+/**
+ * Short display badge summary for Insurance branch access (User table or Role header).
+ */
+export const getInsuranceBranchAccessSummary = (
+  userPermissions?: string[] | null,
+  rolePermissions?: string[] | null,
+  branches: Branch[] = []
+): { label: string; isAll: boolean; isRestrictedOverride?: boolean } | null => {
+  const userTokens = extractInsScopeTokens(userPermissions);
+  if (userTokens.includes('login_only')) {
+    return { label: 'Ins: Own Branch Only', isAll: false, isRestrictedOverride: true };
+  }
+  const parsed = parseUserInsuranceBranchAccess(userPermissions, rolePermissions, undefined, branches);
+  if (parsed.mode === 'all') {
+    return { label: 'Ins: All Branches', isAll: true };
+  }
+  if (parsed.mode === 'selected' && parsed.explicitBranchKeys.length > 0) {
+    if (parsed.explicitBranchKeys.length === 1) {
+      const b = findMatchingBranch(parsed.explicitBranchKeys[0], branches);
+      return { label: `Ins: ${b?.name || parsed.explicitBranchKeys[0]}`, isAll: false };
+    }
+    return { label: `Ins: ${parsed.explicitBranchKeys.length} Branches`, isAll: false };
   }
   return null;
 };

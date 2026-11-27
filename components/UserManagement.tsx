@@ -18,9 +18,14 @@ import { isDayEndedForBranch, getDayEndedBlockMessage, useDayEndLock } from '../
 import { DayEndFieldset } from './DayEndFieldset';
 import {
   UserMfBranchAccessMode,
+  UserInsBranchOverrideMode,
   parseUserMfBranchAccess,
   applyUserMfBranchAccessToPermissions,
   getMfBranchAccessSummary,
+  parseUserInsuranceOverride,
+  parseUserInsuranceBranchAccess,
+  applyInsuranceBranchAccessToPermissions,
+  getInsuranceBranchAccessSummary,
   resolveCanonicalBranchKey
 } from '../utils/mfBranchFilter';
 
@@ -95,6 +100,10 @@ const UserManagement: React.FC = () => {
   const [editMfBranchIds, setEditMfBranchIds] = useState<string[]>([]);
   const [newMfBranchMode, setNewMfBranchMode] = useState<UserMfBranchAccessMode>('login_only');
   const [newMfBranchIds, setNewMfBranchIds] = useState<string[]>([]);
+  const [editInsBranchMode, setEditInsBranchMode] = useState<UserInsBranchOverrideMode>('inherit_role');
+  const [editInsBranchIds, setEditInsBranchIds] = useState<string[]>([]);
+  const [newInsBranchMode, setNewInsBranchMode] = useState<UserInsBranchOverrideMode>('inherit_role');
+  const [newInsBranchIds, setNewInsBranchIds] = useState<string[]>([]);
 
   // Password Reset by Super Admin State
   const [resetUser, setResetUser] = useState<User | null>(null);
@@ -249,11 +258,17 @@ Please use at least 8 characters with upper, lower, number, and special characte
 
       const nextPermissions = isEditingSuper
         ? (editingUser.permissions || [])
-        : applyUserMfBranchAccessToPermissions(
-            editingUser.permissions,
-            editMfBranchMode,
-            editMfBranchIds,
-            branches
+        : applyInsuranceBranchAccessToPermissions(
+            applyUserMfBranchAccessToPermissions(
+              editingUser.permissions,
+              editMfBranchMode,
+              editMfBranchIds,
+              branches
+            ),
+            editInsBranchMode,
+            editInsBranchIds,
+            branches,
+            true
           );
 
       const userToSave: User = {
@@ -484,7 +499,13 @@ Please use at least 8 characters with upper, lower, number, and special characte
         forcePasswordChange: false,
         permissions: isNewSuper
           ? []
-          : applyUserMfBranchAccessToPermissions([], newMfBranchMode, newMfBranchIds, branches)
+          : applyInsuranceBranchAccessToPermissions(
+              applyUserMfBranchAccessToPermissions([], newMfBranchMode, newMfBranchIds, branches),
+              newInsBranchMode,
+              newInsBranchIds,
+              branches,
+              true
+            )
       } as User;
       await storageService.saveUser(user);
       const updated = await storageService.getUsers({ forceRefresh: true });
@@ -493,6 +514,8 @@ Please use at least 8 characters with upper, lower, number, and special characte
       setShowAdd(false);
       setNewMfBranchMode('login_only');
       setNewMfBranchIds([]);
+      setNewInsBranchMode('inherit_role');
+      setNewInsBranchIds([]);
       setNewUser({ 
         fullName: '', 
         username: '', 
@@ -683,11 +706,26 @@ Please use at least 8 characters with upper, lower, number, and special characte
                                        u.roleId === '1' ||
                                        getRoleName(u.roleId).toLowerCase().includes('super');
                                      if (isSuper) return null;
+                                     const userRoleObj = roles.find(r => r.id === u.roleId);
                                      const mfBadge = getMfBranchAccessSummary(u.permissions, branches);
-                                     if (!mfBadge) return null;
+                                     const insBadge = getInsuranceBranchAccessSummary(
+                                       u.permissions,
+                                       userRoleObj?.permissions,
+                                       branches
+                                     );
+                                     if (!mfBadge && !insBadge) return null;
                                      return (
-                                       <div className="flex items-center space-x-1 bg-emerald-50 border border-emerald-200 text-emerald-700 px-1.5 py-0.5 rounded text-[8px] uppercase font-black">
-                                          <span>{mfBadge.label}</span>
+                                       <div className="flex flex-wrap gap-1 pt-0.5">
+                                         {mfBadge && (
+                                           <div className="flex items-center space-x-1 bg-emerald-50 border border-emerald-200 text-emerald-700 px-1.5 py-0.5 rounded text-[8px] uppercase font-black">
+                                             <span>{mfBadge.label}</span>
+                                           </div>
+                                         )}
+                                         {insBadge && (
+                                           <div className="flex items-center space-x-1 bg-teal-50 border border-teal-200 text-teal-800 px-1.5 py-0.5 rounded text-[8px] uppercase font-black">
+                                             <span>{insBadge.label}</span>
+                                           </div>
+                                         )}
                                        </div>
                                      );
                                    })()}
@@ -722,6 +760,13 @@ Please use at least 8 characters with upper, lower, number, and special characte
                                            ? mfAccess.explicitBranchKeys
                                            : [resolveCanonicalBranchKey(u.branchId, branches)].filter(Boolean)
                                        );
+                                       const insOverride = parseUserInsuranceOverride(u.permissions, branches);
+                                       setEditInsBranchMode(insOverride.mode);
+                                       setEditInsBranchIds(
+                                         insOverride.mode === 'selected'
+                                           ? insOverride.explicitBranchKeys
+                                           : [resolveCanonicalBranchKey(u.branchId, branches)].filter(Boolean)
+                                       );
                                      }} 
                                      title={isDayEnded ? getDayEndedBlockMessage() : 'Edit User'}
                                      className="p-2 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white rounded-lg transition-all shadow-2xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
@@ -752,7 +797,7 @@ Please use at least 8 characters with upper, lower, number, and special characte
        {showAdd && (
           <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-md z-[2000] flex items-center justify-center p-4">
              <div className="bg-white w-full max-w-xl rounded-3xl shadow-2xl overflow-hidden border-2 border-slate-900 animate-in zoom-in-95 duration-200">
-                <div className="p-6 md:p-8">
+                <div className="p-6 md:p-8 max-h-[90vh] overflow-y-auto">
                    <div className="flex items-center justify-between mb-6 border-b pb-4">
                       <div className="flex items-center space-x-3">
                          <div className="p-2.5 bg-blue-50 text-blue-600 rounded-xl"><UserPlus size={22}/></div>
@@ -870,6 +915,77 @@ Please use at least 8 characters with upper, lower, number, and special characte
                                         }
                                       }}
                                       className="w-3.5 h-3.5 rounded text-emerald-600 border-slate-300"
+                                    />
+                                    <span className="truncate">{b.name}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {!(newUser.roleId === '1' || getRoleName(newUser.roleId || '').toLowerCase().includes('super')) && (
+                        <div className="col-span-2 bg-teal-50/60 border border-teal-200 rounded-xl p-3 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] font-black uppercase text-teal-900">
+                              Insurance Branch Access (Optional)
+                            </span>
+                            <span className="text-[9px] font-bold text-teal-700">
+                              Dashboard, Report & Alerts
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                            {([
+                              { id: 'inherit_role', label: 'Role Default' },
+                              { id: 'login_only', label: 'Own Branch Only' },
+                              { id: 'all', label: 'All Branches' },
+                              { id: 'selected', label: 'Selected' }
+                            ] as const).map(opt => (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                onClick={() => {
+                                  setNewInsBranchMode(opt.id);
+                                  if (opt.id === 'selected' && newInsBranchIds.length === 0 && newUser.branchId) {
+                                    setNewInsBranchIds([resolveCanonicalBranchKey(newUser.branchId, branches)]);
+                                  }
+                                }}
+                                className={`px-2 py-1.5 rounded-lg text-[10px] font-black border transition-all cursor-pointer ${
+                                  newInsBranchMode === opt.id
+                                    ? 'bg-[#015e52] text-white border-[#015e52]'
+                                    : 'bg-white text-slate-700 border-slate-200 hover:border-teal-400'
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+                          {newInsBranchMode === 'selected' && (
+                            <div className="grid grid-cols-2 gap-1.5 pt-1">
+                              {branches.map(b => {
+                                const bKey = resolveCanonicalBranchKey(b.id, branches);
+                                const isChecked = newInsBranchIds.includes(bKey);
+                                return (
+                                  <label
+                                    key={b.id}
+                                    className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[10px] font-bold cursor-pointer ${
+                                      isChecked
+                                        ? 'bg-white border-teal-500 text-teal-900'
+                                        : 'bg-white/70 border-slate-200 text-slate-600'
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={e => {
+                                        if (e.target.checked) {
+                                          setNewInsBranchIds(prev => Array.from(new Set([...prev, bKey])));
+                                        } else {
+                                          setNewInsBranchIds(prev => prev.filter(k => k !== bKey));
+                                        }
+                                      }}
+                                      className="w-3.5 h-3.5 rounded text-teal-600 border-slate-300"
                                     />
                                     <span className="truncate">{b.name}</span>
                                   </label>
@@ -1110,6 +1226,98 @@ Please use at least 8 characters with upper, lower, number, and special characte
                               </div>
                             );
                           })()}
+                        </div>
+                      )}
+
+                      {!(editingUser.username === 'admin' || editingUser.roleId === '1' || getRoleName(editingUser.roleId).toLowerCase().includes('super')) && (
+                        <div className="col-span-2 bg-teal-50/70 border border-teal-200 rounded-xl p-3 space-y-2 mt-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] font-black uppercase text-teal-900 flex items-center gap-1.5">
+                              <Building2 size={12} className="text-teal-700" />
+                              <span>Insurance Branch Access</span>
+                            </span>
+                            <span className="text-[9px] font-bold text-teal-700">
+                              Dashboard, Report & Alerts
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                            {([
+                              { id: 'inherit_role', label: 'Role Default' },
+                              { id: 'login_only', label: 'Own Branch Only' },
+                              { id: 'all', label: 'All Branches' },
+                              { id: 'selected', label: 'Selected' }
+                            ] as const).map(opt => (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                onClick={() => {
+                                  setEditInsBranchMode(opt.id);
+                                  if (opt.id === 'selected' && editInsBranchIds.length === 0 && editingUser.branchId) {
+                                    setEditInsBranchIds([resolveCanonicalBranchKey(editingUser.branchId, branches)]);
+                                  }
+                                }}
+                                className={`px-2 py-1.5 rounded-lg text-[10px] font-black border transition-all cursor-pointer ${
+                                  editInsBranchMode === opt.id
+                                    ? 'bg-[#015e52] text-white border-[#015e52] shadow-xs'
+                                    : 'bg-white text-slate-700 border-slate-200 hover:border-teal-400'
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+                          {editInsBranchMode === 'selected' && (
+                            <div className="grid grid-cols-2 gap-1.5 pt-1">
+                              {branches.map(b => {
+                                const bKey = resolveCanonicalBranchKey(b.id, branches);
+                                const isChecked = editInsBranchIds.includes(bKey);
+                                const isOwnBranch = bKey === resolveCanonicalBranchKey(editingUser.branchId, branches);
+                                return (
+                                  <label
+                                    key={b.id}
+                                    className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[10px] font-bold cursor-pointer ${
+                                      isChecked
+                                        ? 'bg-white border-teal-500 text-teal-900'
+                                        : 'bg-white/70 border-slate-200 text-slate-600'
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={e => {
+                                        if (e.target.checked) {
+                                          setEditInsBranchIds(prev => Array.from(new Set([...prev, bKey])));
+                                        } else {
+                                          setEditInsBranchIds(prev => prev.filter(k => k !== bKey));
+                                        }
+                                      }}
+                                      className="w-3.5 h-3.5 rounded text-teal-600 border-slate-300"
+                                    />
+                                    <span className="truncate">{b.name}</span>
+                                    {isOwnBranch && (
+                                      <span className="ml-auto text-[8px] font-black uppercase text-teal-600">Own</span>
+                                    )}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <p className="text-[9px] font-semibold text-slate-600 leading-tight">
+                            {editInsBranchMode === 'inherit_role' && (() => {
+                              const selectedRole = roles.find(r => r.id === editingUser.roleId);
+                              const roleScope = parseUserInsuranceBranchAccess([], selectedRole?.permissions, editingUser.branchId, branches);
+                              const scopeText =
+                                roleScope.mode === 'all'
+                                  ? 'All Branches'
+                                  : roleScope.mode === 'selected'
+                                    ? `${roleScope.allowedBranchKeys.length} Selected Branches`
+                                    : 'Own Login Branch Only';
+                              return `Follows Role (${selectedRole?.name || 'Unknown'}): ${scopeText}.`;
+                            })()}
+                            {editInsBranchMode === 'login_only' && 'Override: User strictly sees Insurance data of their logged-in branch only.'}
+                            {editInsBranchMode === 'all' && 'Override: User can view & filter Insurance data of all branches.'}
+                            {editInsBranchMode === 'selected' && 'Override: User can view & filter Insurance data of the checked branches (plus own login branch).'}
+                          </p>
                         </div>
                       )}
                    </div>

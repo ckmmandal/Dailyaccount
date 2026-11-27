@@ -1,9 +1,9 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import QRCode from 'qrcode';
 import * as XLSX from 'xlsx';
 import { 
-  LineChart, Upload, FileText, Heart, Bell, Sliders,
+  LineChart, Upload, FileText, Heart, Bell,
   ShieldCheck, Plus, Search, Download, Printer, 
   CheckCircle2, Clock, 
   Trash2, Edit3, Eye, Sparkles,
@@ -11,7 +11,8 @@ import {
   TrendingUp, Award, RefreshCw, X,
   FileSpreadsheet, ArrowRight, Ban, Calendar,
   Database, AlertCircle,
-  User, MapPin, Briefcase, Building, CreditCard
+  User, Building2, CreditCard, Lock, Megaphone,
+  UserCheck, Camera, ArrowLeft, Save
 } from 'lucide-react';
 import { 
   LoanInsuranceRecord, 
@@ -19,7 +20,8 @@ import {
   InsurancePartnerCompany,
   ClaimLifecycleStage,
   ClaimStatusType,
-  LoanInsuranceStatus
+  LoanInsuranceStatus,
+  Branch
 } from '../types';
 import { 
   loanInsuranceService, 
@@ -28,50 +30,298 @@ import {
   convertBsToAd,
   calculatePremium
 } from '../services/loanInsuranceService';
+import { microFinanceService } from '../services/microFinanceService';
 import { useAuth } from '../AuthContext';
 import { isBackDateBlockedForEntry, getBackDateBlockedMessage } from '../utils/backDateControl';
 import { isDayEndedForBranch, getDayEndedBlockMessage, useDayEndLock } from '../utils/dayEndLock';
 import { DayEndFieldset } from './DayEndFieldset';
+import {
+  resolveCanonicalBranchKey,
+  findMatchingBranch,
+  parseUserInsuranceBranchAccess
+} from '../utils/mfBranchFilter';
+import { InsuranceNoticePanel } from './InsuranceNoticePanel';
+import { InsuranceClaimsPanel } from './InsuranceClaimsPanel';
 
 export const LoanInsuranceManagement: React.FC = () => {
-  const { branch, settings } = useAuth();
+  const { user, role, branch, branches, isSuperAdmin, hasPermission, refreshUser, refreshRoles, settings } = useAuth();
   const isDayEnded = useDayEndLock(branch?.id);
   
-  // Navigation active menu (Top Menu format: Dashboard, Upload Policy, Report, Maturity Alerts)
-  const [activeMenu, setActiveMenu] = useState<'dashboard' | 'upload' | 'report' | 'alerts'>('dashboard');
+  // Navigation active menu (Top Menu format: Dashboard, Upload Policy, Report, Maturity Alerts, Claim, Notice)
+  const [activeMenu, setActiveMenu] = useState<'dashboard' | 'upload' | 'report' | 'alerts' | 'claims' | 'notice'>('dashboard');
 
-  // Data states
-  const [records, setRecords] = useState<LoanInsuranceRecord[]>(() => loanInsuranceService.getRecords());
-  const [claims, setClaims] = useState<InsuranceClaimRecord[]>(() => loanInsuranceService.getClaims());
+  // Refresh user & role permissions once on mount (AuthContext already listens for userPermissionsUpdated globally)
+  const hasSyncedPermsRef = useRef(false);
+  useEffect(() => {
+    if (hasSyncedPermsRef.current) return;
+    hasSyncedPermsRef.current = true;
+    void refreshUser().catch(() => {});
+    void refreshRoles().catch(() => {});
+  }, [refreshUser, refreshRoles]);
+
+  // Granular Role & User Permission Checks (synced with Admin Center -> Role & Permission Management)
+  const insPermState = useMemo(() => {
+    const rolePerms = Array.isArray(role?.permissions) ? role.permissions : [];
+    const userPerms = Array.isArray(user?.permissions) ? user.permissions : [];
+    const roleHasGranular = rolePerms.some(p => typeof p === 'string' && p.startsWith('sub_'));
+    const combined = roleHasGranular
+      ? new Set<string>(rolePerms)
+      : new Set<string>([...userPerms, ...rolePerms]);
+    const hasGranularIns = Array.from(combined).some(p => typeof p === 'string' && p.startsWith('sub_ins_'));
+    return { combined, hasGranularIns };
+  }, [user?.permissions, role?.permissions]);
+
+  const canInsAccess = useCallback(
+    (subKey: 'ins_dashboard' | 'ins_upload' | 'ins_report' | 'ins_alerts' | 'ins_claims' | 'ins_notice', mode: 'view' | 'edit' | 'delete' = 'view'): boolean => {
+      if (isSuperAdmin) return true;
+      if (!insPermState.hasGranularIns) {
+        if (mode === 'view') return hasPermission('view_insurance');
+        if (mode === 'edit') return hasPermission('add_transaction') || hasPermission('edit_transaction');
+        return hasPermission('delete_transaction');
+      }
+      if (mode === 'view') {
+        return (
+          insPermState.combined.has(`sub_${subKey}_view`) ||
+          insPermState.combined.has(`sub_${subKey}_edit`) ||
+          insPermState.combined.has(`sub_${subKey}_delete`)
+        );
+      }
+      return insPermState.combined.has(`sub_${subKey}_${mode}`);
+    },
+    [isSuperAdmin, insPermState, hasPermission]
+  );
+
+  const canViewInsDashboard = canInsAccess('ins_dashboard', 'view');
+  const canEditInsDashboard = canInsAccess('ins_dashboard', 'edit');
+  const canDeleteInsDashboard = canInsAccess('ins_dashboard', 'delete');
+  const canViewInsUpload = canInsAccess('ins_upload', 'view');
+  const canEditInsUpload = canInsAccess('ins_upload', 'edit');
+  const canViewInsReport = canInsAccess('ins_report', 'view');
+  const canEditInsReport = canInsAccess('ins_report', 'edit');
+  const canDeleteInsReport = canInsAccess('ins_report', 'delete');
+  const canViewInsAlerts = canInsAccess('ins_alerts', 'view');
+  const canEditInsAlerts = canInsAccess('ins_alerts', 'edit');
+  const canViewInsClaims = canInsAccess('ins_claims', 'view');
+  const canEditInsClaims = canInsAccess('ins_claims', 'edit');
+  const canDeleteInsClaims = canInsAccess('ins_claims', 'delete');
+  const canViewInsNotice = canInsAccess('ins_notice', 'view');
+  const canEditInsNotice = canInsAccess('ins_notice', 'edit');
+  const canDeleteInsNotice = canInsAccess('ins_notice', 'delete');
+
+  const canRenewFromDashboard = canEditInsDashboard || canEditInsReport;
+  const canRenewFromAlerts = canEditInsAlerts || canEditInsReport;
+  const canDeletePolicy = canDeleteInsReport || canDeleteInsDashboard;
+  const hasAnyInsuranceViewAccess =
+    canViewInsDashboard || canViewInsUpload || canViewInsReport || canViewInsAlerts || canViewInsClaims || canViewInsNotice;
+
+  // Auto-select first permitted Insurance tab when permissions restrict the active tab
+  useEffect(() => {
+    const allowedMenus: Array<'dashboard' | 'upload' | 'report' | 'alerts' | 'claims' | 'notice'> = [];
+    if (canViewInsDashboard) allowedMenus.push('dashboard');
+    if (canViewInsUpload) allowedMenus.push('upload');
+    if (canViewInsReport) allowedMenus.push('report');
+    if (canViewInsAlerts) allowedMenus.push('alerts');
+    if (canViewInsClaims) allowedMenus.push('claims');
+    if (canViewInsNotice) allowedMenus.push('notice');
+    if (allowedMenus.length > 0 && !allowedMenus.includes(activeMenu)) {
+      setActiveMenu(allowedMenus[0]);
+    }
+  }, [activeMenu, canViewInsDashboard, canViewInsUpload, canViewInsReport, canViewInsAlerts, canViewInsClaims, canViewInsNotice]);
+
+  // Available cooperative branches with safe fallback
+  const availableBranches = useMemo<Branch[]>(() => {
+    if (Array.isArray(branches) && branches.length > 0) return branches;
+    return [
+      { id: 'main', name: 'Ratauli Central Head Office', code: 'C01', status: 'Active', createdAt: 0 },
+      { id: 'sahodba', name: 'Sahodba Branch', code: 'C02', status: 'Active', createdAt: 0 },
+      { id: 'pipra', name: 'Pipra Branch', code: 'C03', status: 'Active', createdAt: 0 },
+      { id: 'parsa', name: 'Parsa Branch', code: 'C04', status: 'Active', createdAt: 0 }
+    ];
+  }, [branches]);
+
+  // Branch Scope:
+  // - Super Admin: All branches + branch-wise filter dropdown
+  // - Role / User granted 'All Branches' or 'Selected Branches': designated branches + branch-wise filter dropdown
+  // - Standard branch user (default): strictly sees ONLY their logged-in branch
+  const [selectedBranchFilter, setSelectedBranchFilter] = useState<string>('ALL');
+
+  const loggedInBranchObj = useMemo(() => {
+    return (
+      findMatchingBranch(branch?.id || branch?.name || user?.branchId, availableBranches) ||
+      branch ||
+      availableBranches[0]
+    );
+  }, [branch, user?.branchId, availableBranches]);
+
+  const loggedInBranchKey = useMemo(() => {
+    return resolveCanonicalBranchKey(
+      loggedInBranchObj?.id || loggedInBranchObj?.name || branch?.id || branch?.name || user?.branchId,
+      availableBranches
+    );
+  }, [loggedInBranchObj, branch?.id, branch?.name, user?.branchId, availableBranches]);
+
+  const userInsBranchAccess = useMemo(
+    () => parseUserInsuranceBranchAccess(user?.permissions, role?.permissions, loggedInBranchKey, availableBranches),
+    [user?.permissions, role?.permissions, loggedInBranchKey, availableBranches]
+  );
+
+  const hasAllInsBranchesAccess = isSuperAdmin || userInsBranchAccess.mode === 'all';
+  const canSwitchInsBranchView = isSuperAdmin || userInsBranchAccess.canSwitchViewBranch;
+
+  const selectableInsBranches = useMemo(() => {
+    if (hasAllInsBranchesAccess) return availableBranches;
+    if (userInsBranchAccess.mode === 'selected') {
+      const allowedSet = new Set(userInsBranchAccess.allowedBranchKeys);
+      const matched = availableBranches.filter(b =>
+        allowedSet.has(resolveCanonicalBranchKey(b.id, availableBranches))
+      );
+      return matched.length > 0 ? matched : availableBranches;
+    }
+    return loggedInBranchObj ? [loggedInBranchObj] : availableBranches.slice(0, 1);
+  }, [hasAllInsBranchesAccess, userInsBranchAccess, availableBranches, loggedInBranchObj]);
+
+  // Reset branch filter if the user's allowed branch list changes and excludes the current selection
+  useEffect(() => {
+    if (selectedBranchFilter === 'ALL') return;
+    const targetKey = resolveCanonicalBranchKey(selectedBranchFilter, availableBranches);
+    const stillAllowed = selectableInsBranches.some(
+      b => resolveCanonicalBranchKey(b.id, availableBranches) === targetKey
+    );
+    if (!stillAllowed) {
+      setSelectedBranchFilter('ALL');
+    }
+  }, [selectedBranchFilter, selectableInsBranches, availableBranches]);
+
+  const effectiveInsBranchKeys = useMemo(() => {
+    if (hasAllInsBranchesAccess) {
+      if (!selectedBranchFilter || selectedBranchFilter === 'ALL') return [];
+      const single = resolveCanonicalBranchKey(selectedBranchFilter, availableBranches);
+      return single ? [single] : [];
+    }
+    if (userInsBranchAccess.mode === 'selected') {
+      if (!selectedBranchFilter || selectedBranchFilter === 'ALL') {
+        return userInsBranchAccess.allowedBranchKeys;
+      }
+      const single = resolveCanonicalBranchKey(selectedBranchFilter, availableBranches);
+      if (single && userInsBranchAccess.allowedBranchKeys.includes(single)) {
+        return [single];
+      }
+      return userInsBranchAccess.allowedBranchKeys;
+    }
+    return loggedInBranchKey ? [loggedInBranchKey] : [];
+  }, [hasAllInsBranchesAccess, userInsBranchAccess, selectedBranchFilter, loggedInBranchKey, availableBranches]);
+
+  // Raw Data states (full multi-branch datasets from service & Supabase)
+  const [rawRecords, setRawRecords] = useState<LoanInsuranceRecord[]>(() => loanInsuranceService.getRecords());
+  const [rawClaims, setRawClaims] = useState<InsuranceClaimRecord[]>(() => loanInsuranceService.getClaims());
   const [companies, setCompanies] = useState<InsurancePartnerCompany[]>(() => loanInsuranceService.getCompanies());
+
+  // Branch-Scoped Datasets used across Dashboard, Report, Maturity Alerts, Claims, and Excel Export
+  const records = useMemo(() => {
+    if (effectiveInsBranchKeys.length === 0) return rawRecords;
+    const allowedSet = new Set(effectiveInsBranchKeys);
+    return rawRecords.filter(r => {
+      const key = resolveCanonicalBranchKey(r.branchId || '1', availableBranches) || 'main';
+      return allowedSet.has(key);
+    });
+  }, [rawRecords, effectiveInsBranchKeys, availableBranches]);
+
+  const claims = useMemo(() => {
+    if (effectiveInsBranchKeys.length === 0) return rawClaims;
+    const allowedSet = new Set(effectiveInsBranchKeys);
+    return rawClaims.filter(c => {
+      const key = resolveCanonicalBranchKey(c.branchId || '1', availableBranches) || 'main';
+      return allowedSet.has(key);
+    });
+  }, [rawClaims, effectiveInsBranchKeys, availableBranches]);
   
   // Report Tab Filter Pills (from image 3)
   // 'all' | 'active' | 'first_policy' | 'closed' | 'expired' | 'renewal' | 'reject' | 'premium' | 'statement'
   const [reportFilter, setReportFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Clear report search whenever switching between Report sub-menus or main Insurance tabs
+  useEffect(() => {
+    setSearchQuery('');
+  }, [reportFilter, activeMenu]);
+
+  const handleSelectReportFilter = (nextFilter: string) => {
+    setSearchQuery('');
+    setReportFilter(nextFilter);
+  };
+
   // Maturity Alerts Period Filter (from image 4)
   // 'all' | 'today' | 'tomorrow' | 'week' | 'month'
   const [alertPeriod, setAlertPeriod] = useState<'all' | 'today' | 'tomorrow' | 'week' | 'month'>('all');
+
+  // Dashboard Action Queue Switcher ('expired' | 'upcoming')
+  const [dashboardAttentionTab, setDashboardAttentionTab] = useState<'expired' | 'upcoming'>('expired');
 
   const location = useLocation();
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const tab = params.get('tab');
     const period = params.get('period');
-    if (tab === 'alerts' || tab === 'dashboard' || tab === 'upload' || tab === 'report') {
-      setActiveMenu(tab);
+    if (tab === 'alerts' && canViewInsAlerts) {
+      setActiveMenu('alerts');
+    } else if ((tab === 'claims' || tab === 'claim') && canViewInsClaims) {
+      setActiveMenu('claims');
+    } else if (tab === 'notice' && canViewInsNotice) {
+      setActiveMenu('notice');
+    } else if (tab === 'dashboard' && canViewInsDashboard) {
+      setActiveMenu('dashboard');
+    } else if (tab === 'upload' && canViewInsUpload) {
+      setActiveMenu('upload');
+    } else if (tab === 'report' && canViewInsReport) {
+      setActiveMenu('report');
     }
     if (period === 'today' || period === 'tomorrow' || period === 'week' || period === 'month' || period === 'all') {
       setAlertPeriod(period);
     }
-  }, [location.search]);
+  }, [location.search, canViewInsAlerts, canViewInsClaims, canViewInsNotice, canViewInsDashboard, canViewInsUpload, canViewInsReport]);
 
   // Modals state
   const [isPolicyModalOpen, setIsPolicyModalOpen] = useState(false);
   const [isClaimModalOpen, setIsClaimModalOpen] = useState(false);
   const [isCertificateModalOpen, setIsCertificateModalOpen] = useState(false);
   const [isHistoryViewModalOpen, setIsHistoryViewModalOpen] = useState(false);
+  const [isKycViewOpen, setIsKycViewOpen] = useState(false);
+  const [kycForm, setKycForm] = useState<{
+    memberId: string;
+    memberName: string;
+    citizenshipNo: string;
+    contactNumber: string;
+    gender: 'Male' | 'Female' | 'Other';
+    age: string;
+    dateOfBirthBs: string;
+    dateOfBirth: string;
+    address: string;
+    occupation: string;
+    nomineeName: string;
+    nomineeRelation: string;
+    nomineeContact: string;
+    nomineeCitizenship: string;
+    memberPhoto: string;
+  }>({
+    memberId: '',
+    memberName: '',
+    citizenshipNo: '',
+    contactNumber: '',
+    gender: 'Female',
+    age: '',
+    dateOfBirthBs: '',
+    dateOfBirth: '',
+    address: '',
+    occupation: '',
+    nomineeName: '',
+    nomineeRelation: '',
+    nomineeContact: '',
+    nomineeCitizenship: '',
+    memberPhoto: ''
+  });
+  const [kycSavedNotice, setKycSavedNotice] = useState<string | null>(null);
+  const [policyViewTab, setPolicyViewTab] = useState<'detail' | 'history' | 'combined'>('combined');
+  const kycPhotoInputRef = useRef<HTMLInputElement | null>(null);
   const [isOcrModalOpen, setIsOcrModalOpen] = useState(false);
   const [isExcelImportModalOpen, setIsExcelImportModalOpen] = useState(false);
   const [isRenewalModalOpen, setIsRenewalModalOpen] = useState(false);
@@ -111,6 +361,43 @@ export const LoanInsuranceManagement: React.FC = () => {
   const [certificateQrCodeUrl, setCertificateQrCodeUrl] = useState<string>('');
   const [settlementQrCodeUrl, setSettlementQrCodeUrl] = useState<string>('');
 
+  // Helper formatters for clean branch labels
+  const formatBranchLabel = useCallback((branchId?: string | number): string => {
+    const raw = String(branchId ?? '').trim();
+    if (!raw || raw === 'Select Branch') return 'Head Office';
+    const lower = raw.toLowerCase();
+
+    if (lower === '1' || lower === 'main' || lower === 'c01' || lower === 'head office' || lower === 'ratauli head office' || lower.includes('ratauli')) {
+      return 'Head Office';
+    }
+    if (lower === '2' || lower === 'sahodba' || lower === 'c02' || lower.includes('sahodba')) {
+      return 'Sahodba Branch';
+    }
+    if (lower === '3' || lower === 'pipra' || lower === 'c03' || lower.includes('pipra')) {
+      return 'Pipra Branch';
+    }
+    if (lower === '4' || lower === 'parsa' || lower === 'c04' || lower.includes('parsa')) {
+      return 'Parsa Branch';
+    }
+
+    const matched = availableBranches.find(
+      b =>
+        String(b.id).toLowerCase() === lower ||
+        String(b.code || '').toLowerCase() === lower ||
+        String(b.name || '').toLowerCase() === lower
+    );
+    if (matched?.name) return matched.name;
+
+    return raw;
+  }, [availableBranches]);
+
+  const defaultBranchLabel = useMemo(() => {
+    if (canSwitchInsBranchView && selectedBranchFilter && selectedBranchFilter !== 'ALL') {
+      return formatBranchLabel(selectedBranchFilter);
+    }
+    return formatBranchLabel(loggedInBranchObj?.id || loggedInBranchObj?.name || branch?.id || 'main');
+  }, [canSwitchInsBranchView, selectedBranchFilter, loggedInBranchObj, branch?.id, formatBranchLabel]);
+
   // Policy Form State matching image_85c066c5.png
   const getInitialPolicyForm = (): Partial<LoanInsuranceRecord> => {
     const todayStr = new Date().toISOString().split('T')[0];
@@ -139,7 +426,7 @@ export const LoanInsuranceManagement: React.FC = () => {
       disability: 'No',
       livingActiveLife: 'yes',
       livingStatus: 'Active / Normal Life',
-      branchId: 'Select Branch',
+      branchId: defaultBranchLabel,
       nomineeName: '',
       nomineeRelation: '',
       nomineeDobBs: '',
@@ -360,22 +647,24 @@ export const LoanInsuranceManagement: React.FC = () => {
 
   const [claimForm, setClaimForm] = useState<Partial<InsuranceClaimRecord>>(initialClaimForm);
 
-  // Refresh data from service & Supabase
-  const refreshData = () => {
-    setRecords(loanInsuranceService.getRecords());
-    setClaims(loanInsuranceService.getClaims());
+  // Refresh data from local service immediately; optionally sync from Supabase when explicitly requested
+  const refreshData = (options?: { syncRemote?: boolean }) => {
+    setRawRecords(loanInsuranceService.getRecords());
+    setRawClaims(loanInsuranceService.getClaims());
     setCompanies(loanInsuranceService.getCompanies());
-    void loanInsuranceService.syncAllFromSupabase().then(res => {
-      setRecords(res.records);
-      setClaims(res.claims);
-      setCompanies(res.companies);
-    });
+    if (options?.syncRemote) {
+      void loanInsuranceService.syncAllFromSupabase().then(res => {
+        setRawRecords(res.records);
+        setRawClaims(res.claims);
+        setCompanies(res.companies);
+      });
+    }
   };
 
   useEffect(() => {
     void loanInsuranceService.syncAllFromSupabase().then(res => {
-      setRecords(res.records);
-      setClaims(res.claims);
+      setRawRecords(res.records);
+      setRawClaims(res.claims);
       setCompanies(res.companies);
     });
   }, []);
@@ -400,49 +689,166 @@ export const LoanInsuranceManagement: React.FC = () => {
     }
   }, [settlementClaim]);
 
-  // Summary Metrics matching Image 1
-  const summaryMetrics = useMemo(() => {
-    const isClosed = (r: LoanInsuranceRecord) => 
-      r.status === 'Closed' || r.status === 'closed' || r.status === 'Settled' || 
-      r.status === 'rejected' || r.status === 'Rejected' || r.status === 'deactivated' || r.status === 'Deactivated';
+  const formatTermLabel = (r: LoanInsuranceRecord): string => {
+    if (r.loanDurationYears && r.loanDurationYears > 0) {
+      return `${r.loanDurationYears} ${r.loanDurationYears === 1 ? 'yr' : 'yrs'}`;
+    }
+    if (r.termMonths && r.termMonths > 0) {
+      if (r.termMonths % 12 === 0) {
+        const yrs = r.termMonths / 12;
+        return `${yrs} ${yrs === 1 ? 'yr' : 'yrs'}`;
+      }
+      return `${r.termMonths} mo`;
+    }
+    return '1 yr';
+  };
 
-    const isDateExpired = (r: LoanInsuranceRecord) => Boolean(r.policyExpiryDate && new Date(r.policyExpiryDate) < new Date());
+  // Summary Metrics & Dashboard Analytics (100% derived from real records & claims)
+  const summaryMetrics = useMemo(() => {
+    const now = new Date();
+    const monthAhead = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+    const isHiddenInTab = (r: LoanInsuranceRecord, tab: 'closed' | 'expired' | 'renewal' | 'premium' | 'statement') =>
+      Boolean(r.hiddenReportTabs?.includes(tab));
+
+    const isRenewalChild = (r: LoanInsuranceRecord) => r.recordKind === 'renewal';
+    const isClosedChild = (r: LoanInsuranceRecord) => r.recordKind === 'closed';
+    const isBasePolicy = (r: LoanInsuranceRecord) => !isRenewalChild(r) && !isClosedChild(r);
+    const isRenewedStatus = (r: LoanInsuranceRecord) => r.status === 'renewed' || r.status === 'Renewed';
+
+    const isClosed = (r: LoanInsuranceRecord) => {
+      if (isHiddenInTab(r, 'closed')) return false;
+      if (isClosedChild(r)) return true;
+      const st = (r.status || '').toLowerCase();
+      return st === 'closed' || st === 'rejected' || st === 'deactivated';
+    };
+
+    const isDateExpired = (r: LoanInsuranceRecord) => Boolean(r.policyExpiryDate && new Date(r.policyExpiryDate) < now);
     const isExplicitExpired = (r: LoanInsuranceRecord) => r.status === 'Expired' || r.status === 'expired';
     const isExp = (r: LoanInsuranceRecord) => isDateExpired(r) || isExplicitExpired(r);
 
-    const closedRecords = records.filter(isClosed);
-    const expiredRecords = records.filter(r => !isClosed(r) && isExp(r));
-    const renewedRecords = records.filter(r => !isClosed(r) && (r.status === 'renewed' || r.status === 'Renewed'));
-    const firstPolicyRecords = records.filter(r => !isClosed(r) && (r.status === 'start_policy' || r.isFirstPolicy === true));
-    // First time + renewal active records (active, not expired, not closed)
-    const activeRecords = records.filter(r => 
-      !isClosed(r) && 
-      !isExp(r) && 
-      (r.status === 'Active' || r.status === 'start_policy' || r.status === 'renewed' || r.status === 'Renewed' || r.isFirstPolicy === true)
+    const supersededExpiredParentIds = new Set(
+      records
+        .filter(
+          r =>
+            r.parentPolicyId &&
+            ((isRenewalChild(r) && !isHiddenInTab(r, 'renewal')) ||
+              (isClosedChild(r) && !isHiddenInTab(r, 'closed')))
+        )
+        .map(r => String(r.parentPolicyId))
     );
-    const premiumPendingRecords = records.filter(r => !isClosed(r) && !r.isPremiumSaved);
-    const rejectedRecords = records.filter(r => r.status === 'rejected' || r.status === 'Rejected');
 
-    // Portfolio summary: count of primary portfolio loans
-    const portfolioCount = records.length;
-    const portfolioAmount = records.reduce((sum, r) => sum + (r.loanAmount || 0), 0);
-    const portfolioPremium = records.reduce((sum, r) => sum + (r.premiumAmount || r.premium || 0), 0);
+    const allPolicyRecords = records.filter(r => isBasePolicy(r));
+    const closedRecords = records.filter(r => isClosed(r));
+    const expiredRecords = records.filter(
+      r =>
+        !isClosedChild(r) &&
+        !isClosed(r) &&
+        isExp(r) &&
+        !isHiddenInTab(r, 'expired') &&
+        !(isBasePolicy(r) && supersededExpiredParentIds.has(String(r.id)))
+    );
+    const renewedRecords = records.filter(
+      r => !isClosedChild(r) && !isClosed(r) && (isRenewalChild(r) || isRenewedStatus(r)) && !isHiddenInTab(r, 'renewal')
+    );
+    const firstPolicyRecords = records.filter(
+      r => isBasePolicy(r) && !isClosed(r) && (r.status === 'start_policy' || r.isFirstPolicy !== false)
+    );
+    const activeRecords = records.filter(r =>
+      isBasePolicy(r) &&
+      !isClosed(r) &&
+      !isExp(r)
+    );
+    const upcomingMaturityRecords = records.filter(r => {
+      if (isClosedChild(r) || isClosed(r) || !r.policyExpiryDate) return false;
+      const expiry = new Date(r.policyExpiryDate);
+      return expiry >= now && expiry <= monthAhead;
+    });
+    const premiumPendingRecords = records.filter(
+      r => !isClosedChild(r) && !isClosed(r) && (!r.isPremiumSaved || r.premiumPaymentStatus === 'Due')
+    );
+    const premiumTabRecords = records.filter(
+      r => !isClosedChild(r) && !r.isPremiumSaved && !isClosed(r) && !isHiddenInTab(r, 'premium')
+    );
+    const statementRecords = records.filter(
+      r =>
+        !isClosedChild(r) &&
+        !isHiddenInTab(r, 'statement') &&
+        !((isRenewalChild(r) || isRenewedStatus(r)) && isHiddenInTab(r, 'renewal'))
+    );
+    const rejectedRecords = records.filter(r => !isHiddenInTab(r, 'closed') && (r.status === 'rejected' || r.status === 'Rejected'));
 
-    const expiredAmount = expiredRecords.reduce((sum, r) => sum + (r.loanAmount || 0), 0);
-    const expiredPremium = expiredRecords.reduce((sum, r) => sum + (r.premiumAmount || r.premium || 0), 0);
+    const sumLoan = (list: LoanInsuranceRecord[]) => list.reduce((sum, r) => sum + (r.loanAmount || 0), 0);
+    const sumPremium = (list: LoanInsuranceRecord[]) => list.reduce((sum, r) => sum + (r.premiumAmount || r.premium || 0), 0);
 
-    const renewedAmount = renewedRecords.reduce((sum, r) => sum + (r.loanAmount || 0), 0);
-    const renewedPremium = renewedRecords.reduce((sum, r) => sum + (r.premiumAmount || r.premium || 0), 0);
+    const portfolioCount = allPolicyRecords.length;
+    const portfolioAmount = sumLoan(allPolicyRecords);
+    const portfolioPremium = sumPremium(allPolicyRecords);
 
-    const activeAmount = activeRecords.reduce((sum, r) => sum + (r.loanAmount || 0), 0);
-    const activePremium = activeRecords.reduce((sum, r) => sum + (r.premiumAmount || r.premium || 0), 0);
+    const activeAmount = sumLoan(activeRecords);
+    const activePremium = sumPremium(activeRecords);
 
-    const closedAmount = closedRecords.reduce((sum, r) => sum + (r.loanAmount || 0), 0);
-    const closedPremium = closedRecords.reduce((sum, r) => sum + (r.premiumAmount || r.premium || 0), 0);
+    const expiredAmount = sumLoan(expiredRecords);
+    const expiredPremium = sumPremium(expiredRecords);
+
+    const renewedAmount = sumLoan(renewedRecords);
+    const renewedPremium = sumPremium(renewedRecords);
+
+    const closedAmount = sumLoan(closedRecords);
+    const closedPremium = sumPremium(closedRecords);
+
+    const upcomingMaturityAmount = sumLoan(upcomingMaturityRecords);
+    const upcomingMaturityPremium = sumPremium(upcomingMaturityRecords);
+
+    const pendingAmount = sumLoan(premiumPendingRecords);
+    const pendingPremiumDue = sumPremium(premiumPendingRecords);
+
+    const rejectedAmount = sumLoan(rejectedRecords);
+    const rejectedLostPremium = sumPremium(rejectedRecords);
 
     const settledClaims = claims.filter(c => c.status === 'Settled');
-    const inProcessClaims = claims.filter(c => c.status === 'Submitted' || c.status === 'Under Review');
+    const inProcessClaims = claims.filter(
+      c =>
+        c.status === 'Submitted' ||
+        c.status === 'Under Review' ||
+        c.status === 'Submitted to Insurer' ||
+        c.status === 'Approved'
+    );
     const rejectedClaims = claims.filter(c => c.status === 'Rejected');
+    const totalClaimDisbursed = settledClaims.reduce((sum, c) => sum + (c.disbursedAmount || c.claimAmountApproved || 0), 0);
+
+    // Branch-wise coverage summary
+    const branchMap = new Map<string, {
+      branchName: string;
+      total: number;
+      active: number;
+      expired: number;
+      amount: number;
+      premium: number;
+    }>();
+
+    allPolicyRecords.forEach(r => {
+      const bName = formatBranchLabel(r.branchId);
+      const entry = branchMap.get(bName) || {
+        branchName: bName,
+        total: 0,
+        active: 0,
+        expired: 0,
+        amount: 0,
+        premium: 0
+      };
+      entry.total += 1;
+      if (!isClosed(r) && isExp(r)) {
+        entry.expired += 1;
+      } else if (!isClosed(r)) {
+        entry.active += 1;
+      }
+      entry.amount += r.loanAmount || 0;
+      entry.premium += r.premiumAmount || r.premium || 0;
+      branchMap.set(bName, entry);
+    });
+
+    const branchBreakdown = Array.from(branchMap.values()).sort((a, b) => b.amount - a.amount);
 
     return {
       portfolioCount,
@@ -461,40 +867,76 @@ export const LoanInsuranceManagement: React.FC = () => {
       closedCount: closedRecords.length,
       closedAmount,
       closedPremium,
-      premiumCount: premiumPendingRecords.length,
-      pendingCount: 0,
-      pendingAmount: 0,
-      pendingPremiumDue: 0,
-      upcomingMaturityCount: 0,
-      upcomingMaturityAmount: 0,
-      upcomingMaturityPremium: 0,
+      premiumCount: premiumTabRecords.length,
+      statementCount: statementRecords.length,
+      pendingCount: premiumPendingRecords.length,
+      pendingAmount,
+      pendingPremiumDue,
+      upcomingMaturityCount: upcomingMaturityRecords.length,
+      upcomingMaturityAmount,
+      upcomingMaturityPremium,
+      upcomingMaturityRecords,
       rejectedCount: rejectedRecords.length,
-      rejectedAmount: 0,
-      rejectedLostPremium: 0,
+      rejectedAmount,
+      rejectedLostPremium,
       claimsTotal: claims.length,
       claimsInProcess: inProcessClaims.length,
       claimsSettled: settledClaims.length,
-      claimsRejected: rejectedClaims.length
+      claimsRejected: rejectedClaims.length,
+      totalClaimDisbursed,
+      branchBreakdown
     };
-  }, [records, claims]);
+  }, [records, claims, formatBranchLabel]);
 
-  // Expired policies list (matching Image 1 middle card)
+  // Safe date/timestamp normalizer for sorting (handles ISO strings, YYYY-MM-DD, Date, or epoch numbers)
+  const toSortableTimestamp = (val: unknown): number => {
+    if (typeof val === 'number' && Number.isFinite(val)) return val;
+    if (val instanceof Date) return Number.isFinite(val.getTime()) ? val.getTime() : 0;
+    if (typeof val === 'string' && val.trim()) {
+      const asNum = Number(val);
+      if (Number.isFinite(asNum) && val.trim().length >= 10 && !val.includes('-')) return asNum;
+      const parsed = Date.parse(val);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+  };
+
+  // Expired policies list (sorted by earliest expiry)
   const expiredPolicies = useMemo(() => {
-    const isClosed = (r: LoanInsuranceRecord) => 
-      r.status === 'Closed' || r.status === 'closed' || r.status === 'Settled' || 
+    const isClosed = (r: LoanInsuranceRecord) =>
+      r.status === 'Closed' || r.status === 'closed' || r.status === 'Settled' ||
       r.status === 'rejected' || r.status === 'Rejected' || r.status === 'deactivated' || r.status === 'Deactivated';
-    return records.filter(r => !isClosed(r) && (r.status === 'Expired' || r.status === 'expired' || (r.policyExpiryDate && new Date(r.policyExpiryDate) < new Date())));
+    return records
+      .filter(r => !isClosed(r) && (r.status === 'Expired' || r.status === 'expired' || (r.policyExpiryDate && new Date(r.policyExpiryDate) < new Date())))
+      .sort((a, b) => toSortableTimestamp(a.policyExpiryDate) - toSortableTimestamp(b.policyExpiryDate));
+  }, [records]);
+
+  // Recent policies list (sorted newest first)
+  const recentPolicies = useMemo(() => {
+    return [...records]
+      .sort((a, b) => {
+        const aTs = toSortableTimestamp(a.createdAt ?? a.policyStartDate);
+        const bTs = toSortableTimestamp(b.createdAt ?? b.policyStartDate);
+        return bTs - aTs;
+      })
+      .slice(0, 6);
   }, [records]);
 
   // Filtered records for Report table (matching Image 3)
   const filteredReportRecords = useMemo(() => {
-    const isClosed = (r: LoanInsuranceRecord) => 
-      r.status === 'Closed' || r.status === 'closed' || r.status === 'Settled' || 
-      r.status === 'rejected' || r.status === 'Rejected' || r.status === 'deactivated' || r.status === 'Deactivated';
-
     const isDateExpired = (r: LoanInsuranceRecord) => Boolean(r.policyExpiryDate && new Date(r.policyExpiryDate) < new Date());
     const isExplicitExpired = (r: LoanInsuranceRecord) => r.status === 'Expired' || r.status === 'expired';
     const isExp = (r: LoanInsuranceRecord) => isDateExpired(r) || isExplicitExpired(r);
+    const supersededExpiredParentIds = new Set(
+      records
+        .filter(
+          r =>
+            r.parentPolicyId &&
+            ((r.recordKind === 'renewal' && !r.hiddenReportTabs?.includes('renewal')) ||
+              (r.recordKind === 'closed' && !r.hiddenReportTabs?.includes('closed')))
+        )
+        .map(r => String(r.parentPolicyId))
+    );
 
     return records.filter(r => {
       // Search
@@ -505,29 +947,53 @@ export const LoanInsuranceManagement: React.FC = () => {
         (r.citizenshipNo && r.citizenshipNo.toLowerCase().includes(searchQuery.toLowerCase())) ||
         (r.memberId && r.memberId.toLowerCase().includes(searchQuery.toLowerCase()));
 
+      const isHiddenInTab = (tab: 'closed' | 'expired' | 'renewal' | 'premium' | 'statement') =>
+        Boolean(r.hiddenReportTabs?.includes(tab));
+
+      const isRenewalChild = r.recordKind === 'renewal';
+      const isClosedChild = r.recordKind === 'closed';
+      const isBasePolicy = !isRenewalChild && !isClosedChild;
+      const isRenewedStatus = r.status === 'renewed' || r.status === 'Renewed';
+
+      const stLower = (r.status || '').toLowerCase();
+      const isClosed =
+        !isHiddenInTab('closed') &&
+        (isClosedChild || stLower === 'closed' || stLower === 'rejected' || stLower === 'deactivated');
+
       // Tab pills filter
       let pillMatch = true;
       if (reportFilter === 'active') {
-        // First time + renewal (active, not expired, not closed)
-        pillMatch = !isClosed(r) && !isExp(r) && (r.status === 'Active' || r.status === 'start_policy' || r.status === 'renewed' || r.status === 'Renewed' || r.isFirstPolicy === true);
+        // Active base policies (not expired, not closed)
+        pillMatch = isBasePolicy && !isClosed && !isExp(r);
       } else if (reportFilter === 'first_policy') {
         // First policy uploaded data
-        pillMatch = (r.status === 'start_policy' || r.isFirstPolicy === true) && !isClosed(r);
+        pillMatch = isBasePolicy && !isClosed && (r.status === 'start_policy' || r.isFirstPolicy !== false);
       } else if (reportFilter === 'expired') {
-        // Mature / Expired policies
-        pillMatch = !isClosed(r) && isExp(r);
+        // Mature / Expired policies (exclude already renewed or closed source policies)
+        pillMatch =
+          !isClosedChild &&
+          !isClosed &&
+          isExp(r) &&
+          !isHiddenInTab('expired') &&
+          !(isBasePolicy && supersededExpiredParentIds.has(String(r.id)));
       } else if (reportFilter === 'renewal') {
         // Only policies that have been renewed
-        pillMatch = (r.status === 'renewed' || r.status === 'Renewed') && !isClosed(r);
+        pillMatch = !isClosedChild && (isRenewalChild || isRenewedStatus) && !isClosed && !isHiddenInTab('renewal');
       } else if (reportFilter === 'closed' || reportFilter === 'reject') {
         // Closed or deactivated policies
-        pillMatch = isClosed(r);
+        pillMatch = isClosed;
       } else if (reportFilter === 'premium') {
-        // Only policies waiting for premium arrangement; once saved, removed from this table
-        pillMatch = !r.isPremiumSaved && !isClosed(r);
+        // Only policies waiting for premium arrangement; once saved or removed from tab, excluded
+        pillMatch = !isClosedChild && !r.isPremiumSaved && !isClosed && !isHiddenInTab('premium');
+      } else if (reportFilter === 'statement') {
+        // Statement policies (excludes closed-only copies and any deleted renewal records)
+        pillMatch =
+          !isClosedChild &&
+          !isHiddenInTab('statement') &&
+          !((isRenewalChild || isRenewedStatus) && isHiddenInTab('renewal'));
       } else if (reportFilter === 'all') {
-        // All policies
-        pillMatch = true;
+        // All Policy keeps original pre-renewal / pre-close policies intact
+        pillMatch = isBasePolicy;
       }
 
       return searchMatch && pillMatch;
@@ -566,6 +1032,11 @@ export const LoanInsuranceManagement: React.FC = () => {
 
   // Handle OCR File Upload
   const handleOcrFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!canEditInsUpload) {
+      alert('You do not have permission to upload or create Insurance policies.');
+      if (e.target) e.target.value = '';
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       if (e.target) e.target.value = '';
@@ -632,6 +1103,11 @@ export const LoanInsuranceManagement: React.FC = () => {
 
   // Handle Excel Spreadsheet Upload for Bulk Import
   const handleExcelFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!canEditInsUpload) {
+      alert('You do not have permission to upload or import Insurance policies.');
+      if (e.target) e.target.value = '';
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       if (e.target) e.target.value = '';
@@ -699,6 +1175,11 @@ export const LoanInsuranceManagement: React.FC = () => {
 
   // Quick drag & drop or click upload handler
   const handleQuickUploadFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!canEditInsUpload) {
+      alert('You do not have permission to upload Insurance policies.');
+      if (e.target) e.target.value = '';
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       if (e.target) e.target.value = '';
@@ -716,23 +1197,56 @@ export const LoanInsuranceManagement: React.FC = () => {
     }
   };
 
+  // Helper to enforce branch scope on any created/imported policy
+  const resolveAllowedBranchForSave = (candidate?: string): string => {
+    if (!canSwitchInsBranchView) {
+      return formatBranchLabel(loggedInBranchObj?.id || loggedInBranchObj?.name || branch?.id || 'main');
+    }
+    if (!candidate || candidate === 'Select Branch') {
+      return defaultBranchLabel;
+    }
+    if (hasAllInsBranchesAccess) {
+      return formatBranchLabel(candidate);
+    }
+    const candidateKey = resolveCanonicalBranchKey(candidate, availableBranches);
+    const isAllowed = selectableInsBranches.some(
+      b => resolveCanonicalBranchKey(b.id, availableBranches) === candidateKey
+    );
+    return isAllowed ? formatBranchLabel(candidate) : defaultBranchLabel;
+  };
+
   // Bulk Excel import confirmation handler
   const handleConfirmExcelImport = () => {
+    if (!canEditInsUpload) {
+      alert('You do not have permission to import Insurance policies.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
     }
     if (excelPreviewRows.length === 0) return;
-    loanInsuranceService.bulkImportRecords(excelPreviewRows);
+    const scopedRows = excelPreviewRows.map(row => ({
+      ...row,
+      branchId: resolveAllowedBranchForSave(row.branchId)
+    }));
+    loanInsuranceService.bulkImportRecords(scopedRows);
     refreshData();
     setExcelPreviewRows([]);
     setIsExcelImportModalOpen(false);
-    setReportFilter('all');
-    setActiveMenu('report');
+    if (canViewInsReport) {
+      setReportFilter('all');
+      setActiveMenu('report');
+    }
   };
 
   // Direct Save Data handler: Saves current form (and any bulk rows) to DB and switches to Report -> All Policies
   const handleSaveDataDirect = () => {
+    const canSave = editingPolicy ? (canEditInsReport || canEditInsUpload) : (canEditInsUpload || canEditInsReport);
+    if (!canSave) {
+      alert('You do not have permission to save or edit Insurance policies.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -767,7 +1281,7 @@ export const LoanInsuranceManagement: React.FC = () => {
       loanAmount: policyForm.loanAmount || 0,
       sumAssured: policyForm.loanAmount || 0,
       premiumAmount: policyForm.premiumAmount || 0,
-      branchId: policyForm.branchId && policyForm.branchId !== 'Select Branch' ? policyForm.branchId : (branch?.name || 'Head Office')
+      branchId: resolveAllowedBranchForSave(policyForm.branchId)
     };
 
     if (editingPolicy) {
@@ -778,7 +1292,10 @@ export const LoanInsuranceManagement: React.FC = () => {
 
     // Bulk import any extra spreadsheet rows beyond the first one
     if (excelPreviewRows.length > 1) {
-      const remainingRows = excelPreviewRows.slice(1);
+      const remainingRows = excelPreviewRows.slice(1).map(row => ({
+        ...row,
+        branchId: resolveAllowedBranchForSave(row.branchId)
+      }));
       loanInsuranceService.bulkImportRecords(remainingRows);
     }
 
@@ -789,9 +1306,11 @@ export const LoanInsuranceManagement: React.FC = () => {
     setEditingPolicy(null);
     setPolicyForm(getInitialPolicyForm());
 
-    // Switch view to Report -> All Policies immediately
-    setReportFilter('all');
-    setActiveMenu('report');
+    // Switch view to Report -> All Policies immediately when permitted
+    if (canViewInsReport) {
+      setReportFilter('all');
+      setActiveMenu('report');
+    }
   };
 
   // Save Policy Form (for form submit)
@@ -802,23 +1321,116 @@ export const LoanInsuranceManagement: React.FC = () => {
 
   // Open Edit Policy
   const handleOpenEditPolicy = (record: LoanInsuranceRecord) => {
+    if (!canEditInsReport && !canEditInsUpload) {
+      alert('You do not have permission to edit Insurance policies.');
+      return;
+    }
     setEditingPolicy(record);
-    setPolicyForm(record);
+    setPolicyForm({
+      ...record,
+      branchId: formatBranchLabel(record.branchId)
+    });
     setIsPolicyModalOpen(true);
   };
 
-  // Delete Policy - Direct and reliable without iframe-blocking window.confirm
+  // Delete Policy:
+  // - From All Policy, Active, or First Policy -> permanent full deletion across the entire system
+  // - From Renewal -> delete the renewed record (removing from Renewal, Statement & Policy view) while keeping the original base policy intact
+  // - From Closed -> delete the closed record (keeping original base policy intact) or hide legacy record from Closed
+  // - From Expired, Premium, or Statement -> remove only from that specific report sub-tab
   const handleDeletePolicy = (id: string) => {
+    if (!canDeletePolicy) {
+      alert('You do not have permission to delete Insurance policies.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
     }
-    loanInsuranceService.deleteRecord(id);
+
+    const normalizedFilter = reportFilter === 'reject' ? 'closed' : reportFilter;
+    const allStoredRecords = loanInsuranceService.getRecords();
+    const target = allStoredRecords.find(r => String(r.id) === String(id));
+
+    if (normalizedFilter === 'all' || normalizedFilter === 'active' || normalizedFilter === 'first_policy') {
+      // Permanent full delete of the selected policy
+      loanInsuranceService.deleteRecord(id);
+      if (viewingPolicy?.id === id) {
+        handleClosePolicyView();
+      }
+    } else if (normalizedFilter === 'renewal') {
+      const hasSiblingBasePolicy = Boolean(
+        target &&
+          allStoredRecords.some(r => {
+            if (r.id === target.id) return false;
+            if (r.recordKind === 'renewal' || r.recordKind === 'closed') return false;
+            const sameParent = Boolean(target.parentPolicyId && r.id === target.parentPolicyId);
+            const samePolicyNo = Boolean(
+              target.policyNo &&
+                r.policyNo &&
+                r.policyNo.trim().toLowerCase() === target.policyNo.trim().toLowerCase()
+            );
+            const sameCit = Boolean(
+              target.citizenshipNo &&
+                r.citizenshipNo &&
+                target.citizenshipNo.trim().toLowerCase() === r.citizenshipNo.trim().toLowerCase()
+            );
+            return sameParent || samePolicyNo || sameCit;
+          })
+      );
+
+      if (target?.recordKind === 'renewal' || hasSiblingBasePolicy) {
+        // Separate renewal record: delete it completely so it disappears from Renewal, Statement, and View -> Policy
+        loanInsuranceService.deleteRecord(id);
+      } else if (target?.policyHistory && target.policyHistory.length > 0) {
+        // Legacy in-place renewed record: restore pre-renewal snapshot so renewal is cleanly removed
+        const remainingHistory = [...target.policyHistory];
+        const prev = remainingHistory.pop()!;
+        loanInsuranceService.updateRecord(target.id, {
+          status: prev.stage === 'First Policy' ? 'Active' : 'renewed',
+          policyStartDate: prev.policyStartDate,
+          policyStartDateBs: prev.policyStartDateBs,
+          policyExpiryDate: prev.policyExpiryDate,
+          policyExpiryDateBs: prev.policyExpiryDateBs,
+          termMonths: prev.termMonths || target.termMonths,
+          loanAmount: prev.loanAmount,
+          sumAssured: prev.sumAssured,
+          premiumAmount: prev.premiumAmount,
+          premiumPaymentStatus: prev.premiumPaymentStatus || target.premiumPaymentStatus,
+          policyHistory: remainingHistory.length > 0 ? remainingHistory : undefined
+        });
+      } else {
+        loanInsuranceService.removeRecordFromReportTab(id, ['renewal', 'statement']);
+      }
+      if (viewingPolicy?.id === id) {
+        handleClosePolicyView();
+      }
+    } else if (normalizedFilter === 'closed') {
+      if (target?.recordKind === 'closed') {
+        loanInsuranceService.deleteRecord(id);
+      } else {
+        loanInsuranceService.removeRecordFromReportTab(id, 'closed');
+      }
+      if (viewingPolicy?.id === id) {
+        handleClosePolicyView();
+      }
+    } else if (
+      normalizedFilter === 'expired' ||
+      normalizedFilter === 'premium' ||
+      normalizedFilter === 'statement'
+    ) {
+      loanInsuranceService.removeRecordFromReportTab(id, normalizedFilter);
+    }
+
     refreshData();
   };
 
   // Open Renewal Modal matching image_7c9690b7.png
   const handleOpenRenewalModal = (record: LoanInsuranceRecord) => {
+    if (!canEditInsReport && !canEditInsAlerts && !canEditInsDashboard) {
+      alert('You do not have permission to renew Insurance policies.');
+      return;
+    }
     setRenewingPolicy(record);
 
     const existStartAd = record.policyStartDate || record.start_date || '2024-05-10';
@@ -1028,6 +1640,10 @@ export const LoanInsuranceManagement: React.FC = () => {
   // Execute Policy Renewal
   const handleConfirmRenewal = () => {
     if (!renewingPolicy) return;
+    if (!canEditInsReport && !canEditInsAlerts && !canEditInsDashboard) {
+      alert('You do not have permission to renew Insurance policies.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -1038,7 +1654,26 @@ export const LoanInsuranceManagement: React.FC = () => {
     const isPaid = updatedPaidYears >= totalLoanYears;
     const dueYrs = Math.max(0, totalLoanYears - updatedPaidYears);
 
-    loanInsuranceService.updateRecord(renewingPolicy.id, {
+    // Keep original policy untouched in All Policy; create a dedicated Renewal record for Renewal sub-menu
+    const {
+      id: _origId,
+      createdAt: _origCreatedAt,
+      updatedAt: _origUpdatedAt,
+      hiddenReportTabs: _origHidden,
+      policyHistory: _origHistory,
+      ...baseFields
+    } = renewingPolicy;
+    void _origId;
+    void _origCreatedAt;
+    void _origUpdatedAt;
+    void _origHidden;
+    void _origHistory;
+
+    loanInsuranceService.addRecord({
+      ...baseFields,
+      recordKind: 'renewal',
+      parentPolicyId: renewingPolicy.parentPolicyId || renewingPolicy.id,
+      isFirstPolicy: false,
       status: 'renewed',
       policyStartDate: renewalForm.newRenewDateAd,
       policyStartDateBs: renewalForm.newRenewDateBs,
@@ -1056,27 +1691,40 @@ export const LoanInsuranceManagement: React.FC = () => {
       premiumPaymentStatus: isPaid ? 'Paid' : 'Due',
       premiumPaymentRemark: isPaid ? 'Full Coverage Paid' : `${dueYrs} Year(s) Premium Due`,
       isPremiumSaved: true,
-      notes: 'Renewed policy agreement and coverage'
+      notes: renewalForm.renewalRemark?.trim() || 'Renewed policy agreement and coverage'
     });
+
+    // Remove the renewed source policy from the Expired sub-menu while keeping it intact in All Policy / First Policy
+    loanInsuranceService.removeRecordFromReportTab(renewingPolicy.id, 'expired');
 
     refreshData();
     setIsRenewalModalOpen(false);
     setRenewingPolicy(null);
-    setReportFilter('renewal');
-    setActiveMenu('report');
+    if (canViewInsReport) {
+      setReportFilter('renewal');
+      setActiveMenu('report');
+    }
   };
 
   // Open Deactivate Modal
   const handleOpenDeactivateModal = (record: LoanInsuranceRecord) => {
+    if (!canEditInsReport) {
+      alert('You do not have permission to deactivate Insurance policies.');
+      return;
+    }
     setDeactivatingPolicy(record);
     setDeactivationRemark('');
     setIsDeactivateModalOpen(true);
   };
 
-  // Confirm Deactivation with user remark and move to Closed tab
+  // Confirm Deactivation: keep original policy untouched in All Policy and record a Closed entry in Closed sub-menu
   const handleConfirmDeactivation = (e: React.FormEvent) => {
     e.preventDefault();
     if (!deactivatingPolicy) return;
+    if (!canEditInsReport) {
+      alert('You do not have permission to deactivate Insurance policies.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -1087,10 +1735,31 @@ export const LoanInsuranceManagement: React.FC = () => {
       ? `${deactivatingPolicy.notes} | Deactivated: ${remarkText}`
       : `Deactivated: ${remarkText}`;
 
-    loanInsuranceService.updateRecord(deactivatingPolicy.id, {
+    const {
+      id: _origId,
+      createdAt: _origCreatedAt,
+      updatedAt: _origUpdatedAt,
+      hiddenReportTabs: _origHidden,
+      policyHistory: _origHistory,
+      ...baseFields
+    } = deactivatingPolicy;
+    void _origId;
+    void _origCreatedAt;
+    void _origUpdatedAt;
+    void _origHidden;
+    void _origHistory;
+
+    loanInsuranceService.addRecord({
+      ...baseFields,
+      recordKind: 'closed',
+      parentPolicyId: deactivatingPolicy.parentPolicyId || deactivatingPolicy.id,
+      isFirstPolicy: false,
       status: 'Closed',
       notes: updatedNotes
     });
+
+    // Remove the closed source policy from the Expired sub-menu while keeping it intact in All Policy / First Policy
+    loanInsuranceService.removeRecordFromReportTab(deactivatingPolicy.id, 'expired');
 
     refreshData();
     setIsDeactivateModalOpen(false);
@@ -1098,12 +1767,18 @@ export const LoanInsuranceManagement: React.FC = () => {
     setDeactivationRemark('');
 
     // Switch view to Report -> Closed tab immediately
-    setReportFilter('closed');
-    setActiveMenu('report');
+    if (canViewInsReport) {
+      setReportFilter('closed');
+      setActiveMenu('report');
+    }
   };
 
   // Open Premium & Dues Arrangement Modal (matching image_529b5b18.png)
   const handleOpenPremiumModal = (record: LoanInsuranceRecord) => {
+    if (!canEditInsReport) {
+      alert('You do not have permission to update Insurance premium & dues.');
+      return;
+    }
     setPremiumTargetPolicy(record);
 
     const pad = (n: number) => String(n).padStart(2, '0');
@@ -1307,6 +1982,10 @@ export const LoanInsuranceManagement: React.FC = () => {
   const handleSavePremiumArrangement = (e: React.FormEvent) => {
     e.preventDefault();
     if (!premiumTargetPolicy) return;
+    if (!canEditInsReport) {
+      alert('You do not have permission to update Insurance premium & dues.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -1325,10 +2004,6 @@ export const LoanInsuranceManagement: React.FC = () => {
       loanDisbursedDateBs: premiumForm.loanDateBs,
       loanExpiryDate: premiumForm.maturityDateAd,
       loanExpiryDateBs: premiumForm.maturityDateBs,
-      policyStartDate: premiumForm.insuranceStartDateAd,
-      policyStartDateBs: premiumForm.insuranceStartDateBs,
-      policyExpiryDate: premiumForm.maturityDateAd || premiumForm.insuranceTillDateAd,
-      policyExpiryDateBs: premiumForm.maturityDateBs || premiumForm.insuranceTillDateBs,
       insuranceTillDate: premiumForm.insuranceTillDateAd,
       insuranceTillDateBs: premiumForm.insuranceTillDateBs,
       loanDurationYears: premiumForm.loanTermYears,
@@ -1347,13 +2022,19 @@ export const LoanInsuranceManagement: React.FC = () => {
     refreshData();
     setIsPremiumModalOpen(false);
     setPremiumTargetPolicy(null);
-    setReportFilter('premium');
-    setActiveMenu('report');
+    if (canViewInsReport) {
+      setReportFilter('premium');
+      setActiveMenu('report');
+    }
   };
 
   // Save Claim Form
   const handleSaveClaim = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canEditInsReport && !canEditInsDashboard) {
+      alert('You do not have permission to register or edit Insurance claims.');
+      return;
+    }
     if (isDayEndedForBranch(branch?.id)) {
       alert(getDayEndedBlockMessage());
       return;
@@ -1368,61 +2049,21 @@ export const LoanInsuranceManagement: React.FC = () => {
       return;
     }
 
+    const scopedClaimPayload: Partial<InsuranceClaimRecord> = {
+      ...claimForm,
+      branchId: resolveAllowedBranchForSave(claimForm.branchId)
+    };
+
     if (editingClaim) {
-      loanInsuranceService.updateClaim(editingClaim.id, claimForm);
+      loanInsuranceService.updateClaim(editingClaim.id, scopedClaimPayload);
     } else {
-      loanInsuranceService.addClaim(claimForm as Omit<InsuranceClaimRecord, 'id' | 'createdAt' | 'updatedAt' | 'claimNo'>);
+      loanInsuranceService.addClaim(scopedClaimPayload as Omit<InsuranceClaimRecord, 'id' | 'createdAt' | 'updatedAt' | 'claimNo'>);
     }
 
     refreshData();
     setIsClaimModalOpen(false);
     setEditingClaim(null);
     setClaimForm(initialClaimForm);
-  };
-
-  // Advance Claim Stage in 6-stage lifecycle
-  const handleAdvanceClaimLifecycle = (claim: InsuranceClaimRecord) => {
-    if (isDayEndedForBranch(branch?.id)) {
-      alert(getDayEndedBlockMessage());
-      return;
-    }
-    const stages: ClaimLifecycleStage[] = [
-      'Claim Submission',
-      'Document Verification',
-      'Evaluation',
-      'Admin Approval',
-      'Payout Disbursement',
-      'Settlement Receipt'
-    ];
-
-    const currentIndex = stages.indexOf(claim.lifecycleStage || 'Claim Submission');
-    if (currentIndex < stages.length - 1) {
-      const nextStage = stages[currentIndex + 1];
-      const updates: Partial<InsuranceClaimRecord> = {};
-
-      if (nextStage === 'Admin Approval') {
-        updates.claimAmountApproved = claim.claimAmountApproved || claim.claimAmountRequested;
-        updates.approvedBy = 'Board of Directors & Chief Underwriter';
-      } else if (nextStage === 'Payout Disbursement') {
-        updates.disbursedAmount = claim.claimAmountApproved || claim.claimAmountRequested;
-        updates.disbursementDate = new Date().toISOString().split('T')[0];
-        updates.disbursementDateBs = convertAdToBs(new Date().toISOString().split('T')[0]);
-      } else if (nextStage === 'Settlement Receipt') {
-        updates.settlementDate = new Date().toISOString().split('T')[0];
-        updates.settlementDateBs = convertAdToBs(new Date().toISOString().split('T')[0]);
-        updates.settlementVoucherNo = `VCH-CLM-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
-      }
-
-      loanInsuranceService.advanceClaimStage(claim.id, nextStage, updates);
-      refreshData();
-    }
-  };
-
-  // Open Edit Claim
-  const handleOpenEditClaim = (claim: InsuranceClaimRecord) => {
-    setEditingClaim(claim);
-    setClaimForm(claim);
-    setIsClaimModalOpen(true);
   };
 
   // Helper to extract initials for avatar badge (e.g. "Sita Devi Chaudhary" -> "SD")
@@ -1437,6 +2078,14 @@ export const LoanInsuranceManagement: React.FC = () => {
 
   // Export to Excel (.xlsx) matching exact MicroInsuranceTemplate format
   const exportToExcel = (recordsToExport: LoanInsuranceRecord[] = filteredReportRecords) => {
+    const getNumericBranchCode = (rawBranch?: string | number): number => {
+      const k = resolveCanonicalBranchKey(rawBranch, availableBranches);
+      if (k === 'sahodba') return 2;
+      if (k === 'pipra') return 3;
+      if (k === 'parsa') return 4;
+      return 1;
+    };
+
     const rows = recordsToExport.map((r, i) => ({
       'SN': i + 1,
       'Assured Name': r.memberName || r.name || '',
@@ -1457,21 +2106,182 @@ export const LoanInsuranceManagement: React.FC = () => {
       'Nomiee DOB_BS': r.nomineeDobBs || '',
       'Nomiee DOB_AD': r.nomineeDob || '',
       'Nominee Gender': r.nomineeGender || (r.nomineeRelation === 'Wife' ? 'Female' : (r.nomineeRelation === 'Husband' ? 'Male' : (r.gender === 'Female' ? 'Male' : 'Female'))),
-      'Micro Finance Branch': r.branchId || 'Head Office',
-      'BranchCode': r.branchId === 'Sahodba Branch' || r.branchId === '2' ? 2 : 1,
+      'Micro Finance Branch': formatBranchLabel(r.branchId),
+      'BranchCode': getNumericBranchCode(r.branchId),
       'MobileNumber': r.mobileNumber || ''
     }));
+
+    const branchSuffix =
+      effectiveInsBranchKeys.length === 1
+        ? `_${formatBranchLabel(effectiveInsBranchKeys[0]).replace(/\s+/g, '')}`
+        : '';
 
     const worksheet = XLSX.utils.json_to_sheet(rows);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'MicroInsurance');
-    XLSX.writeFile(workbook, `MicroInsuranceTemplate_${new Date().toISOString().split('T')[0]}.xlsx`);
+    XLSX.writeFile(workbook, `MicroInsuranceTemplate${branchSuffix}_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
 
-  // View Insurance Records & History Detail (image_fe26df2f.png)
+  // Close full-page policy view with Escape key
+  useEffect(() => {
+    if (!isHistoryViewModalOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsHistoryViewModalOpen(false);
+        setIsKycViewOpen(false);
+        setPolicyActionNotice(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isHistoryViewModalOpen]);
+
+  // Match Micro-Finance member record for Shortcut KYC enrichment (photo/mobile fallback)
+  const matchedKycMfMember = useMemo(() => {
+    if (!isHistoryViewModalOpen || !viewingPolicy) return null;
+    try {
+      const members = microFinanceService.getMembers();
+      const norm = (val?: string) => (val || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+      const targetId = norm(viewingPolicy.memberId);
+      const targetCit = norm(viewingPolicy.citizenshipNo);
+      const targetName = (viewingPolicy.memberName || viewingPolicy.name || '').trim().toLowerCase();
+      return (
+        members.find(m => targetId && norm(m.memberId) === targetId) ||
+        members.find(m => targetCit && norm(m.citizenshipNo) === targetCit) ||
+        members.find(m => targetName && (m.name || '').trim().toLowerCase() === targetName) ||
+        null
+      );
+    } catch {
+      return null;
+    }
+  }, [isHistoryViewModalOpen, viewingPolicy]);
+
+  // Populate fillable Shortcut KYC form from policy (+ Micro-Finance fallback)
+  const populateKycFormFromPolicy = useCallback((record: LoanInsuranceRecord) => {
+    let mfMatch: { memberId?: string; citizenshipNo?: string; mobile?: string; address?: string; gender?: 'Male' | 'Female' | 'Other'; photoUrl?: string } | null = null;
+    try {
+      const members = microFinanceService.getMembers();
+      const norm = (val?: string) => (val || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+      const targetId = norm(record.memberId);
+      const targetCit = norm(record.citizenshipNo);
+      const targetName = (record.memberName || record.name || '').trim().toLowerCase();
+      mfMatch =
+        members.find(m => targetId && norm(m.memberId) === targetId) ||
+        members.find(m => targetCit && norm(m.citizenshipNo) === targetCit) ||
+        members.find(m => targetName && (m.name || '').trim().toLowerCase() === targetName) ||
+        null;
+    } catch {
+      mfMatch = null;
+    }
+    const rawGender = record.gender || mfMatch?.gender || 'Female';
+    const safeGender: 'Male' | 'Female' | 'Other' =
+      rawGender === 'Male' || rawGender === 'Female' || rawGender === 'Other' ? rawGender : 'Female';
+    const dobAd = record.dateOfBirth || '';
+    const dobBs = record.dateOfBirthBs || (dobAd ? convertAdToBs(dobAd) : '');
+    setKycForm({
+      memberId: record.memberId || mfMatch?.memberId || '',
+      memberName: record.memberName || record.name || '',
+      citizenshipNo: record.citizenshipNo || mfMatch?.citizenshipNo || '',
+      contactNumber: record.contactNumber || mfMatch?.mobile || '',
+      gender: safeGender,
+      age: record.age !== undefined && record.age !== null && record.age > 0 ? String(record.age) : '',
+      dateOfBirthBs: dobBs,
+      dateOfBirth: dobAd,
+      address: record.address || mfMatch?.address || '',
+      occupation: record.occupation || '',
+      nomineeName: record.nomineeName || record.nominee_name || '',
+      nomineeRelation: record.nomineeRelation || record.nominee_relation || '',
+      nomineeContact: record.nomineeContact || '',
+      nomineeCitizenship: record.nomineeCitizenship || '',
+      memberPhoto: record.memberPhoto || mfMatch?.photoUrl || ''
+    });
+    setKycSavedNotice(null);
+  }, []);
+
+  // Upload or update member photo directly from Shortcut KYC form
+  const handleUploadKycMemberPhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !viewingPolicy) return;
+    if (isDayEnded) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 360;
+        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        setKycForm(prev => ({ ...prev, memberPhoto: dataUrl }));
+        const updated = loanInsuranceService.updateRecord(viewingPolicy.id, { memberPhoto: dataUrl });
+        if (updated) {
+          setViewingPolicy(updated);
+          refreshData();
+        }
+      };
+      if (typeof reader.result === 'string') {
+        img.src = reader.result;
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  // Save filled Shortcut KYC details onto the policy record
+  const handleSaveKycForm = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!viewingPolicy || isDayEnded) return;
+    const parsedAge = Number(kycForm.age);
+    const dobBs = kycForm.dateOfBirthBs.trim();
+    const dobAd = kycForm.dateOfBirth.trim() || (dobBs ? convertBsToAd(dobBs) : '');
+    const cleanName = kycForm.memberName.trim() || viewingPolicy.memberName || viewingPolicy.name || '';
+    const updated = loanInsuranceService.updateRecord(viewingPolicy.id, {
+      memberId: kycForm.memberId.trim(),
+      memberName: cleanName,
+      name: cleanName,
+      citizenshipNo: kycForm.citizenshipNo.trim(),
+      contactNumber: kycForm.contactNumber.trim() || undefined,
+      gender: kycForm.gender,
+      age: Number.isFinite(parsedAge) && parsedAge > 0 ? parsedAge : undefined,
+      dateOfBirthBs: dobBs || undefined,
+      dateOfBirth: dobAd || undefined,
+      address: kycForm.address.trim() || undefined,
+      occupation: kycForm.occupation.trim() || undefined,
+      nomineeName: kycForm.nomineeName.trim(),
+      nomineeRelation: kycForm.nomineeRelation.trim(),
+      nomineeContact: kycForm.nomineeContact.trim() || undefined,
+      nomineeCitizenship: kycForm.nomineeCitizenship.trim() || undefined,
+      memberPhoto: kycForm.memberPhoto || undefined
+    });
+    if (updated) {
+      setViewingPolicy(updated);
+      refreshData();
+      setKycSavedNotice('Member KYC सफलतापूर्वक सेभ गरियो।');
+      window.setTimeout(() => {
+        setKycSavedNotice(prev => (prev === 'Member KYC सफलतापूर्वक सेभ गरियो।' ? null : prev));
+      }, 3500);
+    }
+  };
+
+  // Close Full-Page Policy View cleanly
+  const handleClosePolicyView = () => {
+    setIsHistoryViewModalOpen(false);
+    setIsKycViewOpen(false);
+    setKycSavedNotice(null);
+    setPolicyViewTab('combined');
+  };
+
+  // View Insurance Records & History Detail (Full Page)
   const handleViewPolicyDetails = (record: LoanInsuranceRecord) => {
     setViewingPolicy(record);
+    populateKycFormFromPolicy(record);
+    setIsKycViewOpen(false);
+    setPolicyViewTab('combined');
     setIsHistoryViewModalOpen(true);
   };
 
@@ -1758,19 +2568,22 @@ export const LoanInsuranceManagement: React.FC = () => {
             {/* Row 10: BRANCH | NOMINEE NAME */}
             <div>
               <label className="block text-[11px] font-bold text-slate-700 tracking-wider uppercase mb-1.5">
-                BRANCH
+                BRANCH {!canSwitchInsBranchView && <span className="text-[10px] font-normal text-slate-400">(Assigned Branch)</span>}
               </label>
               <select
-                value={policyForm.branchId || 'Select Branch'}
+                value={canSwitchInsBranchView ? formatBranchLabel(policyForm.branchId || defaultBranchLabel) : defaultBranchLabel}
+                disabled={!canSwitchInsBranchView}
                 onChange={e => setPolicyForm(prev => ({ ...prev, branchId: e.target.value }))}
-                className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white cursor-pointer"
+                className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white cursor-pointer disabled:bg-slate-100 disabled:text-slate-600 disabled:cursor-not-allowed"
               >
-                <option value="Select Branch">Select Branch</option>
-                <option value="Head Office">Head Office</option>
-                <option value="Sahodba Branch">Sahodba Branch</option>
-                <option value="Pipra Branch">Pipra Branch</option>
-                <option value="Janakpur Branch">Janakpur Branch</option>
-                <option value="Ramgopalpur Branch">Ramgopalpur Branch</option>
+                {selectableInsBranches.map(b => {
+                  const label = formatBranchLabel(b.id);
+                  return (
+                    <option key={b.id} value={label}>
+                      {label}
+                    </option>
+                  );
+                })}
               </select>
             </div>
 
@@ -1938,68 +2751,143 @@ export const LoanInsuranceManagement: React.FC = () => {
   return (
     <div className="flex flex-col min-h-[calc(100vh-5rem)] bg-[#f8fafc] text-slate-800 rounded-2xl overflow-hidden border border-slate-200 shadow-sm">
       {/* ======================================================== */}
-      {/* TOP MENU NAVIGATION BAR (Replaces blue sidebar format) */}
+      {/* TOP MENU NAVIGATION BAR (Permission & Branch-Scope Aware) */}
       {/* ======================================================== */}
-      <header className="bg-white border-b border-slate-200 px-4 sm:px-6 py-2 sm:py-2.5 flex items-center justify-between gap-3 shadow-xs">
-        <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto">
-          <button
-            onClick={() => setActiveMenu('dashboard')}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-              activeMenu === 'dashboard'
-                ? 'bg-[#015e52] text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-            }`}
-          >
-            <LineChart className="w-3.5 h-3.5" />
-            <span>Dashboard</span>
-          </button>
+      <header className="bg-white border-b border-slate-200 px-4 sm:px-6 py-2 sm:py-2.5 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+        <div className="flex items-center gap-2 overflow-x-auto">
+          {canViewInsDashboard && (
+            <button
+              type="button"
+              onClick={() => setActiveMenu('dashboard')}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                activeMenu === 'dashboard'
+                  ? 'bg-[#015e52] text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <LineChart className="w-3.5 h-3.5" />
+              <span>Dashboard</span>
+            </button>
+          )}
 
-          <button
-            onClick={() => {
-              setActiveMenu('upload');
-              setIsUploadFormVisible(false);
-            }}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-              activeMenu === 'upload'
-                ? 'bg-[#015e52] text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-            }`}
-          >
-            <Upload className="w-3.5 h-3.5" />
-            <span>Upload Policy</span>
-          </button>
+          {canViewInsUpload && (
+            <button
+              type="button"
+              onClick={() => {
+                setActiveMenu('upload');
+                setIsUploadFormVisible(false);
+              }}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                activeMenu === 'upload'
+                  ? 'bg-[#015e52] text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>Upload Policy</span>
+            </button>
+          )}
 
-          <button
-            onClick={() => setActiveMenu('report')}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-              activeMenu === 'report'
-                ? 'bg-[#015e52] text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-            }`}
-          >
-            <FileText className="w-3.5 h-3.5" />
-            <span>Report</span>
-          </button>
+          {canViewInsReport && (
+            <button
+              type="button"
+              onClick={() => setActiveMenu('report')}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                activeMenu === 'report'
+                  ? 'bg-[#015e52] text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>Report</span>
+            </button>
+          )}
 
-          <button
-            onClick={() => setActiveMenu('alerts')}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-              activeMenu === 'alerts'
-                ? 'bg-[#015e52] text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-            }`}
-          >
-            <Bell className="w-3.5 h-3.5" />
-            <span>Maturity Alerts</span>
-            {summaryMetrics.upcomingMaturityCount > 0 && (
-              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
-            )}
-          </button>
+          {canViewInsAlerts && (
+            <button
+              type="button"
+              onClick={() => setActiveMenu('alerts')}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                activeMenu === 'alerts'
+                  ? 'bg-[#015e52] text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <Bell className="w-3.5 h-3.5" />
+              <span>Maturity Alerts</span>
+              {summaryMetrics.upcomingMaturityCount > 0 && (
+                <span className={`font-mono tabular-nums text-[11px] ${activeMenu === 'alerts' ? 'text-emerald-100' : 'text-amber-700'}`}>
+                  ({summaryMetrics.upcomingMaturityCount})
+                </span>
+              )}
+            </button>
+          )}
+
+          {canViewInsClaims && (
+            <button
+              type="button"
+              onClick={() => setActiveMenu('claims')}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                activeMenu === 'claims'
+                  ? 'bg-[#015e52] text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <Heart className="w-3.5 h-3.5" />
+              <span>Claim</span>
+            </button>
+          )}
+
+          {canViewInsNotice && (
+            <button
+              type="button"
+              onClick={() => setActiveMenu('notice')}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                activeMenu === 'notice'
+                  ? 'bg-[#015e52] text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <Megaphone className="w-3.5 h-3.5" />
+              <span>Notice</span>
+            </button>
+          )}
         </div>
 
-        {/* Top-Right Quick Action Button - Only rendered on Upload Policy */}
-        {activeMenu === 'upload' && (
-          <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+        {/* Top-Right Controls: Branch Scope Switcher / Locked Badge + Upload Action */}
+        <div className="flex items-center gap-2 shrink-0 ml-auto">
+          {canSwitchInsBranchView ? (
+            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1">
+              <Building2 className="w-3.5 h-3.5 text-[#015e52] shrink-0" />
+              <select
+                aria-label="Filter Insurance by Branch"
+                value={selectedBranchFilter}
+                onChange={e => setSelectedBranchFilter(e.target.value)}
+                className="bg-transparent text-xs font-bold text-slate-800 focus:outline-none cursor-pointer pr-1"
+              >
+                <option value="ALL">
+                  {hasAllInsBranchesAccess
+                    ? 'All Branches'
+                    : `All Allowed (${selectableInsBranches.length})`}
+                </option>
+                {selectableInsBranches.map(b => (
+                  <option key={b.id} value={b.id}>
+                    {formatBranchLabel(b.id)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-bold"
+              title="Branch-isolated access: showing only your logged-in branch"
+            >
+              <Lock className="w-3 h-3 text-emerald-700" />
+              <span>{formatBranchLabel(loggedInBranchObj?.id || branch?.id)}</span>
+            </div>
+          )}
+
+          {activeMenu === 'upload' && canEditInsUpload && (
             <button
               type="button"
               disabled={isDayEnded}
@@ -2012,326 +2900,750 @@ export const LoanInsuranceManagement: React.FC = () => {
                   document.getElementById('policy-form-section')?.scrollIntoView({ behavior: 'smooth' });
                 }, 100);
               }}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#025e40] hover:bg-[#014730] text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#025e40] hover:bg-[#014730] text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>+ Add Policy Manually</span>
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </header>
 
       {/* ======================================================== */}
       {/* MAIN CONTENT AREA */}
       {/* ======================================================== */}
       <main className="flex-1 p-3 sm:p-4 lg:p-5 overflow-y-auto">
-        {/* ======================================================== */}
-        {/* VIEW 1: DASHBOARD (Exact Match to Image 1: image_0695b558.png) */}
-        {/* ======================================================== */}
-        {activeMenu === 'dashboard' && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Left 2 Cards (Cols 1-7 on desktop) */}
-            <div className="lg:col-span-7 grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Card 1: Recent Policy */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
-                <div className="flex justify-between items-center pb-3 mb-3 border-b border-slate-100">
-                  <h3 className="font-bold text-slate-900 text-sm">Recent Policy</h3>
-                  <button 
-                    onClick={() => setActiveMenu('report')}
-                    className="text-xs font-bold text-blue-600 hover:text-blue-800 cursor-pointer"
-                  >
-                    View All
-                  </button>
-                </div>
-
-                <div className="space-y-3">
-                  {records.slice(0, 4).map(r => (
-                    <div key={r.id} className="p-3 rounded-xl border border-slate-100 hover:border-slate-200 bg-slate-50/50 transition-all flex justify-between items-center">
-                      <div>
-                        <div className="font-bold text-slate-900 text-xs">{r.memberName || r.name}</div>
-                        <div className="text-[10px] text-slate-400 mt-0.5">Added Oct 29, 2026</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-bold text-blue-600 text-xs font-mono">
-                          NPR {(r.loanAmount || 0).toLocaleString()}
-                        </div>
-                        <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">
-                          POLICY AMOUNT
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Card 2: Expired Policy */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
-                <div className="flex justify-between items-center pb-3 mb-3 border-b border-slate-100">
-                  <h3 className="font-bold text-slate-900 text-sm">Expired Policy</h3>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">
-                    {expiredPolicies.length} total
-                  </span>
-                </div>
-
-                <div className="space-y-3">
-                  {expiredPolicies.slice(0, 4).map(r => (
-                    <div key={r.id} className="p-3 rounded-xl border border-slate-100 hover:border-slate-200 bg-slate-50/50 transition-all flex justify-between items-center">
-                      <div>
-                        <div className="font-bold text-slate-900 text-xs">{r.memberName || r.name}</div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">
-                          {r.branchId === '2' ? 'Sahodba Branch · 1 year' : 'Head Office · 1 year'}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 text-right">
-                        <div>
-                          <div className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
-                            {r.policyExpiryDate || '2025-01-14'}
-                          </div>
-                          <div className="mt-1 flex items-center justify-end gap-1.5">
-                            <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-red-100 text-red-700">DUE</span>
-                            <button
-                              type="button"
-                              disabled={isDayEnded}
-                              title={isDayEnded ? getDayEndedBlockMessage() : 'Manage Policy'}
-                              onClick={() => handleOpenRenewalModal(r)}
-                              className="text-[10px] font-bold text-blue-600 hover:underline cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                            >
-                              Manage
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+        {!hasAnyInsuranceViewAccess && (
+          <div className="max-w-lg mx-auto my-12 bg-white border border-slate-200 rounded-2xl p-8 text-center shadow-xs space-y-2">
+            <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 border border-amber-200 flex items-center justify-center mx-auto">
+              <Lock className="w-5 h-5" />
             </div>
-
-            {/* Right Column: SUMMARY (Cols 8-12 on desktop) */}
-            <div className="lg:col-span-5 space-y-3">
-              <div className="flex items-center gap-2 text-slate-700 text-xs font-bold uppercase tracking-wider">
-                <Sliders className="w-3.5 h-3.5 text-blue-600" />
-                <span>SUMMARY</span>
-              </div>
-
-              {/* 8 Summary Cards in 2 columns */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {/* 1. PORTFOLIO SUMMARY */}
-                <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs flex flex-col justify-between">
-                  <div className="flex justify-between items-start">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                      PORTFOLIO SUMMARY
-                    </span>
-                    <div className="p-1.5 rounded-lg bg-blue-50 text-blue-600">
-                      <Database className="w-4 h-4" />
-                    </div>
-                  </div>
-                  <div className="my-2">
-                    <span className="text-2xl font-black text-slate-900">{summaryMetrics.portfolioCount}</span>
-                    <span className="text-xs text-slate-500 ml-1">total</span>
-                  </div>
-                  <div className="text-[11px] text-slate-500 space-y-0.5 pt-2 border-t border-slate-100">
-                    <div className="flex justify-between">
-                      <span>Total Amount:</span>
-                      <strong className="text-slate-800 font-mono">NPR {summaryMetrics.portfolioAmount.toLocaleString()}</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Total Premium:</span>
-                      <strong className="text-slate-800 font-mono">NPR {summaryMetrics.portfolioPremium.toLocaleString()}</strong>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 2. ACTIVE RECORDS */}
-                <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs flex flex-col justify-between">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">ACTIVE RECORDS</div>
-                      <div className="text-[9px] text-slate-400">Active + Pending + Renewed</div>
-                    </div>
-                    <div className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600">
-                      <ShieldCheck className="w-4 h-4" />
-                    </div>
-                  </div>
-                  <div className="my-2">
-                    <span className="text-2xl font-black text-slate-900">{summaryMetrics.activeCount}</span>
-                    <span className="text-xs text-slate-500 ml-1">total</span>
-                  </div>
-                  <div className="text-[11px] text-slate-500 space-y-0.5 pt-2 border-t border-slate-100">
-                    <div className="flex justify-between">
-                      <span>Active Amount:</span>
-                      <strong className="text-slate-800 font-mono">NPR {summaryMetrics.activeAmount.toLocaleString()}</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Active Premium:</span>
-                      <strong className="text-slate-800 font-mono">NPR {summaryMetrics.activePremium.toLocaleString()}</strong>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 3. UPCOMING MATURITY */}
-                <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs flex flex-col justify-between">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">UPCOMING MATURITY</div>
-                      <div className="text-[9px] text-slate-400">Next 30 days</div>
-                    </div>
-                    <div className="p-1.5 rounded-lg bg-amber-50 text-amber-600">
-                      <Bell className="w-4 h-4" />
-                    </div>
-                  </div>
-                  <div className="my-2">
-                    <span className="text-2xl font-black text-slate-900">{summaryMetrics.upcomingMaturityCount}</span>
-                    <span className="text-xs text-slate-500 ml-1">total</span>
-                  </div>
-                  <div className="text-[11px] text-slate-500 space-y-0.5 pt-2 border-t border-slate-100">
-                    <div className="flex justify-between">
-                      <span>Maturity Amount:</span>
-                      <strong className="text-slate-800 font-mono">NPR 0</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Premium Value:</span>
-                      <strong className="text-slate-800 font-mono">NPR 0</strong>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 4. PENDING RECORDS */}
-                <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs flex flex-col justify-between">
-                  <div className="flex justify-between items-start">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">PENDING RECORDS</span>
-                    <div className="p-1.5 rounded-lg bg-red-50 text-red-600">
-                      <Clock className="w-4 h-4" />
-                    </div>
-                  </div>
-                  <div className="my-2">
-                    <span className="text-2xl font-black text-slate-900">{summaryMetrics.pendingCount}</span>
-                    <span className="text-xs text-slate-500 ml-1">total</span>
-                  </div>
-                  <div className="text-[11px] text-slate-500 space-y-0.5 pt-2 border-t border-slate-100">
-                    <div className="flex justify-between">
-                      <span>Pending Amount:</span>
-                      <strong className="text-slate-800 font-mono">NPR 0</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Premium Due:</span>
-                      <strong className="text-slate-800 font-mono">NPR 0</strong>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 5. EXPIRED RECORDS */}
-                <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs flex flex-col justify-between">
-                  <div className="flex justify-between items-start">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">EXPIRED RECORDS</span>
-                    <div className="p-1.5 rounded-lg bg-red-50 text-red-600">
-                      <AlertCircle className="w-4 h-4" />
-                    </div>
-                  </div>
-                  <div className="my-2">
-                    <span className="text-2xl font-black text-slate-900">{summaryMetrics.expiredCount}</span>
-                    <span className="text-xs text-slate-500 ml-1">total</span>
-                  </div>
-                  <div className="text-[11px] text-slate-500 space-y-0.5 pt-2 border-t border-slate-100">
-                    <div className="flex justify-between">
-                      <span>Expired Amount:</span>
-                      <strong className="text-slate-800 font-mono">NPR {summaryMetrics.expiredAmount.toLocaleString()}</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Premium Value:</span>
-                      <strong className="text-slate-800 font-mono">NPR {summaryMetrics.expiredPremium.toLocaleString()}</strong>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 6. RENEWED RECORDS */}
-                <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs flex flex-col justify-between">
-                  <div className="flex justify-between items-start">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">RENEWED RECORDS</span>
-                    <div className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600">
-                      <RefreshCw className="w-4 h-4" />
-                    </div>
-                  </div>
-                  <div className="my-2">
-                    <span className="text-2xl font-black text-slate-900">{summaryMetrics.renewedCount}</span>
-                    <span className="text-xs text-slate-500 ml-1">total</span>
-                  </div>
-                  <div className="text-[11px] text-slate-500 space-y-0.5 pt-2 border-t border-slate-100">
-                    <div className="flex justify-between">
-                      <span>Renewed Amount:</span>
-                      <strong className="text-slate-800 font-mono">NPR {summaryMetrics.renewedAmount.toLocaleString()}</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Total Premium:</span>
-                      <strong className="text-slate-800 font-mono">NPR {summaryMetrics.renewedPremium.toLocaleString()}</strong>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 7. REJECTED RECORDS */}
-                <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs flex flex-col justify-between">
-                  <div className="flex justify-between items-start">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">REJECTED RECORDS</span>
-                    <div className="p-1.5 rounded-lg bg-blue-50 text-blue-600">
-                      <X className="w-4 h-4" />
-                    </div>
-                  </div>
-                  <div className="my-2">
-                    <span className="text-2xl font-black text-slate-900">{summaryMetrics.rejectedCount}</span>
-                    <span className="text-xs text-slate-500 ml-1">total</span>
-                  </div>
-                  <div className="text-[11px] text-slate-500 space-y-0.5 pt-2 border-t border-slate-100">
-                    <div className="flex justify-between">
-                      <span>Rejected Amount:</span>
-                      <strong className="text-slate-800 font-mono">NPR 0</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Lost Premium:</span>
-                      <strong className="text-slate-800 font-mono">NPR 0</strong>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 8. CLAIMS TRACKER */}
-                <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs flex flex-col justify-between">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">CLAIMS TRACKER</div>
-                      <div className="text-[9px] text-slate-400">Claims Tracker</div>
-                    </div>
-                    <div className="p-1.5 rounded-lg bg-blue-50 text-blue-600">
-                      <Heart className="w-4 h-4" />
-                    </div>
-                  </div>
-                  <div className="my-2">
-                    <span className="text-2xl font-black text-slate-900">{summaryMetrics.claimsTotal}</span>
-                    <span className="text-xs text-slate-500 ml-1">total</span>
-                  </div>
-                  <div className="text-[11px] text-slate-500 space-y-0.5 pt-2 border-t border-slate-100">
-                    <div className="flex justify-between">
-                      <span>In Process:</span>
-                      <strong className="text-slate-800 font-mono">{summaryMetrics.claimsInProcess}</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Settled:</span>
-                      <strong className="text-slate-800 font-mono">{summaryMetrics.claimsSettled}</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Rejected:</span>
-                      <strong className="text-slate-800 font-mono">{summaryMetrics.claimsRejected}</strong>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <h3 className="text-base font-bold text-slate-900">Insurance Access Restricted</h3>
+            <p className="text-xs text-slate-500">
+              Your role does not currently have view permission for any Insurance tabs. Contact Super Admin to enable permissions in Role Management.
+            </p>
           </div>
         )}
 
         {/* ======================================================== */}
+        {/* VIEW 1: DASHBOARD (Redesigned Cooperative Insurance Overview) */}
+        {/* ======================================================== */}
+        {activeMenu === 'dashboard' && canViewInsDashboard && (() => {
+          const totalForBar = Math.max(1, summaryMetrics.portfolioCount);
+          const activeOnlyCount = Math.max(0, summaryMetrics.activeCount - summaryMetrics.renewedCount);
+          const activePct = Math.round((summaryMetrics.activeCount / totalForBar) * 100);
+          const activeBarPct = (activeOnlyCount / totalForBar) * 100;
+          const renewedBarPct = (summaryMetrics.renewedCount / totalForBar) * 100;
+          const expiredBarPct = (summaryMetrics.expiredCount / totalForBar) * 100;
+          const closedBarPct = (summaryMetrics.closedCount / totalForBar) * 100;
+
+          const attentionRows = dashboardAttentionTab === 'expired'
+            ? expiredPolicies.slice(0, 6)
+            : summaryMetrics.upcomingMaturityRecords.slice(0, 6);
+
+          const getPolicyStatusDisplay = (r: LoanInsuranceRecord): { label: string; className: string } => {
+            const st = (r.status || '').toLowerCase();
+            if (st === 'closed' || st === 'settled' || st === 'deactivated') {
+              return { label: 'Closed', className: 'text-slate-500' };
+            }
+            if (st === 'rejected') {
+              return { label: 'Rejected', className: 'text-rose-700' };
+            }
+            if (st === 'expired' || (r.policyExpiryDate && new Date(r.policyExpiryDate) < new Date())) {
+              return { label: 'Expired', className: 'text-rose-600' };
+            }
+            if (st === 'renewed') {
+              return { label: 'Renewed', className: 'text-blue-700' };
+            }
+            return { label: 'Active', className: 'text-emerald-700' };
+          };
+
+          const getDaysRemainingLabel = (expiryDate?: string): string => {
+            if (!expiryDate) return '—';
+            const diffDays = Math.ceil((new Date(expiryDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+            if (diffDays < 0) return `${Math.abs(diffDays)}d overdue`;
+            if (diffDays === 0) return 'Today';
+            if (diffDays === 1) return 'Tomorrow';
+            return `In ${diffDays}d`;
+          };
+
+          return (
+            <div className="space-y-4">
+              {/* Top Overview Command Bar (Deep Cooperative Teal-Emerald Banner) */}
+              <div className="flex items-center justify-between gap-3 bg-gradient-to-r from-[#015e52] via-[#014f45] to-[#083c36] text-white px-5 py-3.5 rounded-xl border border-[#01483f] shadow-xs">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+                    <ShieldCheck className="w-4 h-4 text-emerald-200" />
+                  </div>
+                  <h2 className="text-base sm:text-lg font-bold tracking-tight text-white truncate">
+                    Loan Insurance Overview
+                  </h2>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => refreshData({ syncRemote: true })}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-white/15 hover:bg-white/25 border border-white/25 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-emerald-100" />
+                  <span>Refresh</span>
+                </button>
+              </div>
+
+              {/* Row 1: 4 Color-Coded Primary Portfolio KPIs */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+                {/* 1. Total Insured Portfolio (Blue Accent) */}
+                <button
+                  type="button"
+                  onClick={() => { if (canViewInsReport) { setReportFilter('all'); setActiveMenu('report'); } }}
+                  className={`bg-gradient-to-br from-blue-50 via-white to-indigo-50/40 p-4 rounded-xl border border-blue-200 hover:border-blue-300 text-left transition-all flex flex-col justify-between gap-3 shadow-2xs ${canViewInsReport ? 'cursor-pointer' : 'cursor-default'}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-blue-900/80">Total Insured Portfolio</span>
+                    <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                      <Database className="w-4 h-4" />
+                    </div>
+                  </div>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-2xl font-extrabold font-mono tabular-nums text-blue-950">
+                      {summaryMetrics.portfolioCount}
+                    </span>
+                    <span className="text-xs font-medium text-blue-700/80">policies</span>
+                  </div>
+                  <div className="pt-2.5 border-t border-blue-100 space-y-1 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-600">Sum Assured</span>
+                      <span className="font-mono tabular-nums font-bold text-slate-900">
+                        NPR {summaryMetrics.portfolioAmount.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-600">Total Premium</span>
+                      <span className="font-mono tabular-nums font-semibold text-blue-700">
+                        NPR {summaryMetrics.portfolioPremium.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                </button>
+
+                {/* 2. Active Coverage (Emerald Accent) */}
+                <button
+                  type="button"
+                  onClick={() => { if (canViewInsReport) { setReportFilter('active'); setActiveMenu('report'); } }}
+                  className={`bg-gradient-to-br from-emerald-50 via-white to-teal-50/40 p-4 rounded-xl border border-emerald-200 hover:border-emerald-300 text-left transition-all flex flex-col justify-between gap-3 shadow-2xs ${canViewInsReport ? 'cursor-pointer' : 'cursor-default'}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-emerald-900/80">Active Coverage</span>
+                    <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                      <ShieldCheck className="w-4 h-4" />
+                    </div>
+                  </div>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-2xl font-extrabold font-mono tabular-nums text-emerald-950">
+                      {summaryMetrics.activeCount}
+                    </span>
+                    <span className="text-xs font-semibold text-emerald-700 font-mono tabular-nums">
+                      {activePct}% active
+                    </span>
+                  </div>
+                  <div className="pt-2.5 border-t border-emerald-100 space-y-1 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-600">Active Amount</span>
+                      <span className="font-mono tabular-nums font-bold text-slate-900">
+                        NPR {summaryMetrics.activeAmount.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-600">Active Premium</span>
+                      <span className="font-mono tabular-nums font-semibold text-emerald-700">
+                        NPR {summaryMetrics.activePremium.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                </button>
+
+                {/* 3. Expired Policies (Rose Accent) */}
+                <button
+                  type="button"
+                  onClick={() => { if (canViewInsReport) { setReportFilter('expired'); setActiveMenu('report'); } }}
+                  className={`bg-gradient-to-br from-rose-50 via-white to-red-50/40 p-4 rounded-xl border border-rose-200 hover:border-rose-300 text-left transition-all flex flex-col justify-between gap-3 shadow-2xs ${canViewInsReport ? 'cursor-pointer' : 'cursor-default'}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-rose-900/80">Expired Policies</span>
+                    <div className="w-8 h-8 rounded-lg bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                      <AlertCircle className="w-4 h-4" />
+                    </div>
+                  </div>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-2xl font-extrabold font-mono tabular-nums text-rose-700">
+                      {summaryMetrics.expiredCount}
+                    </span>
+                    <span className="text-xs font-medium text-rose-700/80">
+                      {summaryMetrics.expiredCount > 0 ? 'needs renewal' : 'none overdue'}
+                    </span>
+                  </div>
+                  <div className="pt-2.5 border-t border-rose-100 space-y-1 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-600">Expired Amount</span>
+                      <span className="font-mono tabular-nums font-bold text-slate-900">
+                        NPR {summaryMetrics.expiredAmount.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-600">Premium Value</span>
+                      <span className="font-mono tabular-nums font-semibold text-rose-700">
+                        NPR {summaryMetrics.expiredPremium.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                </button>
+
+                {/* 4. Maturing in 30 Days (Amber Accent) */}
+                <button
+                  type="button"
+                  onClick={() => { if (canViewInsAlerts) { setAlertPeriod('month'); setActiveMenu('alerts'); } }}
+                  className={`bg-gradient-to-br from-amber-50 via-white to-orange-50/40 p-4 rounded-xl border border-amber-200 hover:border-amber-300 text-left transition-all flex flex-col justify-between gap-3 shadow-2xs ${canViewInsAlerts ? 'cursor-pointer' : 'cursor-default'}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-amber-900/80">Maturing in 30 Days</span>
+                    <div className="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                      <Bell className="w-4 h-4" />
+                    </div>
+                  </div>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-2xl font-extrabold font-mono tabular-nums text-amber-700">
+                      {summaryMetrics.upcomingMaturityCount}
+                    </span>
+                    <span className="text-xs font-medium text-amber-700/80">upcoming</span>
+                  </div>
+                  <div className="pt-2.5 border-t border-amber-100 space-y-1 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-600">Maturity Amount</span>
+                      <span className="font-mono tabular-nums font-bold text-slate-900">
+                        NPR {summaryMetrics.upcomingMaturityAmount.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-600">Premium Value</span>
+                      <span className="font-mono tabular-nums font-semibold text-amber-700">
+                        NPR {summaryMetrics.upcomingMaturityPremium.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                </button>
+              </div>
+
+              {/* Row 2: Portfolio Health Distribution & Operational Breakdown */}
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+                <div className="px-5 py-3 bg-gradient-to-r from-slate-50 via-white to-emerald-50/50 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <h3 className="text-sm font-bold text-slate-900">Portfolio Health & Lifecycle Status</h3>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-medium text-slate-600">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-xs bg-emerald-600 inline-block" aria-hidden="true" />
+                      Active (<span className="font-mono tabular-nums">{activeOnlyCount}</span>)
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-xs bg-blue-600 inline-block" aria-hidden="true" />
+                      Renewed (<span className="font-mono tabular-nums">{summaryMetrics.renewedCount}</span>)
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-xs bg-rose-500 inline-block" aria-hidden="true" />
+                      Expired (<span className="font-mono tabular-nums">{summaryMetrics.expiredCount}</span>)
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-xs bg-slate-400 inline-block" aria-hidden="true" />
+                      Closed (<span className="font-mono tabular-nums">{summaryMetrics.closedCount}</span>)
+                    </span>
+                  </div>
+                </div>
+
+                <div className="p-5 space-y-4">
+                  {/* Single Horizontal Stacked Progress Bar */}
+                  <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden flex">
+                    {activeBarPct > 0 && (
+                      <div
+                        style={{ width: `${activeBarPct}%` }}
+                        className="bg-emerald-600 h-full transition-all"
+                        title={`Active: ${activeOnlyCount}`}
+                      />
+                    )}
+                    {renewedBarPct > 0 && (
+                      <div
+                        style={{ width: `${renewedBarPct}%` }}
+                        className="bg-blue-600 h-full transition-all"
+                        title={`Renewed: ${summaryMetrics.renewedCount}`}
+                      />
+                    )}
+                    {expiredBarPct > 0 && (
+                      <div
+                        style={{ width: `${expiredBarPct}%` }}
+                        className="bg-rose-500 h-full transition-all"
+                        title={`Expired: ${summaryMetrics.expiredCount}`}
+                      />
+                    )}
+                    {closedBarPct > 0 && (
+                      <div
+                        style={{ width: `${closedBarPct}%` }}
+                        className="bg-slate-400 h-full transition-all"
+                        title={`Closed/Rejected: ${summaryMetrics.closedCount}`}
+                      />
+                    )}
+                  </div>
+
+                  {/* 5 Secondary Color-Tinted Operational Breakdown Metrics */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => { setReportFilter('first_policy'); setActiveMenu('report'); }}
+                      className="text-left cursor-pointer rounded-lg p-3 bg-indigo-50/60 hover:bg-indigo-50 border border-indigo-100 transition-colors"
+                    >
+                      <div className="text-xs font-semibold text-indigo-900/80">First Policies</div>
+                      <div className="text-lg font-extrabold font-mono tabular-nums text-indigo-950 mt-0.5">
+                        {summaryMetrics.firstPolicyCount}
+                      </div>
+                      <div className="text-[11px] text-indigo-700/80 mt-0.5">Initial enrollments</div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => { setReportFilter('renewal'); setActiveMenu('report'); }}
+                      className="text-left cursor-pointer rounded-lg p-3 bg-blue-50/60 hover:bg-blue-50 border border-blue-100 transition-colors"
+                    >
+                      <div className="text-xs font-semibold text-blue-900/80">Renewed Policies</div>
+                      <div className="text-lg font-extrabold font-mono tabular-nums text-blue-700 mt-0.5">
+                        {summaryMetrics.renewedCount}
+                      </div>
+                      <div className="text-[11px] text-blue-700/80 font-mono tabular-nums mt-0.5">
+                        NPR {summaryMetrics.renewedAmount.toLocaleString()}
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => { setReportFilter('premium'); setActiveMenu('report'); }}
+                      className="text-left cursor-pointer rounded-lg p-3 bg-amber-50/60 hover:bg-amber-50 border border-amber-100 transition-colors"
+                    >
+                      <div className="text-xs font-semibold text-amber-900/80">Premium Pending</div>
+                      <div className="text-lg font-extrabold font-mono tabular-nums text-amber-700 mt-0.5">
+                        {summaryMetrics.pendingCount}
+                      </div>
+                      <div className="text-[11px] text-amber-800/80 font-mono tabular-nums mt-0.5">
+                        NPR {summaryMetrics.pendingPremiumDue.toLocaleString()} due
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => { setReportFilter('closed'); setActiveMenu('report'); }}
+                      className="text-left cursor-pointer rounded-lg p-3 bg-slate-50 hover:bg-slate-100/80 border border-slate-200/80 transition-colors"
+                    >
+                      <div className="text-xs font-semibold text-slate-700">Closed / Rejected</div>
+                      <div className="text-lg font-extrabold font-mono tabular-nums text-slate-800 mt-0.5">
+                        {summaryMetrics.closedCount}
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        <span className="font-mono tabular-nums">{summaryMetrics.rejectedCount}</span> rejected · NPR{' '}
+                        <span className="font-mono tabular-nums">{summaryMetrics.closedAmount.toLocaleString()}</span>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => { setReportFilter('statement'); setActiveMenu('report'); }}
+                      className="text-left cursor-pointer rounded-lg p-3 bg-teal-50/60 hover:bg-teal-50 border border-teal-100 transition-colors col-span-2 sm:col-span-1"
+                    >
+                      <div className="text-xs font-semibold text-teal-900/80">Claims Tracker</div>
+                      <div className="text-lg font-extrabold font-mono tabular-nums text-teal-900 mt-0.5">
+                        {summaryMetrics.claimsTotal}
+                      </div>
+                      <div className="text-[11px] text-teal-800/80 mt-0.5">
+                        <span className="font-mono tabular-nums font-semibold text-amber-700">{summaryMetrics.claimsInProcess}</span> open ·{' '}
+                        <span className="font-mono tabular-nums font-semibold text-emerald-700">{summaryMetrics.claimsSettled}</span> settled
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Row 3: Action Queue (Expired / Upcoming) + Recent Policies */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+                {/* Left (7 cols): Renewal & Maturity Action Queue */}
+                <div className="lg:col-span-7 bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col shadow-2xs">
+                  <div className="px-5 py-3 bg-gradient-to-r from-rose-50/80 via-white to-amber-50/50 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-2.5">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <h3 className="text-sm font-bold text-slate-900">Renewal & Maturity Queue</h3>
+                      <div className="inline-flex items-center p-0.5 bg-white rounded-lg border border-slate-200">
+                        <button
+                          type="button"
+                          onClick={() => setDashboardAttentionTab('expired')}
+                          className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                            dashboardAttentionTab === 'expired'
+                              ? 'bg-rose-600 text-white shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Expired (<span className="font-mono tabular-nums">{expiredPolicies.length}</span>)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDashboardAttentionTab('upcoming')}
+                          className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                            dashboardAttentionTab === 'upcoming'
+                              ? 'bg-amber-500 text-white shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Next 30d (<span className="font-mono tabular-nums">{summaryMetrics.upcomingMaturityCount}</span>)
+                        </button>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (dashboardAttentionTab === 'expired') {
+                          setReportFilter('expired');
+                          setActiveMenu('report');
+                        } else {
+                          setAlertPeriod('month');
+                          setActiveMenu('alerts');
+                        }
+                      }}
+                      className="text-xs font-semibold text-[#015e52] hover:underline cursor-pointer inline-flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <span>View All</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {attentionRows.length === 0 ? (
+                    <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-10">
+                      <CheckCircle2 className="w-8 h-8 text-emerald-600 mb-2" />
+                      <div className="text-sm font-semibold text-slate-800">
+                        {dashboardAttentionTab === 'expired' ? 'No expired policies pending' : 'No maturities due in the next 30 days'}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { setReportFilter('all'); setActiveMenu('report'); }}
+                        className="mt-3 px-3.5 py-1.5 text-xs font-semibold text-slate-700 border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer"
+                      >
+                        Browse All Policies
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto flex-1">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-slate-800 text-slate-100 text-[11px] font-semibold">
+                            <th className="py-2.5 pl-5 pr-3">Assured Member</th>
+                            <th className="py-2.5 px-3 whitespace-nowrap">Expiry Date</th>
+                            <th className="py-2.5 px-3 text-right whitespace-nowrap">Sum Assured</th>
+                            <th className="py-2.5 px-3 whitespace-nowrap">Payment</th>
+                            <th className="py-2.5 pl-3 pr-5 text-right">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-xs">
+                          {attentionRows.map(r => {
+                            const payStatus = r.premiumPaymentStatus === 'Paid' ? 'Paid' : 'Due';
+                            return (
+                              <tr key={r.id} className="hover:bg-rose-50/30 transition-colors">
+                                <td className="py-2.5 pl-5 pr-3">
+                                  <div className="font-semibold text-slate-900 truncate max-w-[200px]">
+                                    {r.memberName || r.name}
+                                  </div>
+                                  <div className="text-[11px] text-slate-500 truncate max-w-[220px]">
+                                    {formatBranchLabel(r.branchId)} · {formatTermLabel(r)}
+                                    {r.policyNo ? ` · ${r.policyNo}` : ''}
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-3 whitespace-nowrap">
+                                  <div className="font-mono tabular-nums font-medium text-slate-800">
+                                    {r.policyExpiryDateBs || r.policyExpiryDate || '—'}
+                                  </div>
+                                  <div className={`text-[11px] font-semibold ${dashboardAttentionTab === 'expired' ? 'text-rose-600' : 'text-amber-700'}`}>
+                                    {getDaysRemainingLabel(r.policyExpiryDate)}
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-slate-900 whitespace-nowrap">
+                                  NPR {(r.loanAmount || 0).toLocaleString()}
+                                </td>
+                                <td className="py-2.5 px-3 whitespace-nowrap">
+                                  <span className={`text-[11px] font-semibold ${payStatus === 'Paid' ? 'text-emerald-700' : 'text-rose-600'}`}>
+                                    {payStatus}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 pl-3 pr-5 text-right whitespace-nowrap">
+                                  <div className="inline-flex items-center justify-end gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleViewPolicyDetails(r)}
+                                      title="View policy details"
+                                      className="p-1.5 text-slate-500 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
+                                    >
+                                      <Eye className="w-3.5 h-3.5" />
+                                    </button>
+                                    {canRenewFromDashboard && (
+                                      <button
+                                        type="button"
+                                        disabled={isDayEnded}
+                                        title={isDayEnded ? getDayEndedBlockMessage() : 'Renew or manage policy'}
+                                        onClick={() => handleOpenRenewalModal(r)}
+                                        className="px-2.5 py-1 text-[11px] font-semibold text-white bg-[#015e52] hover:bg-[#01473e] rounded-md transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                      >
+                                        Renew
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {/* Right (5 cols): Recent Policies */}
+                <div className="lg:col-span-5 bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col shadow-2xs">
+                  <div className="px-5 py-3 bg-gradient-to-r from-emerald-50/80 via-white to-teal-50/50 border-b border-slate-200/80 flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-bold text-slate-900">Recent Policies</h3>
+                    <button
+                      type="button"
+                      onClick={() => { setReportFilter('all'); setActiveMenu('report'); }}
+                      className="text-xs font-semibold text-[#015e52] hover:underline cursor-pointer inline-flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <span>View All</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {recentPolicies.length === 0 ? (
+                    <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-10">
+                      <FileText className="w-8 h-8 text-slate-300 mb-2" />
+                      <div className="text-sm font-semibold text-slate-800">No insurance policies yet</div>
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-100 flex-1">
+                      {recentPolicies.map(r => {
+                        const statusMeta = getPolicyStatusDisplay(r);
+                        const startDateText = r.policyStartDateBs || r.policyStartDate || '—';
+                        return (
+                          <button
+                            key={r.id}
+                            type="button"
+                            onClick={() => handleViewPolicyDetails(r)}
+                            className="w-full px-5 py-3 hover:bg-emerald-50/40 transition-colors flex items-center justify-between gap-3 text-left cursor-pointer"
+                          >
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold text-slate-900 truncate">
+                                {r.memberName || r.name}
+                              </div>
+                              <div className="text-[11px] text-slate-500 mt-0.5 truncate">
+                                {formatBranchLabel(r.branchId)} · <span className="font-mono tabular-nums">{startDateText}</span>
+                                {' · '}
+                                <span className={`font-semibold ${statusMeta.className}`}>{statusMeta.label}</span>
+                              </div>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <div className="text-xs font-bold font-mono tabular-nums text-blue-700">
+                                NPR {(r.loanAmount || 0).toLocaleString()}
+                              </div>
+                              <div className="text-[11px] font-mono tabular-nums text-emerald-700 mt-0.5">
+                                Prem. NPR {(r.premiumAmount || r.premium || 0).toLocaleString()}
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Row 4: Branch Portfolio Breakdown + Claims Desk */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+                {/* Left (8 cols): Branch-Wise Coverage Summary */}
+                <div className="lg:col-span-8 bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col shadow-2xs">
+                  <div className="px-5 py-3 bg-gradient-to-r from-blue-50/80 via-white to-emerald-50/50 border-b border-slate-200/80 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <h3 className="text-sm font-bold text-slate-900 truncate">Branch-Wise Coverage Summary</h3>
+                      {canSwitchInsBranchView && selectedBranchFilter !== 'ALL' && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedBranchFilter('ALL')}
+                          className="text-[11px] font-semibold text-blue-700 hover:underline cursor-pointer shrink-0"
+                        >
+                          Show All
+                        </button>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => exportToExcel(records)}
+                      disabled={records.length === 0}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#015e52] hover:bg-[#01473e] rounded-lg transition-colors cursor-pointer whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Export Excel</span>
+                    </button>
+                  </div>
+
+                  {summaryMetrics.branchBreakdown.length === 0 ? (
+                    <div className="px-6 py-8 text-center text-xs text-slate-500">
+                      Branch coverage totals will appear here once policies are recorded.
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto flex-1">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-[#015e52] text-white text-[11px] font-semibold">
+                            <th className="py-2.5 pl-5 pr-3">Branch</th>
+                            <th className="py-2.5 px-3 text-right">Policies</th>
+                            <th className="py-2.5 px-3 text-right">Active</th>
+                            <th className="py-2.5 px-3 text-right">Expired</th>
+                            <th className="py-2.5 px-3 text-right">Sum Assured</th>
+                            <th className="py-2.5 pl-3 pr-5 text-right">Premium</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-xs">
+                          {summaryMetrics.branchBreakdown.map(row => {
+                            const matchedBranchObj = findMatchingBranch(row.branchName, selectableInsBranches);
+                            const canDrillDown = canViewInsReport && (canSwitchInsBranchView ? Boolean(matchedBranchObj) : true);
+                            return (
+                              <tr
+                                key={row.branchName}
+                                onClick={() => {
+                                  if (!canDrillDown) return;
+                                  if (canSwitchInsBranchView && matchedBranchObj) {
+                                    setSelectedBranchFilter(matchedBranchObj.id);
+                                  }
+                                  setReportFilter('all');
+                                  setActiveMenu('report');
+                                }}
+                                title={canDrillDown ? `View ${row.branchName} policies in Report` : undefined}
+                                className={`hover:bg-blue-50/40 transition-colors ${canDrillDown ? 'cursor-pointer' : ''}`}
+                              >
+                                <td className="py-2.5 pl-5 pr-3 font-semibold text-slate-900 whitespace-nowrap">
+                                  {row.branchName}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-mono tabular-nums font-medium text-slate-700">
+                                  {row.total}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-emerald-700">
+                                  {row.active}
+                                </td>
+                                <td className={`py-2.5 px-3 text-right font-mono tabular-nums font-semibold ${row.expired > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
+                                  {row.expired}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-mono tabular-nums font-bold text-slate-900 whitespace-nowrap">
+                                  NPR {row.amount.toLocaleString()}
+                                </td>
+                                <td className="py-2.5 pl-3 pr-5 text-right font-mono tabular-nums font-semibold text-blue-700 whitespace-nowrap">
+                                  NPR {row.premium.toLocaleString()}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr className="border-t border-emerald-200 bg-emerald-50/80 text-xs font-bold text-slate-900">
+                            <td className="py-2.5 pl-5 pr-3 text-emerald-950">Total Portfolio</td>
+                            <td className="py-2.5 px-3 text-right font-mono tabular-nums">{summaryMetrics.portfolioCount}</td>
+                            <td className="py-2.5 px-3 text-right font-mono tabular-nums text-emerald-700">{summaryMetrics.activeCount}</td>
+                            <td className="py-2.5 px-3 text-right font-mono tabular-nums text-rose-600">{summaryMetrics.expiredCount}</td>
+                            <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap text-emerald-950">
+                              NPR {summaryMetrics.portfolioAmount.toLocaleString()}
+                            </td>
+                            <td className="py-2.5 pl-3 pr-5 text-right font-mono tabular-nums whitespace-nowrap text-blue-800">
+                              NPR {summaryMetrics.portfolioPremium.toLocaleString()}
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {/* Right (4 cols): Claims Desk */}
+                <div className="lg:col-span-4 bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col shadow-2xs">
+                  <div className="px-5 py-3 bg-gradient-to-r from-teal-50/80 via-white to-blue-50/50 border-b border-slate-200/80 flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-bold text-slate-900">Claims Desk</h3>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (canViewInsClaims) {
+                          setActiveMenu('claims');
+                        } else {
+                          setReportFilter('statement');
+                          setActiveMenu('report');
+                        }
+                      }}
+                      className="text-xs font-semibold text-[#015e52] hover:underline cursor-pointer whitespace-nowrap"
+                    >
+                      Manage Claims
+                    </button>
+                  </div>
+
+                  <div className="p-5 flex-1 flex flex-col justify-between gap-4">
+                    {/* 3-Column Color-Tinted Claims Stats */}
+                    <div className="grid grid-cols-3 gap-2.5">
+                      <div className="rounded-lg bg-amber-50/80 border border-amber-100 p-3">
+                        <div className="text-[11px] font-semibold text-amber-800">In Process</div>
+                        <div className="text-xl font-extrabold font-mono tabular-nums text-amber-700 mt-1">
+                          {summaryMetrics.claimsInProcess}
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-emerald-50/80 border border-emerald-100 p-3">
+                        <div className="text-[11px] font-semibold text-emerald-800">Settled</div>
+                        <div className="text-xl font-extrabold font-mono tabular-nums text-emerald-700 mt-1">
+                          {summaryMetrics.claimsSettled}
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-rose-50/80 border border-rose-100 p-3">
+                        <div className="text-[11px] font-semibold text-rose-800">Rejected</div>
+                        <div className="text-xl font-extrabold font-mono tabular-nums text-rose-700 mt-1">
+                          {summaryMetrics.claimsRejected}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Total Claim Disbursed Highlight */}
+                    <div className="rounded-xl bg-gradient-to-r from-emerald-50 to-teal-50/80 border border-emerald-200 px-4 py-3.5 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-[11px] font-semibold text-emerald-800">Total Claim Disbursed</div>
+                        <div className="text-base font-extrabold font-mono tabular-nums text-emerald-950 mt-0.5">
+                          NPR {summaryMetrics.totalClaimDisbursed.toLocaleString()}
+                        </div>
+                      </div>
+                      <div className="w-9 h-9 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                        <Heart className="w-4 h-4" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ======================================================== */}
         {/* VIEW 2: UPLOAD POLICY (Clean upload without initial form or banners) */}
         {/* ======================================================== */}
-        {activeMenu === 'upload' && (
+        {activeMenu === 'upload' && canViewInsUpload && (
           <div className="max-w-4xl mx-auto space-y-6">
+            {!canEditInsUpload ? (
+              <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-xs space-y-2">
+                <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-500 flex items-center justify-center mx-auto">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <h3 className="text-base font-bold text-slate-900">View-Only Access</h3>
+                <p className="text-xs text-slate-500">
+                  Your role has View access only for Policy Upload. Edit permission is required to upload or enroll new policies.
+                </p>
+              </div>
+            ) : (
+            <>
             {/* Hidden Direct File Inputs for Upload */}
             <input
               ref={quickUploadInputRef}
@@ -2437,18 +3749,20 @@ export const LoanInsuranceManagement: React.FC = () => {
                 {renderPolicyFormCard(false)}
               </div>
             )}
+            </>
+            )}
           </div>
         )}
 
         {/* ======================================================== */}
-        {/* VIEW 3: REPORT (Exact Match to Image 3: image_4f57aee9.png) */}
+        {/* VIEW 3: REPORT (Branch-Wise & Permission-Aware) */}
         {/* ======================================================== */}
-        {activeMenu === 'report' && (
+        {activeMenu === 'report' && canViewInsReport && (
           <div className="space-y-2">
             {/* Top Filter Badges (Compact horizontal scrollable pill buttons) */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 text-xs">
               <button
-                onClick={() => setReportFilter('all')}
+                onClick={() => handleSelectReportFilter('all')}
                 className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                   reportFilter === 'all'
                     ? 'bg-[#025e40] text-white shadow-xs'
@@ -2463,7 +3777,7 @@ export const LoanInsuranceManagement: React.FC = () => {
               </button>
 
               <button
-                onClick={() => setReportFilter('active')}
+                onClick={() => handleSelectReportFilter('active')}
                 className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                   reportFilter === 'active'
                     ? 'bg-[#025e40] text-white shadow-xs'
@@ -2478,7 +3792,7 @@ export const LoanInsuranceManagement: React.FC = () => {
               </button>
 
               <button
-                onClick={() => setReportFilter('first_policy')}
+                onClick={() => handleSelectReportFilter('first_policy')}
                 className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                   reportFilter === 'first_policy'
                     ? 'bg-[#025e40] text-white shadow-xs'
@@ -2493,7 +3807,7 @@ export const LoanInsuranceManagement: React.FC = () => {
               </button>
 
               <button
-                onClick={() => setReportFilter('closed')}
+                onClick={() => handleSelectReportFilter('closed')}
                 className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                   reportFilter === 'closed'
                     ? 'bg-[#025e40] text-white shadow-xs'
@@ -2508,7 +3822,7 @@ export const LoanInsuranceManagement: React.FC = () => {
               </button>
 
               <button
-                onClick={() => setReportFilter('expired')}
+                onClick={() => handleSelectReportFilter('expired')}
                 className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                   reportFilter === 'expired'
                     ? 'bg-[#025e40] text-white shadow-xs'
@@ -2523,7 +3837,7 @@ export const LoanInsuranceManagement: React.FC = () => {
               </button>
 
               <button
-                onClick={() => setReportFilter('renewal')}
+                onClick={() => handleSelectReportFilter('renewal')}
                 className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                   reportFilter === 'renewal'
                     ? 'bg-[#025e40] text-white shadow-xs'
@@ -2538,7 +3852,7 @@ export const LoanInsuranceManagement: React.FC = () => {
               </button>
 
               <button
-                onClick={() => setReportFilter('premium')}
+                onClick={() => handleSelectReportFilter('premium')}
                 className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                   reportFilter === 'premium'
                     ? 'bg-[#025e40] text-white shadow-xs'
@@ -2553,7 +3867,7 @@ export const LoanInsuranceManagement: React.FC = () => {
               </button>
 
               <button
-                onClick={() => setReportFilter('statement')}
+                onClick={() => handleSelectReportFilter('statement')}
                 className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                   reportFilter === 'statement'
                     ? 'bg-[#025e40] text-white shadow-xs'
@@ -2562,15 +3876,52 @@ export const LoanInsuranceManagement: React.FC = () => {
               >
                 <FileSpreadsheet className="w-3.5 h-3.5" />
                 <span>Statement</span>
-                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-100 text-slate-700">0</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${reportFilter === 'statement' ? 'bg-[#014730] text-white' : 'bg-slate-100 text-slate-700'}`}>
+                  {summaryMetrics.statementCount}
+                </span>
               </button>
             </div>
 
-            {/* Sub-header with Search and Export to Excel (Compact height) */}
-            <div className="bg-white rounded-xl border border-slate-200 px-3.5 py-1.5 shadow-2xs flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2.5">
-              <div className="flex items-center gap-3 flex-1">
-                <h3 className="text-xs font-bold text-slate-900 shrink-0">All Policies</h3>
-                <div className="relative flex-1 max-w-sm">
+            {/* Sub-header with Branch-Wise Filter, Search, and Export to Excel */}
+            <div className="bg-white rounded-xl border border-slate-200 px-3.5 py-2 shadow-2xs flex flex-col md:flex-row justify-between items-stretch md:items-center gap-2.5">
+              <div className="flex flex-wrap items-center gap-2.5 flex-1">
+                <h3 className="text-xs font-bold text-slate-900 shrink-0">
+                  {effectiveInsBranchKeys.length === 1
+                    ? `${formatBranchLabel(effectiveInsBranchKeys[0])} Policies`
+                    : 'All Policies'}
+                </h3>
+
+                {/* Branch-Wise Filter Control */}
+                {canSwitchInsBranchView ? (
+                  <div className="flex items-center gap-1.5 bg-emerald-50/70 border border-emerald-200 rounded-lg px-2.5 py-1 shrink-0">
+                    <Building2 className="w-3.5 h-3.5 text-[#015e52] shrink-0" />
+                    <span className="text-[10px] font-bold uppercase text-emerald-900/80 hidden sm:inline">Branch:</span>
+                    <select
+                      aria-label="Filter Report by Branch"
+                      value={selectedBranchFilter}
+                      onChange={e => setSelectedBranchFilter(e.target.value)}
+                      className="bg-transparent text-xs font-bold text-slate-900 focus:outline-none cursor-pointer"
+                    >
+                      <option value="ALL">
+                        {hasAllInsBranchesAccess
+                          ? 'All Branches'
+                          : `All Allowed (${selectableInsBranches.length})`}
+                      </option>
+                      {selectableInsBranches.map(b => (
+                        <option key={b.id} value={b.id}>
+                          {formatBranchLabel(b.id)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-200 text-slate-700 text-[11px] font-bold shrink-0">
+                    <Building2 className="w-3 h-3 text-[#015e52]" />
+                    <span>{formatBranchLabel(loggedInBranchObj?.id || branch?.id)}</span>
+                  </div>
+                )}
+
+                <div className="relative flex-1 min-w-[200px] max-w-sm">
                   <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
                     type="text"
@@ -2583,22 +3934,23 @@ export const LoanInsuranceManagement: React.FC = () => {
               </div>
 
               <button
+                type="button"
                 onClick={() => exportToExcel(filteredReportRecords)}
-                className="px-3.5 py-1 bg-[#1d4ed8] hover:bg-[#1e40af] text-white rounded-lg text-xs font-bold shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors shrink-0"
+                className="px-3.5 py-1.5 bg-[#1d4ed8] hover:bg-[#1e40af] text-white rounded-lg text-xs font-bold shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors shrink-0"
               >
                 <Download className="w-3 h-3" />
                 <span>Export to Excel</span>
               </button>
             </div>
 
-            {/* Table matching Image 3 */}
-            {/* Table matching Image 3 with whitespace-nowrap (No Text Wrapping) */}
+            {/* Table with Branch Column & whitespace-nowrap */}
             <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-x-auto">
-              <table className="w-full min-w-[1150px] text-left text-xs text-slate-600">
+              <table className="w-full min-w-[1220px] text-left text-xs text-slate-600">
                 <thead className="bg-slate-50/80 text-slate-500 font-bold text-[10px] uppercase tracking-wider border-b border-slate-200">
                   <tr>
                     <th className="px-4 py-3 whitespace-nowrap">S.N.</th>
                     <th className="px-4 py-3 whitespace-nowrap">POLICY HOLDER</th>
+                    <th className="px-4 py-3 whitespace-nowrap">BRANCH</th>
                     <th className="px-4 py-3 whitespace-nowrap">CITIZENSHIP NO</th>
                     <th className="px-4 py-3 whitespace-nowrap">DOB</th>
                     <th className="px-4 py-3 whitespace-nowrap">POLICY AMOUNT</th>
@@ -2613,20 +3965,53 @@ export const LoanInsuranceManagement: React.FC = () => {
                 <tbody className="divide-y divide-slate-100">
                   {filteredReportRecords.length === 0 ? (
                     <tr>
-                      <td colSpan={11} className="px-4 py-12 text-center text-slate-400 whitespace-nowrap">
+                      <td colSpan={12} className="px-4 py-12 text-center text-slate-400 whitespace-nowrap">
                         No policies match the selected filter.
                       </td>
                     </tr>
                   ) : (
                     filteredReportRecords.map((r, i) => {
                       const initialLetter = (r.memberName || r.name || 'S').charAt(0).toUpperCase();
-                      const isClosed = r.status === 'Closed' || r.status === 'closed' || r.status === 'Settled' || r.status === 'deactivated' || r.status === 'Deactivated';
-                      const isRejected = r.status === 'rejected' || r.status === 'Rejected';
-                      const isExpired = !isClosed && (r.status === 'Expired' || r.status === 'expired' || (r.policyExpiryDate && new Date(r.policyExpiryDate) < new Date()));
+                      const rawStatusLower = (r.status || '').toLowerCase();
+                      const isHiddenClosed = Boolean(r.hiddenReportTabs?.includes('closed'));
+                      const isRejected = !isHiddenClosed && rawStatusLower === 'rejected';
+                      const isClosed =
+                        !isHiddenClosed &&
+                        (r.recordKind === 'closed' || rawStatusLower === 'closed' || rawStatusLower === 'deactivated');
+                      const isExpired =
+                        !isClosed &&
+                        !isRejected &&
+                        (rawStatusLower === 'expired' || Boolean(r.policyExpiryDate && new Date(r.policyExpiryDate) < new Date()));
+                      const showRenewedBadge =
+                        reportFilter === 'renewal' &&
+                        !isExpired &&
+                        !isClosed &&
+                        !isRejected &&
+                        (r.recordKind === 'renewal' || rawStatusLower === 'renewed');
+
+                      const statusLabel = isRejected
+                        ? 'REJECTED'
+                        : isClosed
+                          ? 'CLOSED'
+                          : isExpired
+                            ? 'EXPIRED'
+                            : showRenewedBadge
+                              ? 'RENEWED'
+                              : 'ACTIVE';
+
+                      const statusClass = isExpired
+                        ? 'bg-red-50 text-red-700 border border-red-200'
+                        : showRenewedBadge
+                          ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                          : isRejected
+                            ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                            : isClosed
+                              ? 'bg-slate-100 text-slate-700 border border-slate-300'
+                              : 'bg-emerald-50 text-emerald-700 border border-emerald-200';
 
                       return (
                         <tr key={r.id} className="hover:bg-slate-50 transition-colors">
-                          <td className="px-4 py-3 font-semibold text-slate-500 whitespace-nowrap">{r.sn || i + 1}</td>
+                          <td className="px-4 py-3 font-semibold text-slate-500 whitespace-nowrap">{i + 1}</td>
                           <td className="px-4 py-3 whitespace-nowrap">
                             <div className="flex items-center gap-2.5">
                               <div className="w-7 h-7 rounded-full bg-slate-100 text-slate-700 font-bold flex items-center justify-center text-xs shrink-0">
@@ -2636,6 +4021,11 @@ export const LoanInsuranceManagement: React.FC = () => {
                                 <div className="font-bold text-slate-900 text-xs whitespace-nowrap">{r.memberName || r.name}</div>
                               </div>
                             </div>
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            <span className="inline-block px-2 py-0.5 rounded-md bg-teal-50 text-teal-900 border border-teal-100 text-[10px] font-bold">
+                              {formatBranchLabel(r.branchId)}
+                            </span>
                           </td>
                           <td className="px-4 py-3 font-mono text-slate-600 text-xs whitespace-nowrap">{r.citizenshipNo || 'N/A'}</td>
                           <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{r.dateOfBirth || 'N/A'}</td>
@@ -2653,18 +4043,8 @@ export const LoanInsuranceManagement: React.FC = () => {
                             </div>
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap">
-                            <span className={`inline-block px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider whitespace-nowrap ${
-                              isExpired 
-                                ? 'bg-red-50 text-red-700 border border-red-200' 
-                                : r.status === 'renewed'
-                                ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                                : isRejected
-                                ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                                : isClosed
-                                ? 'bg-slate-100 text-slate-700 border border-slate-300'
-                                : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            }`}>
-                              {isExpired ? 'EXPIRED' : isRejected ? 'REJECTED' : isClosed ? 'CLOSED' : (r.status === 'start_policy' ? 'ACTIVE' : r.status.toUpperCase())}
+                            <span className={`inline-block px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider whitespace-nowrap ${statusClass}`}>
+                              {statusLabel}
                             </span>
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap">
@@ -2693,16 +4073,18 @@ export const LoanInsuranceManagement: React.FC = () => {
                           </td>
                           <td className="px-4 py-3 text-right whitespace-nowrap">
                             <div className="flex items-center justify-end gap-1 text-slate-400 whitespace-nowrap">
-                              {/* 'P' Premium & Dues Management Button */}
-                              <button
-                                type="button"
-                                disabled={isDayEnded}
-                                onClick={() => handleOpenPremiumModal(r)}
-                                className="w-5 h-5 rounded bg-amber-500 hover:bg-amber-600 text-white font-black text-[10px] flex items-center justify-center shadow-2xs cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                                title={isDayEnded ? getDayEndedBlockMessage() : 'Manage Premium & Dues (P)'}
-                              >
-                                P
-                              </button>
+                              {/* 'P' Premium & Dues Management Button: only in Premium sub-menu for records not yet updated */}
+                              {canEditInsReport && reportFilter === 'premium' && !r.isPremiumSaved && (
+                                <button
+                                  type="button"
+                                  disabled={isDayEnded}
+                                  onClick={() => handleOpenPremiumModal(r)}
+                                  className="w-5 h-5 rounded bg-amber-500 hover:bg-amber-600 text-white font-black text-[10px] flex items-center justify-center shadow-2xs cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                  title={isDayEnded ? getDayEndedBlockMessage() : 'Manage Premium & Dues (P)'}
+                                >
+                                  P
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => handleViewPolicyDetails(r)}
@@ -2719,18 +4101,20 @@ export const LoanInsuranceManagement: React.FC = () => {
                               >
                                 <Download className="w-3.5 h-3.5" />
                               </button>
-                              <button
-                                type="button"
-                                disabled={isDayEnded}
-                                onClick={() => handleOpenEditPolicy(r)}
-                                className="p-1 hover:text-blue-600 rounded cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                                title={isDayEnded ? getDayEndedBlockMessage() : 'Edit Policy'}
-                              >
-                                <Edit3 className="w-3.5 h-3.5" />
-                              </button>
+                              {canEditInsReport && (
+                                <button
+                                  type="button"
+                                  disabled={isDayEnded}
+                                  onClick={() => handleOpenEditPolicy(r)}
+                                  className="p-1 hover:text-blue-600 rounded cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                  title={isDayEnded ? getDayEndedBlockMessage() : 'Edit Policy'}
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
 
                               {/* Renew Policy: never shown in 'all', only in 'expired' or 'renewal' */}
-                              {reportFilter !== 'all' && (reportFilter === 'expired' || reportFilter === 'renewal') && (
+                              {canEditInsReport && reportFilter !== 'all' && (reportFilter === 'expired' || reportFilter === 'renewal') && (
                                 <button
                                   type="button"
                                   disabled={isDayEnded}
@@ -2743,7 +4127,7 @@ export const LoanInsuranceManagement: React.FC = () => {
                               )}
 
                               {/* Deactivate Policy: only shown in 'expired' tab; opens remark modal to move to Closed */}
-                              {reportFilter === 'expired' && (
+                              {canEditInsReport && reportFilter === 'expired' && (
                                 <button
                                   type="button"
                                   disabled={isDayEnded}
@@ -2755,15 +4139,25 @@ export const LoanInsuranceManagement: React.FC = () => {
                                 </button>
                               )}
 
-                              <button
-                                type="button"
-                                disabled={isDayEnded}
-                                onClick={() => handleDeletePolicy(r.id)}
-                                className="p-1 hover:text-red-600 rounded cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                                title={isDayEnded ? getDayEndedBlockMessage() : 'Delete Policy'}
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                              {canDeletePolicy && (
+                                <button
+                                  type="button"
+                                  disabled={isDayEnded}
+                                  onClick={() => handleDeletePolicy(r.id)}
+                                  className="p-1 hover:text-red-600 rounded cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                  title={
+                                    isDayEnded
+                                      ? getDayEndedBlockMessage()
+                                      : reportFilter === 'all' || reportFilter === 'active' || reportFilter === 'first_policy'
+                                        ? 'Permanently Delete Policy'
+                                        : reportFilter === 'renewal'
+                                          ? 'Remove from Renewal & Statement'
+                                          : 'Remove from this menu only'
+                                  }
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -2777,9 +4171,9 @@ export const LoanInsuranceManagement: React.FC = () => {
         )}
 
         {/* ======================================================== */}
-        {/* VIEW 4: MATURITY ALERTS (Exact Match to Image 4: image_4ef379c4.png) */}
+        {/* VIEW 4: MATURITY ALERTS (Branch-Wise & Permission-Aware) */}
         {/* ======================================================== */}
-        {activeMenu === 'alerts' && (
+        {activeMenu === 'alerts' && canViewInsAlerts && (
           <div className="space-y-3 max-w-5xl mx-auto">
             {/* Header with Title and Filter pills */}
             <div className="bg-white rounded-xl border border-slate-200 px-4 py-2.5 shadow-2xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2.5">
@@ -2851,6 +4245,7 @@ export const LoanInsuranceManagement: React.FC = () => {
                     <tr>
                       <th className="p-3.5">Policy No</th>
                       <th className="p-3.5">Member Name</th>
+                      <th className="p-3.5">Branch</th>
                       <th className="p-3.5">Loan Amount</th>
                       <th className="p-3.5">Maturity Date</th>
                       <th className="p-3.5 text-right">Actions</th>
@@ -2861,18 +4256,35 @@ export const LoanInsuranceManagement: React.FC = () => {
                       <tr key={r.id} className="hover:bg-slate-50">
                         <td className="p-3.5 font-mono font-bold text-slate-900">{r.policyNo}</td>
                         <td className="p-3.5 font-bold text-slate-800">{r.memberName || r.name}</td>
+                        <td className="p-3.5">
+                          <span className="inline-block px-2 py-0.5 rounded-md bg-teal-50 text-teal-900 border border-teal-100 text-[10px] font-bold">
+                            {formatBranchLabel(r.branchId)}
+                          </span>
+                        </td>
                         <td className="p-3.5 font-mono">NPR {(r.loanAmount || 0).toLocaleString()}</td>
                         <td className="p-3.5 text-red-600 font-bold">{r.policyExpiryDate}</td>
                         <td className="p-3.5 text-right">
-                          <button
-                            type="button"
-                            disabled={isDayEnded}
-                            title={isDayEnded ? getDayEndedBlockMessage() : 'Renew Policy'}
-                            onClick={() => handleOpenRenewalModal(r)}
-                            className="px-3 py-1 bg-[#025e40] text-white rounded-lg text-xs font-bold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            Renew Policy
-                          </button>
+                          <div className="inline-flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleViewPolicyDetails(r)}
+                              title="View policy details"
+                              className="p-1.5 text-slate-500 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+                            {canRenewFromAlerts && (
+                              <button
+                                type="button"
+                                disabled={isDayEnded}
+                                title={isDayEnded ? getDayEndedBlockMessage() : 'Renew Policy'}
+                                onClick={() => handleOpenRenewalModal(r)}
+                                className="px-3 py-1 bg-[#025e40] text-white rounded-lg text-xs font-bold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                Renew Policy
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -2884,137 +4296,33 @@ export const LoanInsuranceManagement: React.FC = () => {
         )}
 
         {/* ======================================================== */}
-        {/* VIEW 5: CLAIMS TRACKER */}
+        {/* VIEW 5: LOAN INSURANCE NOTICE, RATE CHART & GUIDELINES   */}
         {/* ======================================================== */}
-        {activeMenu === 'claims' && (
-          <div className="space-y-5">
-            <div className="flex justify-between items-center">
-              <div>
-                <h2 className="text-base font-extrabold text-slate-900">Credit Protection Claims Lifecycle</h2>
-                <p className="text-xs text-slate-500">6-Stage End-to-End Tracking: Submission → Verification → Evaluation → Approval → Payout → Settlement.</p>
-              </div>
-              <button
-                type="button"
-                disabled={isDayEnded}
-                title={isDayEnded ? getDayEndedBlockMessage() : 'Register New Claim'}
-                onClick={() => {
-                  setEditingClaim(null);
-                  setClaimForm(initialClaimForm);
-                  setIsClaimModalOpen(true);
-                }}
-                className="px-4 py-2 bg-[#C8102E] hover:bg-[#a50b23] text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Register New Claim</span>
-              </button>
-            </div>
+        {activeMenu === 'notice' && canViewInsNotice && (
+          <InsuranceNoticePanel
+            canEdit={canEditInsNotice}
+            canDelete={canDeleteInsNotice}
+            isDayEnded={isDayEnded}
+            currentUserName={user?.fullName || user?.username || 'Admin'}
+          />
+        )}
 
-            <div className="space-y-4">
-              {claims.length === 0 ? (
-                <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center text-slate-400">
-                  <Heart className="w-10 h-10 mx-auto text-slate-300 mb-2" />
-                  <p className="font-bold text-slate-600">No active claims on record</p>
-                </div>
-              ) : (
-                claims.map(claim => {
-                  const stages: ClaimLifecycleStage[] = [
-                    'Claim Submission',
-                    'Document Verification',
-                    'Evaluation',
-                    'Admin Approval',
-                    'Payout Disbursement',
-                    'Settlement Receipt'
-                  ];
-                  const currentStageIndex = stages.indexOf(claim.lifecycleStage || 'Claim Submission');
-
-                  return (
-                    <div key={claim.id} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs">
-                      <div className="flex flex-wrap justify-between items-center pb-3 border-b border-slate-100 gap-3">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono font-bold text-slate-900 text-sm">{claim.claimNo}</span>
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800">
-                              {claim.status}
-                            </span>
-                          </div>
-                          <div className="font-bold text-slate-800 text-xs mt-0.5">{claim.memberName} ({claim.policyNo})</div>
-                        </div>
-
-                        <div>
-                          <div className="text-[10px] text-slate-400 uppercase">Cause</div>
-                          <div className="font-bold text-red-600 text-xs">{claim.claimCause}</div>
-                        </div>
-
-                        <div>
-                          <div className="text-[10px] text-slate-400 uppercase">Claim Amount</div>
-                          <div className="font-mono font-bold text-slate-900 text-xs">
-                            NPR {claim.claimAmountRequested.toLocaleString()}
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          {currentStageIndex < stages.length - 1 && (
-                            <button
-                              type="button"
-                              disabled={isDayEnded}
-                              title={isDayEnded ? getDayEndedBlockMessage() : undefined}
-                              onClick={() => handleAdvanceClaimLifecycle(claim)}
-                              className="px-3 py-1.5 bg-[#025e40] hover:bg-[#014730] text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                              <span>Next: {stages[currentStageIndex + 1]}</span>
-                              <ArrowRight className="w-3 h-3" />
-                            </button>
-                          )}
-                          {claim.lifecycleStage === 'Settlement Receipt' && (
-                            <button
-                              type="button"
-                              onClick={() => handleViewSettlementReceipt(claim)}
-                              className="px-3 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
-                            >
-                              <Printer className="w-3 h-3" />
-                              <span>Voucher</span>
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            disabled={isDayEnded}
-                            title={isDayEnded ? getDayEndedBlockMessage() : 'Edit Claim'}
-                            onClick={() => handleOpenEditClaim(claim)}
-                            className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                          >
-                            Edit
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* 6-Stage Visual Stepper */}
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mt-4">
-                        {stages.map((stage, idx) => {
-                          const isDone = idx < currentStageIndex;
-                          const isCurrent = idx === currentStageIndex;
-
-                          return (
-                            <div 
-                              key={stage}
-                              className={`p-2 rounded-xl border text-center text-[10px] font-bold ${
-                                isDone 
-                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
-                                  : isCurrent
-                                  ? 'bg-red-50 border-red-500 text-red-700 ring-2 ring-red-100'
-                                  : 'bg-slate-50 border-slate-200 text-slate-400'
-                              }`}
-                            >
-                              {stage}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
+        {/* ======================================================== */}
+        {/* VIEW 6: CLAIMS MANAGEMENT & SETTLEMENT                   */}
+        {/* ======================================================== */}
+        {activeMenu === 'claims' && canViewInsClaims && (
+          <InsuranceClaimsPanel
+            claims={claims}
+            policies={records}
+            formatBranchLabel={formatBranchLabel}
+            resolveAllowedBranchForSave={resolveAllowedBranchForSave}
+            canEdit={canEditInsClaims}
+            canDelete={canDeleteInsClaims}
+            isDayEnded={isDayEnded}
+            currentUserName={user?.fullName || user?.username || 'Admin'}
+            onDataChanged={() => refreshData()}
+            onPrintSettlementVoucher={handleViewSettlementReceipt}
+          />
         )}
 
         {/* ======================================================== */}
@@ -3871,26 +5179,261 @@ export const LoanInsuranceManagement: React.FC = () => {
         </div>
       )}
 
-      {/* Insurance Records & History Modal - Exact Match to image_fe26df2f.png */}
-      {isHistoryViewModalOpen && viewingPolicy && (
-        <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-xs flex justify-center items-start pt-16 sm:pt-20 pb-12 px-3 sm:px-6 overflow-y-auto">
-          <div className="bg-[#0b5cab] rounded-3xl max-w-5xl w-full shadow-2xl border border-blue-400/40 my-2 overflow-hidden">
-            {/* Modal Top Header Bar */}
-            <div className="px-6 pt-5 pb-4 flex justify-between items-center text-white">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-white/10 text-amber-300">
-                  <FileText className="w-5 h-5" />
+      {/* Full-Page Insurance Policy View & Shortcut Member KYC */}
+      {isHistoryViewModalOpen && viewingPolicy && (() => {
+        const resolvedPhoto = viewingPolicy.memberPhoto || matchedKycMfMember?.photoUrl || '';
+        const resolvedName = viewingPolicy.memberName || viewingPolicy.name || 'Member';
+        const resolvedMemberId = viewingPolicy.memberId || matchedKycMfMember?.memberId || 'N/A';
+        const resolvedCitizenship = viewingPolicy.citizenshipNo || matchedKycMfMember?.citizenshipNo || 'N/A';
+        const resolvedContact = viewingPolicy.contactNumber || matchedKycMfMember?.phone || '—';
+        const resolvedAddress = viewingPolicy.address || matchedKycMfMember?.address || '—';
+        const resolvedGender = viewingPolicy.gender || matchedKycMfMember?.gender || '—';
+        const resolvedBranch = formatBranchLabel(viewingPolicy.branchId);
+        const resolvedDobBs = viewingPolicy.dateOfBirthBs || convertAdToBs(viewingPolicy.dateOfBirth || '') || '—';
+        const resolvedStartBs = viewingPolicy.policyStartDateBs || convertAdToBs(viewingPolicy.policyStartDate) || viewingPolicy.policyStartDate || '—';
+        const resolvedExpiryBs = viewingPolicy.policyExpiryDateBs || convertAdToBs(viewingPolicy.policyExpiryDate) || viewingPolicy.policyExpiryDate || '—';
+        const resolvedSumAssured = viewingPolicy.sumAssured || viewingPolicy.loanAmount || 0;
+        const resolvedLoanAmount = viewingPolicy.loanAmount || resolvedSumAssured;
+        const resolvedPremium = viewingPolicy.premiumAmount || viewingPolicy.premium || 0;
+        const isPremiumPaid = viewingPolicy.premiumPaymentStatus === 'Paid';
+        const resolvedStatus = (() => {
+          const stLower = (viewingPolicy.status || '').toLowerCase();
+          const hiddenClosed = Boolean(viewingPolicy.hiddenReportTabs?.includes('closed'));
+          if (!hiddenClosed && stLower === 'rejected') return 'Rejected';
+          if (!hiddenClosed && (viewingPolicy.recordKind === 'closed' || stLower === 'closed' || stLower === 'deactivated')) {
+            return 'Closed';
+          }
+          if (stLower === 'expired' || (viewingPolicy.policyExpiryDate && new Date(viewingPolicy.policyExpiryDate) < new Date())) {
+            return 'Expired';
+          }
+          if (viewingPolicy.recordKind === 'renewal' || (stLower === 'renewed' && reportFilter === 'renewal')) {
+            return 'Renewed';
+          }
+          return 'Active';
+        })();
+        const canUploadKycPhoto = (canEditInsReport || canEditInsUpload) && !isDayEnded;
+
+        const daysRemaining = (() => {
+          if (!viewingPolicy.policyExpiryDate) return null;
+          const exp = new Date(viewingPolicy.policyExpiryDate);
+          if (Number.isNaN(exp.getTime())) return null;
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          exp.setHours(0, 0, 0, 0);
+          return Math.ceil((exp.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        })();
+
+        const normKey = (val?: string) => (val || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+        const targetCitKey = normKey(viewingPolicy.citizenshipNo);
+        const targetNameKey = resolvedName.trim().toLowerCase();
+        const targetMemberKey = normKey(viewingPolicy.memberId);
+
+        const memberCombinedPolicies = records.filter(r => {
+          // Exclude renewals already deleted/hidden from the Renewal table
+          const isDeletedRenewal =
+            (r.recordKind === 'renewal' || r.status === 'renewed' || r.status === 'Renewed') &&
+            Boolean(r.hiddenReportTabs?.includes('renewal'));
+          if (isDeletedRenewal) return false;
+
+          // Exclude duplicate closed-only child records unless explicitly viewing that closed record
+          if (r.recordKind === 'closed' && r.id !== viewingPolicy.id) return false;
+
+          if (r.id === viewingPolicy.id) return true;
+          if (r.parentPolicyId && r.parentPolicyId === viewingPolicy.id) return true;
+          if (
+            viewingPolicy.parentPolicyId &&
+            (r.id === viewingPolicy.parentPolicyId || r.parentPolicyId === viewingPolicy.parentPolicyId)
+          ) {
+            return true;
+          }
+          const rCitKey = normKey(r.citizenshipNo);
+          if (targetCitKey && targetCitKey !== 'na' && rCitKey && rCitKey === targetCitKey) {
+            return true;
+          }
+          const rNameKey = (r.memberName || r.name || '').trim().toLowerCase();
+          if (targetNameKey && rNameKey === targetNameKey) {
+            const rMemberKey = normKey(r.memberId);
+            return !targetMemberKey || !rMemberKey || rMemberKey === targetMemberKey;
+          }
+          return false;
+        });
+
+        const rawPolicyRows = memberCombinedPolicies.flatMap(pol => {
+          const historyItems = Array.isArray(pol.policyHistory)
+            ? [...pol.policyHistory].sort((a, b) => (a.recordedAt || 0) - (b.recordedAt || 0))
+            : [];
+
+          const historyRows = historyItems.map(entry => ({
+            key: entry.id,
+            stage: entry.stage as 'First Policy' | 'Renewal' | 'Closed',
+            policyNo: entry.policyNo || pol.policyNo,
+            branchId: entry.branchId || pol.branchId,
+            startBs:
+              entry.policyStartDateBs ||
+              convertAdToBs(entry.policyStartDate) ||
+              entry.policyStartDate ||
+              '—',
+            expiryBs:
+              entry.policyExpiryDateBs ||
+              convertAdToBs(entry.policyExpiryDate) ||
+              entry.policyExpiryDate ||
+              '—',
+            sortDate: entry.policyStartDate || '',
+            sortCreatedAt: entry.recordedAt || 0,
+            sumAssured: entry.sumAssured || entry.loanAmount || 0,
+            premiumAmount: entry.premiumAmount || 0,
+            isPaid: entry.premiumPaymentStatus === 'Paid',
+            status: entry.status || (entry.stage === 'First Policy' ? 'First Policy' : 'Renewed'),
+            isHistory: true,
+            isCurrent: false,
+            sourcePolicy: pol
+          }));
+
+          const isRenewedCurrent =
+            pol.recordKind === 'renewal' ||
+            historyItems.length > 0 ||
+            pol.status === 'renewed' ||
+            pol.status === 'Renewed';
+          const isClosedCurrent = pol.recordKind === 'closed';
+
+          const currentRow = {
+            key: pol.id,
+            stage: (
+              isClosedCurrent ? 'Closed' : isRenewedCurrent ? 'Renewal' : 'First Policy'
+            ) as 'First Policy' | 'Renewal' | 'Closed',
+            policyNo: pol.policyNo,
+            branchId: pol.branchId,
+            startBs:
+              pol.policyStartDateBs || convertAdToBs(pol.policyStartDate) || pol.policyStartDate || '—',
+            expiryBs:
+              pol.policyExpiryDateBs || convertAdToBs(pol.policyExpiryDate) || pol.policyExpiryDate || '—',
+            sortDate: pol.policyStartDate || '',
+            sortCreatedAt: pol.createdAt || 0,
+            sumAssured: pol.sumAssured || pol.loanAmount || 0,
+            premiumAmount: pol.premiumAmount || pol.premium || 0,
+            isPaid: pol.premiumPaymentStatus === 'Paid',
+            status:
+              pol.status === 'renewed'
+                ? 'Renewed'
+                : pol.status === 'start_policy'
+                  ? 'First Policy'
+                  : (pol.status || 'Active'),
+            isHistory: false,
+            isCurrent: pol.id === viewingPolicy.id,
+            sourcePolicy: pol
+          };
+
+          return [...historyRows, currentRow];
+        });
+
+        // Always list First Policy at S.N. 1, followed chronologically by Renewal(s)
+        const stageOrder = (stage: 'First Policy' | 'Renewal' | 'Closed') =>
+          stage === 'First Policy' ? 0 : stage === 'Renewal' ? 1 : 2;
+
+        const memberPolicyRows = [...rawPolicyRows].sort((a, b) => {
+          const rankDiff = stageOrder(a.stage) - stageOrder(b.stage);
+          if (rankDiff !== 0) return rankDiff;
+          if (a.sortDate && b.sortDate && a.sortDate !== b.sortDate) {
+            return a.sortDate.localeCompare(b.sortDate);
+          }
+          return a.sortCreatedAt - b.sortCreatedAt;
+        });
+
+        const combinedTotalSumAssured = memberPolicyRows.reduce(
+          (sum, row) => sum + row.sumAssured,
+          0
+        );
+        const combinedTotalPremium = memberPolicyRows.reduce(
+          (sum, row) => sum + row.premiumAmount,
+          0
+        );
+        const combinedActiveCount = memberCombinedPolicies.filter(r => {
+          const st = (r.status || 'Active').toLowerCase();
+          return st === 'active' || st === 'renewed' || st === 'start_policy';
+        }).length;
+
+        const policyRelatedClaims = claims.filter(c => {
+          if (c.policyId === viewingPolicy.id) return true;
+          if (c.policyNo && viewingPolicy.policyNo && c.policyNo.trim() === viewingPolicy.policyNo.trim()) {
+            const cName = (c.memberName || '').trim().toLowerCase();
+            return !cName || !targetNameKey || cName === targetNameKey;
+          }
+          return false;
+        });
+
+        const policyStatusTone =
+          resolvedStatus === 'Active' || resolvedStatus === 'Renewed'
+            ? 'text-emerald-700'
+            : resolvedStatus === 'Expired' || resolvedStatus === 'Claimed'
+              ? 'text-rose-700'
+              : 'text-amber-700';
+
+        const policyStatusSurface =
+          resolvedStatus === 'Active' || resolvedStatus === 'Renewed'
+            ? 'bg-emerald-50/60'
+            : resolvedStatus === 'Expired' || resolvedStatus === 'Claimed'
+              ? 'bg-rose-50/60'
+              : 'bg-amber-50/60';
+
+        return (
+          <div className="fixed inset-0 z-[9999] bg-[#f1f5f9] flex flex-col overflow-hidden text-slate-900">
+            {/* Hidden photo file input for Shortcut KYC photo upload */}
+            <input
+              ref={kycPhotoInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleUploadKycMemberPhoto}
+              className="hidden"
+            />
+
+            {/* Cooperative Brand Sticky Top Utility Bar */}
+            <header className="bg-[#014a40] text-white border-b border-white/15 px-4 sm:px-6 h-14 flex justify-between items-center gap-4 shrink-0 print:hidden">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-white/15 border border-white/20 text-emerald-200 flex items-center justify-center shrink-0">
+                  {isKycViewOpen ? <UserCheck className="w-4 h-4" /> : <ShieldCheck className="w-4 h-4" />}
                 </div>
-                <div>
-                  <h3 className="text-base font-extrabold tracking-wide text-white">Insurance Records & History</h3>
-                  <p className="text-[11px] text-blue-100 font-medium">Insurance Records & History View</p>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-200/90 truncate">
+                    <span>Insurance Report</span>
+                    <span className="text-emerald-300/60">/</span>
+                    <span className="text-white">{isKycViewOpen ? 'Member KYC' : 'Policy Dossier'}</span>
+                  </div>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <h3 className="text-sm font-bold tracking-tight text-white truncate">
+                      {resolvedName}
+                    </h3>
+                    <span className="text-emerald-300/60 hidden sm:inline">·</span>
+                    <span className="text-xs font-mono tabular-nums text-emerald-100 hidden sm:inline shrink-0">
+                      {viewingPolicy.policyNo}
+                    </span>
+                  </div>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+
+              <div className="flex items-center gap-2 shrink-0">
+                {/* KYC Button strictly to the LEFT of Print Icon */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isKycViewOpen && viewingPolicy) {
+                      populateKycFormFromPolicy(viewingPolicy);
+                    }
+                    setIsKycViewOpen(prev => !prev);
+                  }}
+                  title={isKycViewOpen ? 'Back to Policy View' : 'Open Member Shortcut KYC'}
+                  className={`px-3.5 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                    isKycViewOpen
+                      ? 'bg-white border-white text-[#014a40] hover:bg-emerald-50'
+                      : 'bg-white/12 border-white/25 text-white hover:bg-white/20'
+                  }`}
+                >
+                  <UserCheck className="w-3.5 h-3.5" />
+                  <span>KYC</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => window.print()}
-                  className="px-3.5 py-1.5 rounded-xl border border-white/25 hover:bg-white/10 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                  className="px-3.5 py-1.5 rounded-lg border border-white/20 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
                 >
                   <Printer className="w-3.5 h-3.5" />
                   <span>Print</span>
@@ -3898,289 +5441,1011 @@ export const LoanInsuranceManagement: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => exportToExcel([viewingPolicy])}
-                  className="px-3.5 py-1.5 rounded-xl border border-white/25 hover:bg-white/10 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                  className="px-3.5 py-1.5 rounded-lg border border-white/20 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span>Export</span>
                 </button>
+                <div className="h-5 w-px bg-white/20 mx-0.5" />
                 <button
                   type="button"
-                  onClick={() => setIsHistoryViewModalOpen(false)}
-                  className="p-1.5 rounded-xl border border-white/25 hover:bg-white/10 text-white cursor-pointer transition-colors"
+                  onClick={handleClosePolicyView}
+                  title="Close"
+                  aria-label="Close"
+                  className="w-8 h-8 rounded-lg border border-white/25 bg-white/10 hover:bg-rose-500 hover:border-rose-400 text-white flex items-center justify-center shrink-0 cursor-pointer transition-colors"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
-            </div>
+            </header>
 
-            {/* Blue Member Profile Card */}
-            <div className="px-6 pb-6">
-              <div className="bg-white/10 border border-white/20 rounded-2xl p-5 backdrop-blur-xs flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 text-white">
-                {/* Left Member Details */}
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 rounded-full bg-[#053b75] border-2 border-white/30 flex items-center justify-center font-extrabold text-lg text-white shadow-inner shrink-0">
-                    {getInitials(viewingPolicy.memberName || viewingPolicy.name)}
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-black text-white tracking-tight">
-                      {viewingPolicy.memberName || viewingPolicy.name}
-                    </h2>
-                    <div className="flex items-center gap-1.5 text-xs text-blue-100 mt-0.5 font-mono">
-                      <CreditCard className="w-3.5 h-3.5 text-blue-200" />
-                      <span>Citizenship No: {viewingPolicy.citizenshipNo || 'N/A'}</span>
+            {/* Full-Page Scrollable Content */}
+            <div className="flex-1 overflow-y-auto">
+              {isKycViewOpen ? (
+                /* Fillable Shortcut Member KYC Form */
+                <div className="max-w-3xl mx-auto p-5 sm:p-8">
+                  <form
+                    onSubmit={handleSaveKycForm}
+                    className="bg-white rounded-2xl border border-slate-200 overflow-hidden"
+                  >
+                    {/* Compact Cooperative Header Strip */}
+                    <div className="bg-[#015e52] text-white px-6 py-4 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-semibold uppercase tracking-wider text-emerald-200 truncate">
+                          {settings?.systemName || 'RATAULI SAVING AND CREDIT COOPERATIVE LTD'}
+                        </div>
+                        <div className="text-base font-bold tracking-tight text-white">
+                          Member Shortcut KYC
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsKycViewOpen(false)}
+                        className="px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 border border-white/25 text-white text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors print:hidden"
+                      >
+                        <ArrowLeft className="w-3.5 h-3.5" />
+                        <span>Policy View</span>
+                      </button>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 mt-2.5">
-                      <span className="px-2.5 py-1 rounded-full bg-white/15 border border-white/20 text-[11px] font-semibold text-white flex items-center gap-1.5">
-                        <User className="w-3 h-3 text-blue-200" />
-                        {viewingPolicy.gender || 'Female'} · {viewingPolicy.age || 34} yrs
-                      </span>
-                      <span className="px-2.5 py-1 rounded-full bg-white/15 border border-white/20 text-[11px] font-semibold text-white flex items-center gap-1.5">
-                        <MapPin className="w-3 h-3 text-blue-200" />
-                        {viewingPolicy.address || 'Ratauli-3, Mahottari'}
-                      </span>
-                      <span className="px-2.5 py-1 rounded-full bg-white/15 border border-white/20 text-[11px] font-semibold text-white flex items-center gap-1.5">
-                        <Briefcase className="w-3 h-3 text-blue-200" />
-                        {viewingPolicy.occupation || 'Agriculture'}
-                      </span>
-                      <span className="px-2.5 py-1 rounded-full bg-white/15 border border-white/20 text-[11px] font-semibold text-white flex items-center gap-1.5">
-                        <Building className="w-3 h-3 text-blue-200" />
-                        {viewingPolicy.branchId || 'Head Office'}
-                      </span>
+
+                    {kycSavedNotice && (
+                      <div className="mx-6 mt-4 px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center justify-between gap-2 print:hidden">
+                        <span className="inline-flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          {kycSavedNotice}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setKycSavedNotice(null)}
+                          className="p-0.5 text-emerald-600 hover:text-emerald-900 cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Photo & Core Identity Row */}
+                    <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row items-start sm:items-center gap-5">
+                      <div className="flex flex-col items-center gap-2 shrink-0">
+                        <div className="w-24 h-28 rounded-xl border border-slate-200 bg-slate-100 overflow-hidden flex items-center justify-center">
+                          {kycForm.memberPhoto ? (
+                            <img
+                              src={kycForm.memberPhoto}
+                              alt={kycForm.memberName || resolvedName}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <div className="w-full h-full bg-[#015e52] text-white flex flex-col items-center justify-center">
+                              <span className="text-2xl font-bold tracking-tight">
+                                {getInitials(kycForm.memberName || resolvedName)}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                        {canUploadKycPhoto && (
+                          <div className="flex items-center gap-1.5 print:hidden">
+                            <button
+                              type="button"
+                              onClick={() => kycPhotoInputRef.current?.click()}
+                              className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                            >
+                              <Camera className="w-3 h-3" />
+                              <span>{kycForm.memberPhoto ? 'Change' : 'Add Photo'}</span>
+                            </button>
+                            {kycForm.memberPhoto && (
+                              <button
+                                type="button"
+                                onClick={() => setKycForm(prev => ({ ...prev, memberPhoto: '' }))}
+                                className="p-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 cursor-pointer"
+                                title="Remove Photo"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex-1 min-w-0 w-full space-y-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                              Member Name *
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              disabled={!canUploadKycPhoto}
+                              value={kycForm.memberName}
+                              onChange={e => setKycForm(prev => ({ ...prev, memberName: e.target.value }))}
+                              className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-900 focus:outline-none focus:border-[#015e52] disabled:bg-slate-50 print:border-0 print:px-0"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                              Member ID
+                            </label>
+                            <input
+                              type="text"
+                              disabled={!canUploadKycPhoto}
+                              value={kycForm.memberId}
+                              onChange={e => setKycForm(prev => ({ ...prev, memberId: e.target.value }))}
+                              placeholder="e.g. RSCC-MEM-1042"
+                              className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-xs font-mono font-semibold text-[#015e52] focus:outline-none focus:border-[#015e52] disabled:bg-slate-50 print:border-0 print:px-0"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs pt-0.5 text-slate-600">
+                          <span className="font-mono font-semibold text-[#015e52]">
+                            Policy: {viewingPolicy.policyNo}
+                          </span>
+                          <span>Branch: {resolvedBranch}</span>
+                          <span className="font-mono tabular-nums font-semibold text-slate-800">
+                            Sum Assured: NPR {resolvedSumAssured.toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                  </div>
+
+                    {/* Compact 2-Column Fillable Shortcut KYC Inputs */}
+                    <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Citizenship No</label>
+                        <input
+                          type="text"
+                          disabled={!canUploadKycPhoto}
+                          value={kycForm.citizenshipNo}
+                          onChange={e => setKycForm(prev => ({ ...prev, citizenshipNo: e.target.value }))}
+                          placeholder="नागरिकता नं."
+                          className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white font-mono font-semibold text-slate-900 focus:outline-none focus:border-[#015e52] disabled:bg-slate-50 print:border-0 print:px-0"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Contact / Mobile No</label>
+                        <input
+                          type="text"
+                          disabled={!canUploadKycPhoto}
+                          value={kycForm.contactNumber}
+                          onChange={e => setKycForm(prev => ({ ...prev, contactNumber: e.target.value }))}
+                          placeholder="98XXXXXXXX"
+                          className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white font-mono font-semibold text-slate-900 focus:outline-none focus:border-[#015e52] disabled:bg-slate-50 print:border-0 print:px-0"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Gender</label>
+                          <select
+                            disabled={!canUploadKycPhoto}
+                            value={kycForm.gender}
+                            onChange={e =>
+                              setKycForm(prev => ({
+                                ...prev,
+                                gender: e.target.value as 'Male' | 'Female' | 'Other'
+                              }))
+                            }
+                            className="w-full px-2.5 py-2 rounded-lg border border-slate-300 bg-white font-semibold text-slate-900 focus:outline-none focus:border-[#015e52] disabled:bg-slate-50 print:border-0 print:px-0"
+                          >
+                            <option value="Female">Female</option>
+                            <option value="Male">Male</option>
+                            <option value="Other">Other</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Age (Yrs)</label>
+                          <input
+                            type="number"
+                            min="18"
+                            max="90"
+                            disabled={!canUploadKycPhoto}
+                            value={kycForm.age}
+                            onChange={e => setKycForm(prev => ({ ...prev, age: e.target.value }))}
+                            placeholder="Age"
+                            className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white font-mono font-semibold text-slate-900 focus:outline-none focus:border-[#015e52] disabled:bg-slate-50 print:border-0 print:px-0"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">DOB (BS)</label>
+                          <input
+                            type="text"
+                            disabled={!canUploadKycPhoto}
+                            value={kycForm.dateOfBirthBs}
+                            onChange={e => {
+                              const bs = e.target.value;
+                              const ad = convertBsToAd(bs);
+                              setKycForm(prev => ({
+                                ...prev,
+                                dateOfBirthBs: bs,
+                                dateOfBirth: ad || prev.dateOfBirth
+                              }));
+                            }}
+                            placeholder="YYYY-MM-DD"
+                            className="w-full px-2.5 py-2 rounded-lg border border-slate-300 bg-white font-mono font-semibold text-slate-900 focus:outline-none focus:border-[#015e52] disabled:bg-slate-50 print:border-0 print:px-0"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">DOB (AD)</label>
+                          <input
+                            type="date"
+                            disabled={!canUploadKycPhoto}
+                            value={kycForm.dateOfBirth}
+                            onChange={e => {
+                              const ad = e.target.value;
+                              setKycForm(prev => ({
+                                ...prev,
+                                dateOfBirth: ad,
+                                dateOfBirthBs: convertAdToBs(ad) || prev.dateOfBirthBs
+                              }));
+                            }}
+                            className="w-full px-2 py-2 rounded-lg border border-slate-300 bg-white font-mono text-slate-900 focus:outline-none focus:border-[#015e52] disabled:bg-slate-50 print:border-0 print:px-0"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Address</label>
+                        <input
+                          type="text"
+                          disabled={!canUploadKycPhoto}
+                          value={kycForm.address}
+                          onChange={e => setKycForm(prev => ({ ...prev, address: e.target.value }))}
+                          placeholder="ठेगाना"
+                          className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white font-semibold text-slate-900 focus:outline-none focus:border-[#015e52] disabled:bg-slate-50 print:border-0 print:px-0"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Occupation</label>
+                        <input
+                          type="text"
+                          disabled={!canUploadKycPhoto}
+                          value={kycForm.occupation}
+                          onChange={e => setKycForm(prev => ({ ...prev, occupation: e.target.value }))}
+                          placeholder="पेशा (e.g. Agriculture)"
+                          className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white font-semibold text-slate-900 focus:outline-none focus:border-[#015e52] disabled:bg-slate-50 print:border-0 print:px-0"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Nominee Name</label>
+                        <input
+                          type="text"
+                          disabled={!canUploadKycPhoto}
+                          value={kycForm.nomineeName}
+                          onChange={e => setKycForm(prev => ({ ...prev, nomineeName: e.target.value }))}
+                          placeholder="इच्छाएको व्यक्तिको नाम"
+                          className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white font-semibold text-slate-900 focus:outline-none focus:border-[#015e52] disabled:bg-slate-50 print:border-0 print:px-0"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Nominee Relation</label>
+                        <input
+                          type="text"
+                          disabled={!canUploadKycPhoto}
+                          value={kycForm.nomineeRelation}
+                          onChange={e => setKycForm(prev => ({ ...prev, nomineeRelation: e.target.value }))}
+                          placeholder="नाता (e.g. Husband / Wife / Son)"
+                          className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white font-semibold text-slate-900 focus:outline-none focus:border-[#015e52] disabled:bg-slate-50 print:border-0 print:px-0"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Nominee Contact No</label>
+                        <input
+                          type="text"
+                          disabled={!canUploadKycPhoto}
+                          value={kycForm.nomineeContact}
+                          onChange={e => setKycForm(prev => ({ ...prev, nomineeContact: e.target.value }))}
+                          placeholder="98XXXXXXXX"
+                          className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white font-mono font-semibold text-slate-900 focus:outline-none focus:border-[#015e52] disabled:bg-slate-50 print:border-0 print:px-0"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Nominee Citizenship No</label>
+                        <input
+                          type="text"
+                          disabled={!canUploadKycPhoto}
+                          value={kycForm.nomineeCitizenship}
+                          onChange={e => setKycForm(prev => ({ ...prev, nomineeCitizenship: e.target.value }))}
+                          placeholder="इच्छाएको व्यक्तिको नागरिकता नं."
+                          className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white font-mono font-semibold text-slate-900 focus:outline-none focus:border-[#015e52] disabled:bg-slate-50 print:border-0 print:px-0"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Compact Footer Action Bar */}
+                    <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                      <span className="text-[11px] font-mono tabular-nums text-slate-500">
+                        Policy Period (BS): {resolvedStartBs} → {resolvedExpiryBs}
+                      </span>
+                      {canUploadKycPhoto && (
+                        <button
+                          type="submit"
+                          className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg bg-[#015e52] hover:bg-[#014940] text-white text-xs font-semibold cursor-pointer transition-colors print:hidden"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          <span>Save KYC</span>
+                        </button>
+                      )}
+                    </div>
+                  </form>
                 </div>
+              ) : (
+                /* Fit-to-Page Full-Width Policy Dossier with Cooperative Color Combination */
+                <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 py-4 space-y-4">
+                  {/* Unified Member Identity Banner & Color-Balanced Financial KPI Strip */}
+                  <section className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden">
+                    <div className="bg-gradient-to-r from-[#015247] via-[#015e52] to-[#036d60] text-white px-5 py-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <div className="w-12 h-12 rounded-xl bg-white/15 text-white border border-white/30 flex items-center justify-center font-bold text-base tracking-tight shrink-0 overflow-hidden">
+                          {resolvedPhoto ? (
+                            <img src={resolvedPhoto} alt={resolvedName} className="w-full h-full object-cover" />
+                          ) : (
+                            getInitials(resolvedName)
+                          )}
+                        </div>
+                        <div className="min-w-0 space-y-0.5">
+                          <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+                            <h2 className="text-lg font-bold tracking-tight text-white">
+                              {resolvedName}
+                            </h2>
+                            <span className="text-xs font-mono tabular-nums font-medium text-emerald-200">
+                              {viewingPolicy.policyNo}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-emerald-100">
+                            <span>
+                              Member ID:{' '}
+                              <span className="font-mono tabular-nums font-semibold text-white">
+                                {resolvedMemberId}
+                              </span>
+                            </span>
+                            <span className="text-emerald-300/60">·</span>
+                            <span>
+                              Citizenship:{' '}
+                              <span className="font-mono tabular-nums font-semibold text-white">
+                                {resolvedCitizenship}
+                              </span>
+                            </span>
+                            <span className="text-emerald-300/60">·</span>
+                            <span className="font-semibold text-amber-200">{resolvedBranch}</span>
+                            <span className="text-emerald-300/60 hidden sm:inline">·</span>
+                            <span>
+                              {resolvedGender}, {viewingPolicy.age || '—'} yrs
+                            </span>
+                            <span className="text-emerald-300/60">·</span>
+                            <span>{resolvedAddress}</span>
+                            <span className="text-emerald-300/60">·</span>
+                            <span>{viewingPolicy.occupation || 'Agriculture'}</span>
+                            {resolvedContact !== '—' && (
+                              <>
+                                <span className="text-emerald-300/60">·</span>
+                                <span className="font-mono tabular-nums text-white">{resolvedContact}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
 
-                {/* Right Action Buttons & Status Indicators */}
-                <div className="flex flex-col sm:flex-row xl:flex-col items-start xl:items-end gap-3 shrink-0 w-full xl:w-auto justify-between">
-                  <div className="flex flex-wrap items-center gap-2">
+                      {/* Focused Primary Actions */}
+                      <div className="flex flex-wrap items-center gap-2 shrink-0 print:hidden">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleClosePolicyView();
+                            handleViewCertificate(viewingPolicy);
+                          }}
+                          className="px-3.5 py-1.5 rounded-lg border border-white/25 bg-white/12 hover:bg-white/20 text-white text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+                        >
+                          <FileText className="w-3.5 h-3.5 text-emerald-200" />
+                          <span>Certificate PDF</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isDayEnded}
+                          title={isDayEnded ? getDayEndedBlockMessage() : 'Edit or Add Loan Policy'}
+                          onClick={() => {
+                            handleClosePolicyView();
+                            handleOpenEditPolicy(viewingPolicy);
+                          }}
+                          className="px-3.5 py-1.5 rounded-lg bg-white hover:bg-emerald-50 text-[#015247] text-xs font-bold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Edit / Add Loan</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Color-Harmonized 4-Column Financial KPI Strip */}
+                    <div className="border-t border-slate-200 grid grid-cols-2 lg:grid-cols-4 divide-y lg:divide-y-0 divide-x divide-slate-200">
+                      <div className="px-5 py-2.5 bg-teal-50/40">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-teal-800/80">
+                          Sum Assured
+                        </div>
+                        <div className="mt-0.5 text-lg font-bold font-mono tabular-nums text-[#015e52]">
+                          NPR {resolvedSumAssured.toLocaleString()}
+                        </div>
+                        <div className="text-[11px] text-slate-600 font-mono tabular-nums">
+                          Loan: NPR {resolvedLoanAmount.toLocaleString()}
+                        </div>
+                      </div>
+
+                      <div className="px-5 py-2.5 bg-indigo-50/35">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-800/80">
+                          Insurance Premium
+                        </div>
+                        <div className="mt-0.5 text-lg font-bold font-mono tabular-nums text-indigo-950">
+                          NPR {resolvedPremium.toLocaleString()}
+                        </div>
+                        <div className="text-[11px] font-semibold">
+                          <span className="text-slate-600 font-medium">Payment: </span>
+                          <span className={isPremiumPaid ? 'text-emerald-700' : 'text-amber-700'}>
+                            {isPremiumPaid ? 'Paid' : 'Unpaid'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="px-5 py-2.5 bg-sky-50/40">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-sky-800/80">
+                          Policy Period (BS)
+                        </div>
+                        <div className="mt-0.5 text-sm font-bold font-mono tabular-nums text-slate-900">
+                          {resolvedStartBs} → {resolvedExpiryBs}
+                        </div>
+                        <div className="text-[11px] text-slate-600 font-mono tabular-nums">
+                          Term: {viewingPolicy.termMonths || 12} months
+                        </div>
+                      </div>
+
+                      <div className={`px-5 py-2.5 ${policyStatusSurface}`}>
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-600">
+                          Policy Status
+                        </div>
+                        <div className={`mt-0.5 text-base font-bold ${policyStatusTone}`}>
+                          {resolvedStatus}
+                        </div>
+                        <div className="text-[11px] text-slate-600 truncate">
+                          {daysRemaining !== null
+                            ? daysRemaining >= 0
+                              ? `${daysRemaining} days remaining`
+                              : `Expired ${Math.abs(daysRemaining)} days ago`
+                            : '—'}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  {/* Clean Segmented Workspace Tabs (No underline, No count badges) */}
+                  <nav className="inline-flex items-center gap-1 p-1 rounded-xl bg-white border border-slate-200/90 shadow-2xs overflow-x-auto max-w-full print:hidden">
                     <button
                       type="button"
-                      className="px-3.5 py-1.5 bg-white hover:bg-slate-50 text-blue-800 rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                      onClick={() => setPolicyViewTab('detail')}
+                      className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                        policyViewTab === 'detail'
+                          ? 'bg-[#015e52] text-white'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      }`}
                     >
                       <Eye className="w-3.5 h-3.5" />
-                      <span>Detail</span>
+                      <span>Policy Details</span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => alert(`Policy Audit: ${viewingPolicy.policyNo} recorded and verified in core system.`)}
-                      className="px-3.5 py-1.5 bg-blue-950/40 hover:bg-blue-950/60 border border-white/20 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                      onClick={() => setPolicyViewTab('history')}
+                      className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                        policyViewTab === 'history'
+                          ? 'bg-[#015e52] text-white'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      }`}
                     >
                       <Clock className="w-3.5 h-3.5" />
-                      <span>History</span>
+                      <span>History &amp; Audit</span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        setIsHistoryViewModalOpen(false);
-                        handleViewCertificate(viewingPolicy);
-                      }}
-                      className="px-3.5 py-1.5 bg-[#10b981] hover:bg-emerald-600 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
-                    >
-                      <FileText className="w-3.5 h-3.5" />
-                      <span>PDF</span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isDayEnded}
-                      title={isDayEnded ? getDayEndedBlockMessage() : 'Add Loan Policy'}
-                      onClick={() => {
-                        setIsHistoryViewModalOpen(false);
-                        handleOpenEditPolicy(viewingPolicy);
-                      }}
-                      className="px-3.5 py-1.5 bg-[#f59e0b] hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>+ Add Loan</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => alert(`Combined Insurance Coverage: Active under Ratauli Credit Protection Scheme.`)}
-                      className="px-3.5 py-1.5 bg-[#0284c7] hover:bg-sky-600 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                      onClick={() => setPolicyViewTab('combined')}
+                      className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                        policyViewTab === 'combined'
+                          ? 'bg-[#015e52] text-white'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      }`}
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
-                      <span>Combined Insu</span>
+                      <span>Policy</span>
                     </button>
-                  </div>
+                  </nav>
 
-                  <div className="flex items-center gap-4 self-end mt-1">
-                    <div className="text-right">
-                      <div className="text-[10px] uppercase tracking-wider text-blue-200 font-bold">POLICY STATUS</div>
-                      <div className="mt-0.5 inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-white text-blue-800 text-xs font-bold shadow-xs">
-                        <span className="w-2 h-2 rounded-full bg-blue-600"></span>
-                        <span>{viewingPolicy.status || 'Active'}</span>
+                  {/* Tab 1: Fit-Page 4-Column Policy Dossier */}
+                  {policyViewTab === 'detail' && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 items-stretch">
+                      {/* Card 1: Personal Information */}
+                      <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden flex flex-col">
+                        <div className="px-4 py-2.5 border-b border-teal-100 flex items-center gap-2 bg-teal-50/70">
+                          <User className="w-3.5 h-3.5 text-[#015e52]" />
+                          <h4 className="text-[11px] font-bold uppercase tracking-wider text-teal-950">
+                            Personal Information
+                          </h4>
+                        </div>
+                        <dl className="divide-y divide-slate-100 px-4 text-xs flex-1">
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Gender</dt>
+                            <dd className="font-semibold text-slate-900 text-right">{resolvedGender}</dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Age</dt>
+                            <dd className="font-semibold text-slate-900 font-mono tabular-nums text-right">
+                              {viewingPolicy.age ? `${viewingPolicy.age} years` : '—'}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">DOB (BS)</dt>
+                            <dd className="font-semibold text-slate-900 font-mono tabular-nums text-right">
+                              {resolvedDobBs}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">DOB (AD)</dt>
+                            <dd className="font-semibold text-slate-900 font-mono tabular-nums text-right">
+                              {viewingPolicy.dateOfBirth || '—'}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Contact No</dt>
+                            <dd className="font-semibold text-slate-900 font-mono tabular-nums text-right">
+                              {resolvedContact}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Address</dt>
+                            <dd className="font-semibold text-slate-900 text-right truncate max-w-[170px]" title={resolvedAddress}>
+                              {resolvedAddress}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Occupation</dt>
+                            <dd className="font-semibold text-slate-900 text-right">
+                              {viewingPolicy.occupation || 'Agriculture'}
+                            </dd>
+                          </div>
+                        </dl>
+                      </div>
+
+                      {/* Card 2: Policy Schedule */}
+                      <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden flex flex-col">
+                        <div className="px-4 py-2.5 border-b border-indigo-100 flex items-center gap-2 bg-indigo-50/70">
+                          <FileText className="w-3.5 h-3.5 text-indigo-700" />
+                          <h4 className="text-[11px] font-bold uppercase tracking-wider text-indigo-950">
+                            Policy Schedule
+                          </h4>
+                        </div>
+                        <dl className="divide-y divide-slate-100 px-4 text-xs flex-1">
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Policy No</dt>
+                            <dd className="font-semibold text-indigo-950 font-mono tabular-nums text-right">
+                              {viewingPolicy.policyNo}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Member ID</dt>
+                            <dd className="font-semibold text-slate-900 font-mono tabular-nums text-right">
+                              {resolvedMemberId}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Citizenship No</dt>
+                            <dd className="font-semibold text-slate-900 font-mono tabular-nums text-right">
+                              {resolvedCitizenship}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">DOC (BS)</dt>
+                            <dd className="font-semibold text-slate-900 font-mono tabular-nums text-right">
+                              {resolvedStartBs}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">DOC (AD)</dt>
+                            <dd className="font-semibold text-slate-900 font-mono tabular-nums text-right">
+                              {viewingPolicy.policyStartDate || '—'}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Policy Term</dt>
+                            <dd className="font-semibold text-slate-900 font-mono tabular-nums text-right">
+                              {viewingPolicy.termMonths || 12} months
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Maturity (BS)</dt>
+                            <dd className="font-semibold text-slate-900 font-mono tabular-nums text-right">
+                              {resolvedExpiryBs}
+                            </dd>
+                          </div>
+                        </dl>
+                      </div>
+
+                      {/* Card 3: Nominee & Health Declaration */}
+                      <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden flex flex-col">
+                        <div className="px-4 py-2.5 border-b border-sky-100 flex items-center gap-2 bg-sky-50/75">
+                          <ShieldCheck className="w-3.5 h-3.5 text-sky-700" />
+                          <h4 className="text-[11px] font-bold uppercase tracking-wider text-sky-950">
+                            Nominee &amp; Health
+                          </h4>
+                        </div>
+                        <dl className="divide-y divide-slate-100 px-4 text-xs flex-1">
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Nominee Name</dt>
+                            <dd className="font-semibold text-slate-900 text-right truncate max-w-[170px]" title={viewingPolicy.nomineeName}>
+                              {viewingPolicy.nomineeName || '—'}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Relationship</dt>
+                            <dd className="font-semibold text-slate-900 text-right">
+                              {viewingPolicy.nomineeRelation || '—'}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Nominee Contact</dt>
+                            <dd className="font-semibold text-slate-900 font-mono tabular-nums text-right">
+                              {viewingPolicy.nomineeContact || '—'}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Nominee Citizenship</dt>
+                            <dd className="font-semibold text-slate-900 font-mono tabular-nums text-right">
+                              {viewingPolicy.nomineeCitizenship || '—'}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Nominee DOB (BS)</dt>
+                            <dd className="font-semibold text-slate-900 font-mono tabular-nums text-right">
+                              {viewingPolicy.nomineeDobBs || convertAdToBs(viewingPolicy.nomineeDob || '') || '—'}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Disability</dt>
+                            <dd className="font-semibold text-slate-900 text-right">
+                              {viewingPolicy.disability || 'None'}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Active Life</dt>
+                            <dd className="font-semibold text-emerald-700 text-right">
+                              {viewingPolicy.livingActiveLife || 'Yes'}
+                            </dd>
+                          </div>
+                        </dl>
+                      </div>
+
+                      {/* Card 4: Loan & Coverage Summary */}
+                      <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden flex flex-col">
+                        <div className="px-4 py-2.5 border-b border-amber-100 flex items-center gap-2 bg-amber-50/75">
+                          <Award className="w-3.5 h-3.5 text-amber-700" />
+                          <h4 className="text-[11px] font-bold uppercase tracking-wider text-amber-950">
+                            Loan &amp; Coverage
+                          </h4>
+                        </div>
+                        <dl className="divide-y divide-slate-100 px-4 text-xs flex-1">
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Sum Assured</dt>
+                            <dd className="font-bold text-[#015e52] font-mono tabular-nums text-right">
+                              NPR {resolvedSumAssured.toLocaleString()}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Premium Amount</dt>
+                            <dd className="font-bold text-indigo-900 font-mono tabular-nums text-right">
+                              NPR {resolvedPremium.toLocaleString()}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Premium Payment</dt>
+                            <dd className={`font-semibold text-right ${isPremiumPaid ? 'text-emerald-700' : 'text-amber-700'}`}>
+                              {isPremiumPaid ? 'Paid' : 'Unpaid'}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Policy Status</dt>
+                            <dd className={`font-semibold text-right ${policyStatusTone}`}>
+                              {resolvedStatus}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Maturity (AD)</dt>
+                            <dd className="font-semibold text-slate-900 font-mono tabular-nums text-right">
+                              {viewingPolicy.policyExpiryDate || '—'}
+                            </dd>
+                          </div>
+                          <div className="py-2 flex justify-between items-center gap-3">
+                            <dt className="text-slate-500 font-medium">Branch</dt>
+                            <dd className="font-semibold text-slate-900 text-right">{resolvedBranch}</dd>
+                          </div>
+                        </dl>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-[10px] uppercase tracking-wider text-blue-200 font-bold">PREMIUM PAYMENT</div>
-                      <div className={`mt-0.5 inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-white text-xs font-bold shadow-xs ${
-                        viewingPolicy.premiumPaymentStatus === 'Paid' ? 'text-emerald-700' : 'text-amber-700'
-                      }`}>
-                        <span className={`w-2 h-2 rounded-full ${
-                          viewingPolicy.premiumPaymentStatus === 'Paid' ? 'bg-emerald-500' : 'bg-amber-500'
-                        }`}></span>
-                        <span>{viewingPolicy.premiumPaymentStatus === 'Paid' ? 'Paid' : 'Unpaid'}</span>
+                  )}
+
+                  {/* Tab 2: History & Audit Timeline */}
+                  {policyViewTab === 'history' && (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      {/* Policy Lifecycle Log */}
+                      <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden">
+                        <div className="px-4 py-2.5 border-b border-teal-100 bg-teal-50/70 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Clock className="w-3.5 h-3.5 text-[#015e52]" />
+                            <h4 className="text-[11px] font-bold uppercase tracking-wider text-teal-950">
+                              Policy Audit Trail
+                            </h4>
+                          </div>
+                          <span className="text-[11px] font-mono tabular-nums font-semibold text-[#015e52]">
+                            {viewingPolicy.policyNo}
+                          </span>
+                        </div>
+                        <div className="divide-y divide-slate-100 px-5 text-xs">
+                          <div className="py-3.5 flex items-start justify-between gap-4">
+                            <div>
+                              <div className="font-semibold text-slate-900">Policy Commenced (DOC)</div>
+                              <p className="text-slate-500 mt-0.5">
+                                Issued at {resolvedBranch} for NPR{' '}
+                                <span className="font-mono tabular-nums font-semibold text-[#015e52]">
+                                  {resolvedSumAssured.toLocaleString()}
+                                </span>
+                                .
+                              </p>
+                            </div>
+                            <div className="text-right font-mono tabular-nums shrink-0">
+                              <div className="font-semibold text-slate-800">{resolvedStartBs}</div>
+                              <div className="text-[11px] text-slate-400">{viewingPolicy.policyStartDate || '—'}</div>
+                            </div>
+                          </div>
+
+                          <div className="py-3.5 flex items-start justify-between gap-4">
+                            <div>
+                              <div className="font-semibold text-slate-900">Premium Assessment</div>
+                              <p className="text-slate-500 mt-0.5">
+                                Premium of NPR{' '}
+                                <span className="font-mono tabular-nums font-semibold text-indigo-900">
+                                  {resolvedPremium.toLocaleString()}
+                                </span>
+                                {viewingPolicy.premiumPaymentRemark ? ` · ${viewingPolicy.premiumPaymentRemark}` : ''}
+                              </p>
+                            </div>
+                            <span
+                              className={`font-semibold shrink-0 ${
+                                isPremiumPaid ? 'text-emerald-700' : 'text-amber-700'
+                              }`}
+                            >
+                              {isPremiumPaid ? 'Paid' : 'Unpaid'}
+                            </span>
+                          </div>
+
+                          <div className="py-3.5 flex items-start justify-between gap-4">
+                            <div>
+                              <div className="font-semibold text-slate-900">Scheduled Maturity</div>
+                              <p className="text-slate-500 mt-0.5">
+                                {viewingPolicy.termMonths || 12}-month coverage period
+                                {daysRemaining !== null
+                                  ? daysRemaining >= 0
+                                    ? ` · ${daysRemaining} days left`
+                                    : ` · matured ${Math.abs(daysRemaining)} days ago`
+                                  : ''}
+                              </p>
+                            </div>
+                            <div className="text-right font-mono tabular-nums shrink-0">
+                              <div className="font-semibold text-slate-800">{resolvedExpiryBs}</div>
+                              <div className="text-[11px] text-slate-400">{viewingPolicy.policyExpiryDate || '—'}</div>
+                            </div>
+                          </div>
+
+                          {viewingPolicy.updatedAt ? (
+                            <div className="py-3.5 flex items-start justify-between gap-4">
+                              <div>
+                                <div className="font-semibold text-slate-900">Last Record Update</div>
+                                <p className="text-slate-500 mt-0.5">
+                                  Latest policy or KYC verification saved in core ledger.
+                                </p>
+                              </div>
+                              <div className="text-right font-mono tabular-nums text-slate-600 shrink-0">
+                                {new Date(viewingPolicy.updatedAt).toLocaleDateString()}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      {/* Linked Claims History */}
+                      <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden">
+                        <div className="px-4 py-2.5 border-b border-rose-100 bg-rose-50/70 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Heart className="w-3.5 h-3.5 text-rose-600" />
+                            <h4 className="text-[11px] font-bold uppercase tracking-wider text-rose-950">
+                              Linked Insurance Claims
+                            </h4>
+                          </div>
+                          <span className="text-[11px] font-mono tabular-nums font-semibold text-rose-700">
+                            {policyRelatedClaims.length} {policyRelatedClaims.length === 1 ? 'record' : 'records'}
+                          </span>
+                        </div>
+                        {policyRelatedClaims.length === 0 ? (
+                          <div className="px-6 py-10 text-center">
+                            <div className="text-sm font-semibold text-slate-700">No Claims Recorded</div>
+                            <p className="text-xs text-slate-500 mt-1">
+                              No insurance claim has been registered against policy{' '}
+                              <span className="font-mono text-slate-700">{viewingPolicy.policyNo}</span>.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="divide-y divide-slate-100 px-5 text-xs">
+                            {policyRelatedClaims.map(claim => {
+                              const claimTone =
+                                claim.status === 'Settled' || claim.status === 'Approved'
+                                  ? 'text-emerald-700'
+                                  : claim.status === 'Rejected'
+                                    ? 'text-rose-700'
+                                    : 'text-amber-700';
+                              return (
+                                <div key={claim.id} className="py-3.5 flex items-start justify-between gap-4">
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-mono tabular-nums font-bold text-slate-900">
+                                        {claim.claimNo}
+                                      </span>
+                                      <span className="text-slate-300">·</span>
+                                      <span className="font-semibold text-slate-700">{claim.claimCause}</span>
+                                    </div>
+                                    <div className="text-slate-500 mt-0.5 font-mono tabular-nums">
+                                      Requested: NPR {(claim.claimAmountRequested || 0).toLocaleString()}
+                                      {claim.approvedAmount
+                                        ? ` · Approved: NPR ${claim.approvedAmount.toLocaleString()}`
+                                        : ''}
+                                    </div>
+                                  </div>
+                                  <div className="text-right shrink-0">
+                                    <div className={`font-semibold ${claimTone}`}>{claim.status}</div>
+                                    <div className="text-[11px] font-mono tabular-nums text-slate-400 mt-0.5">
+                                      {claim.claimDateBs || claim.claimDate}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+                  )}
 
-            {/* 4 Cards Grid - Crisp White Section Matching image_fe26df2f.png */}
-            <div className="bg-[#f0f4f8] p-5 sm:p-6 rounded-b-3xl">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {/* Card 1: PERSONAL INFO */}
-                <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col justify-between">
-                  <div className="flex items-center gap-2 pb-3 mb-2 border-b border-slate-100">
-                    <User className="w-4 h-4 text-purple-600" />
-                    <span className="text-xs font-black text-slate-800 tracking-wider uppercase">PERSONAL INFO</span>
-                  </div>
-                  <div className="space-y-2 text-xs">
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">Gender</span>
-                      <span className="font-bold text-slate-900">{viewingPolicy.gender || 'Female'}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">DOB (AD)</span>
-                      <span className="font-bold text-slate-900 font-mono">{viewingPolicy.dateOfBirth || '1990-04-15'}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">DOB (BS)</span>
-                      <span className="font-bold text-slate-900 font-mono">{viewingPolicy.dateOfBirthBs || convertAdToBs(viewingPolicy.dateOfBirth) || '2047-01-02'}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">Age</span>
-                      <span className="font-bold text-slate-900">{viewingPolicy.age || 34} years</span>
-                    </div>
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">Address</span>
-                      <span className="font-bold text-slate-900 truncate max-w-[130px] text-right" title={viewingPolicy.address}>
-                        {viewingPolicy.address || 'Ratauli-3, Mahottari'}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center py-1">
-                      <span className="text-blue-600 font-semibold">Occupation</span>
-                      <span className="font-bold text-slate-900">{viewingPolicy.occupation || 'Agriculture'}</span>
-                    </div>
-                  </div>
-                </div>
+                  {/* Tab 3: Member Policy Portfolio */}
+                  {policyViewTab === 'combined' && (
+                    <div className="space-y-4">
+                      <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs grid grid-cols-2 lg:grid-cols-4 divide-y lg:divide-y-0 divide-x divide-slate-200 overflow-hidden">
+                        <div className="px-5 py-3 bg-slate-50/60">
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                            Total Policies
+                          </div>
+                          <div className="mt-0.5 text-lg font-bold font-mono tabular-nums text-slate-900">
+                            {memberPolicyRows.length}
+                          </div>
+                        </div>
+                        <div className="px-5 py-3 bg-emerald-50/45">
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-800/80">
+                            Active Policies
+                          </div>
+                          <div className="mt-0.5 text-lg font-bold font-mono tabular-nums text-emerald-700">
+                            {combinedActiveCount}
+                          </div>
+                        </div>
+                        <div className="px-5 py-3 bg-teal-50/45">
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-teal-800/80">
+                            Total Sum Assured
+                          </div>
+                          <div className="mt-0.5 text-lg font-bold font-mono tabular-nums text-[#015e52]">
+                            NPR {combinedTotalSumAssured.toLocaleString()}
+                          </div>
+                        </div>
+                        <div className="px-5 py-3 bg-indigo-50/40">
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-800/80">
+                            Total Premium
+                          </div>
+                          <div className="mt-0.5 text-lg font-bold font-mono tabular-nums text-indigo-950">
+                            NPR {combinedTotalPremium.toLocaleString()}
+                          </div>
+                        </div>
+                      </div>
 
-                {/* Card 2: POLICY DETAILS */}
-                <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col justify-between">
-                  <div className="flex items-center gap-2 pb-3 mb-2 border-b border-slate-100">
-                    <FileText className="w-4 h-4 text-purple-500" />
-                    <span className="text-xs font-black text-slate-800 tracking-wider uppercase">POLICY DETAILS</span>
-                  </div>
-                  <div className="space-y-2 text-xs">
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">Policy No</span>
-                      <span className="font-bold text-slate-900 font-mono">{viewingPolicy.policyNo}</span>
+                      <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="border-b border-teal-100 bg-teal-50/75 text-[11px] font-bold uppercase tracking-wider text-teal-950">
+                                <th className="px-4 py-3 text-center w-12">S.N.</th>
+                                <th className="px-4 py-3">Type</th>
+                                <th className="px-4 py-3">Policy No</th>
+                                <th className="px-4 py-3">Branch</th>
+                                <th className="px-4 py-3">Period (BS)</th>
+                                <th className="px-4 py-3 text-right">Sum Assured</th>
+                                <th className="px-4 py-3 text-right">Premium</th>
+                                <th className="px-4 py-3">Payment</th>
+                                <th className="px-4 py-3">Status</th>
+                                <th className="px-5 py-3 text-right">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {memberPolicyRows.map((row, index) => (
+                                <tr
+                                  key={row.key}
+                                  className={row.isCurrent ? 'bg-[#015e52]/[0.05]' : 'hover:bg-slate-50/80'}
+                                >
+                                  <td className="px-4 py-3 text-center font-mono tabular-nums font-bold text-slate-600 whitespace-nowrap">
+                                    {index + 1}
+                                  </td>
+                                  <td className="px-4 py-3 whitespace-nowrap">
+                                    <span
+                                      className={`font-semibold ${
+                                        row.stage === 'Renewal' ? 'text-indigo-700' : 'text-[#015e52]'
+                                      }`}
+                                    >
+                                      {row.stage}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3 font-mono tabular-nums font-semibold text-indigo-950 whitespace-nowrap">
+                                    {row.policyNo}
+                                  </td>
+                                  <td className="px-4 py-3 text-slate-700 whitespace-nowrap">
+                                    {formatBranchLabel(row.branchId)}
+                                  </td>
+                                  <td className="px-4 py-3 font-mono tabular-nums text-slate-600 whitespace-nowrap">
+                                    {row.startBs} → {row.expiryBs}
+                                  </td>
+                                  <td className="px-4 py-3 font-mono tabular-nums font-semibold text-[#015e52] text-right whitespace-nowrap">
+                                    NPR {row.sumAssured.toLocaleString()}
+                                  </td>
+                                  <td className="px-4 py-3 font-mono tabular-nums font-medium text-indigo-900 text-right whitespace-nowrap">
+                                    NPR {row.premiumAmount.toLocaleString()}
+                                  </td>
+                                  <td className={`px-4 py-3 font-semibold whitespace-nowrap ${row.isPaid ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                    {row.isPaid ? 'Paid' : 'Unpaid'}
+                                  </td>
+                                  <td className={`px-4 py-3 font-semibold whitespace-nowrap ${row.isHistory ? 'text-slate-600' : 'text-emerald-700'}`}>
+                                    {row.status}
+                                  </td>
+                                  <td className="px-5 py-3 text-right whitespace-nowrap">
+                                    {row.isHistory ? (
+                                      <span className="text-[11px] font-semibold text-slate-500">Previous</span>
+                                    ) : row.isCurrent ? (
+                                      <span className="text-[11px] font-bold text-[#015e52]">Current</span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleViewPolicyDetails(row.sourcePolicy)}
+                                        className="text-xs font-semibold text-[#015e52] hover:underline cursor-pointer"
+                                      >
+                                        Open
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">Customer ID</span>
-                      <span className="font-bold text-slate-900 font-mono">{viewingPolicy.memberId || 'RSCC-MEM-1042'}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">DOC (BS)</span>
-                      <span className="font-bold text-slate-900 font-mono">{viewingPolicy.policyStartDateBs || convertAdToBs(viewingPolicy.policyStartDate) || '2080-10-01'}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">DOC (AD)</span>
-                      <span className="font-bold text-slate-900 font-mono">{viewingPolicy.policyStartDate || '2024-01-15'}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">Term</span>
-                      <span className="font-bold text-slate-900">{viewingPolicy.termMonths || 12} months</span>
-                    </div>
-                    <div className="flex justify-between items-center py-1">
-                      <span className="text-blue-600 font-semibold">Maturity date</span>
-                      <span className="font-bold text-slate-900 font-mono">{viewingPolicy.policyExpiryDate || '2025-01-14'}</span>
-                    </div>
-                  </div>
+                  )}
                 </div>
-
-                {/* Card 3: NOMINEE */}
-                <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col justify-between">
-                  <div className="flex items-center gap-2 pb-3 mb-2 border-b border-slate-100">
-                    <ShieldCheck className="w-4 h-4 text-blue-500" />
-                    <span className="text-xs font-black text-slate-800 tracking-wider uppercase">NOMINEE</span>
-                  </div>
-                  <div className="space-y-2 text-xs">
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">Name</span>
-                      <span className="font-bold text-slate-900 truncate max-w-[130px] text-right" title={viewingPolicy.nomineeName}>
-                        {viewingPolicy.nomineeName || 'Ramesh Chaudhary'}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">Relation</span>
-                      <span className="font-bold text-slate-900">{viewingPolicy.nomineeRelation || 'Husband'}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">Nominee DOB (AD)</span>
-                      <span className="font-bold text-slate-900 font-mono">{viewingPolicy.nomineeDob || '1988-06-20'}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">Nominee DOB (BS)</span>
-                      <span className="font-bold text-slate-900 font-mono">{viewingPolicy.nomineeDobBs || convertAdToBs(viewingPolicy.nomineeDob) || '2045-03-06'}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">Disability</span>
-                      <span className="font-bold text-slate-900">{viewingPolicy.disability || 'None'}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-1">
-                      <span className="text-blue-600 font-semibold">Active life</span>
-                      <span className="font-bold text-slate-900">{viewingPolicy.livingActiveLife || 'Yes'}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Card 4: LOAN & COVERAGE */}
-                <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col justify-between">
-                  <div className="flex items-center gap-2 pb-3 mb-2 border-b border-slate-100">
-                    <Award className="w-4 h-4 text-amber-500" />
-                    <span className="text-xs font-black text-slate-800 tracking-wider uppercase">LOAN & COVERAGE</span>
-                  </div>
-                  <div className="space-y-2 text-xs">
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">Policy Amount</span>
-                      <span className="font-bold text-blue-600 font-mono">
-                        NPR {(viewingPolicy.sumAssured || viewingPolicy.loanAmount || 0).toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">Premium</span>
-                      <span className="font-bold text-blue-600 font-mono">
-                        NPR {(viewingPolicy.premiumAmount || viewingPolicy.premium || 0).toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">Payment</span>
-                      <span className={`font-bold ${viewingPolicy.premiumPaymentStatus === 'Paid' ? 'text-emerald-600' : 'text-amber-600'}`}>
-                        {viewingPolicy.premiumPaymentStatus === 'Paid' ? 'Paid' : 'Unpaid'}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">Status</span>
-                      <span className="font-bold text-slate-900">{viewingPolicy.status || 'Active'}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="text-blue-600 font-semibold">Loan Type</span>
-                      <span className="font-bold text-slate-900 text-right truncate max-w-[130px]" title={viewingPolicy.loanType}>
-                        {viewingPolicy.loanType || 'Agricultural Term Loan'}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center py-1">
-                      <span className="text-blue-600 font-semibold">Branch</span>
-                      <span className="font-bold text-slate-900">{viewingPolicy.branchId || 'Head Office'}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              )}
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Official Printable Loan Insurance Certificate Modal */}
       {isCertificateModalOpen && viewingPolicy && (

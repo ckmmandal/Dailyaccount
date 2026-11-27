@@ -13,10 +13,19 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { storageService } from '../services/storageService';
-import { Role, Permission, User } from '../types';
+import { Role, Permission, User, Branch } from '../types';
 import { ConfirmationModal } from './ConfirmationModal';
 import { isDayEndedForBranch, getDayEndedBlockMessage, useDayEndLock } from '../utils/dayEndLock';
 import { DayEndFieldset } from './DayEndFieldset';
+import {
+  INS_BRANCH_SCOPE_PREFIX,
+  MF_BRANCH_SCOPE_PREFIX,
+  UserMfBranchAccessMode,
+  parseUserInsuranceBranchAccess,
+  applyInsuranceBranchAccessToPermissions,
+  getInsuranceBranchAccessSummary,
+  resolveCanonicalBranchKey
+} from '../utils/mfBranchFilter';
 
 export interface SubMenuPermissionItem {
   id: string;
@@ -546,6 +555,28 @@ export const MENU_HIERARCHY: MainMenuGroup[] = [
         coarseView: 'view_insurance',
         coarseEdit: 'edit_transaction',
         coarseDelete: 'delete_transaction'
+      },
+      {
+        id: 'ins_claims',
+        name: 'Loan Insurance Claims & Settlement',
+        description: 'Register loan insurance claims, verify checklist documents, advance approval/payout stages, reject claims, and print settlement vouchers.',
+        viewPerm: 'sub_ins_claims_view',
+        editPerm: 'sub_ins_claims_edit',
+        deletePerm: 'sub_ins_claims_delete',
+        coarseView: 'view_insurance',
+        coarseEdit: 'edit_transaction',
+        coarseDelete: 'delete_transaction'
+      },
+      {
+        id: 'ins_notice',
+        name: 'Loan Insurance Notice, Rate Chart & Guidelines',
+        description: 'View loan insurance rate chart, premium calculator, cooperative notices, and manage rate/guideline updates.',
+        viewPerm: 'sub_ins_notice_view',
+        editPerm: 'sub_ins_notice_edit',
+        deletePerm: 'sub_ins_notice_delete',
+        coarseView: 'view_insurance',
+        coarseEdit: 'edit_transaction',
+        coarseDelete: 'delete_transaction'
       }
     ]
   },
@@ -788,8 +819,8 @@ export const MENU_HIERARCHY: MainMenuGroup[] = [
       },
       {
         id: 'alert_saving_maturity',
-        name: 'Saving Maturity Alert (Count & Jump)',
-        description: 'View matured Micro-Finance saving account count in header Alerts and jump to Mature Savings list.',
+        name: 'Saving Maturity Alert (1-Day Count & Jump)',
+        description: 'View daily saving maturity alert count (on maturity date) in header Alerts and jump to Mature Savings list.',
         viewPerm: 'sub_alert_saving_maturity_view',
         editPerm: 'sub_alert_saving_maturity_edit',
         deletePerm: 'sub_alert_saving_maturity_delete',
@@ -1062,9 +1093,10 @@ const CATEGORY_TABS: Array<{ id: 'all' | MenuGroupCategory; label: string }> = [
 ];
 
 export const RolePermissionManagement: React.FC = () => {
-  const { refreshRoles } = useAuth();
+  const { refreshRoles, branches: authBranches } = useAuth();
   const [roles, setRoles] = useState<Role[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  const [branches, setBranches] = useState<Branch[]>([]);
   const isDayEnded = useDayEndLock();
   const [loading, setLoading] = useState(true);
 
@@ -1114,12 +1146,16 @@ export const RolePermissionManagement: React.FC = () => {
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
-      const [r, u] = await Promise.all([
+      const [r, u, b] = await Promise.all([
         storageService.getRoles(),
-        storageService.getUsers()
+        storageService.getUsers(),
+        storageService.getBranches().catch(() => [])
       ]);
       setRoles(r);
       setUsers(u);
+      if (Array.isArray(b) && b.length > 0) {
+        setBranches(b);
+      }
 
       const targetId = selectedRoleId || '1';
       const initialRole = r.find(item => item.id === targetId) || r[0];
@@ -1285,13 +1321,88 @@ export const RolePermissionManagement: React.FC = () => {
     });
   };
 
+  const availableBranches = useMemo<Branch[]>(() => {
+    if (branches.length > 0) return branches;
+    if (Array.isArray(authBranches) && authBranches.length > 0) return authBranches;
+    return [
+      { id: 'main', name: 'Ratauli Central Head Office', code: 'C01', status: 'Active', createdAt: 0 },
+      { id: 'sahodba', name: 'Sahodba Branch', code: 'C02', status: 'Active', createdAt: 0 },
+      { id: 'pipra', name: 'Pipra Branch', code: 'C03', status: 'Active', createdAt: 0 },
+      { id: 'parsa', name: 'Parsa Branch', code: 'C04', status: 'Active', createdAt: 0 }
+    ];
+  }, [branches, authBranches]);
+
+  const roleInsuranceBranchAccess = useMemo(() => {
+    if (!workingRole) {
+      return parseUserInsuranceBranchAccess([], [], undefined, availableBranches);
+    }
+    return parseUserInsuranceBranchAccess([], workingRole.permissions, undefined, availableBranches);
+  }, [workingRole, availableBranches]);
+
+  const handleSetRoleInsuranceBranchMode = (mode: UserMfBranchAccessMode) => {
+    if (!workingRole || workingRole.id === '1') return;
+    if (isDayEndedForBranch()) {
+      showNotice('error', getDayEndedBlockMessage());
+      return;
+    }
+    const defaultSelected =
+      mode === 'selected'
+        ? (roleInsuranceBranchAccess.explicitBranchKeys.length > 0
+            ? roleInsuranceBranchAccess.explicitBranchKeys
+            : [resolveCanonicalBranchKey(availableBranches[0]?.id || 'main', availableBranches)].filter(Boolean))
+        : [];
+    const nextPerms = applyInsuranceBranchAccessToPermissions(
+      workingRole.permissions,
+      mode,
+      defaultSelected,
+      availableBranches,
+      false
+    );
+    setWorkingRole({
+      ...workingRole,
+      permissions: nextPerms
+    });
+  };
+
+  const handleToggleRoleInsuranceBranch = (branchKey: string) => {
+    if (!workingRole || workingRole.id === '1') return;
+    if (isDayEndedForBranch()) {
+      showNotice('error', getDayEndedBlockMessage());
+      return;
+    }
+    const existing = roleInsuranceBranchAccess.explicitBranchKeys;
+    const nextSelected = existing.includes(branchKey)
+      ? existing.filter(k => k !== branchKey)
+      : [...existing, branchKey];
+    const nextMode: UserMfBranchAccessMode = nextSelected.length > 0 ? 'selected' : 'login_only';
+    const nextPerms = applyInsuranceBranchAccessToPermissions(
+      workingRole.permissions,
+      nextMode,
+      nextSelected,
+      availableBranches,
+      false
+    );
+    setWorkingRole({
+      ...workingRole,
+      permissions: nextPerms
+    });
+  };
+
+  const preserveScopeTokens = (perms: string[]): string[] =>
+    perms.filter(
+      p =>
+        typeof p === 'string' &&
+        (p.toLowerCase().startsWith(INS_BRANCH_SCOPE_PREFIX) ||
+          p.toLowerCase().startsWith(MF_BRANCH_SCOPE_PREFIX))
+    );
+
   const handleGrantAll = () => {
     if (!workingRole || workingRole.id === '1') return;
     if (isDayEndedForBranch()) {
       showNotice('error', getDayEndedBlockMessage());
       return;
     }
-    const allKeys: string[] = [];
+    const allKeys: string[] = [...preserveScopeTokens(workingRole.permissions)];
     MENU_HIERARCHY.forEach(m => {
       m.subMenus.forEach(s => {
         allKeys.push(s.viewPerm, s.editPerm, s.deletePerm);
@@ -1309,7 +1420,7 @@ export const RolePermissionManagement: React.FC = () => {
       showNotice('error', getDayEndedBlockMessage());
       return;
     }
-    const opsKeys: string[] = [];
+    const opsKeys: string[] = [...preserveScopeTokens(workingRole.permissions)];
     MENU_HIERARCHY.forEach(m => {
       m.subMenus.forEach(s => {
         opsKeys.push(s.viewPerm, s.editPerm);
@@ -1327,7 +1438,7 @@ export const RolePermissionManagement: React.FC = () => {
       showNotice('error', getDayEndedBlockMessage());
       return;
     }
-    const views: string[] = [];
+    const views: string[] = [...preserveScopeTokens(workingRole.permissions)];
     MENU_HIERARCHY.forEach(m => {
       m.subMenus.forEach(s => {
         views.push(s.viewPerm);
@@ -1433,7 +1544,7 @@ export const RolePermissionManagement: React.FC = () => {
         'sub_internal_notices_view', 'sub_internal_notices_edit',
         'sub_hr_dashboard_view', 'sub_hr_employees_view', 'sub_hr_attendance_view',
         'sub_hr_leaves_view', 'sub_hr_payroll_view',
-        'sub_ins_dashboard_view', 'sub_ins_report_view', 'sub_ins_alerts_view',
+        'sub_ins_dashboard_view', 'sub_ins_report_view', 'sub_ins_alerts_view', 'sub_ins_claims_view', 'sub_ins_notice_view',
         'sub_mf_dashboard_view', 'sub_mf_centers_view', 'sub_mf_groups_view', 'sub_mf_members_view', 'sub_mf_saving_view', 'sub_mf_loan_view',
         'sub_mf_reports_view', 'sub_mf_signature_sheet_view', 'sub_mf_deposit_sheet_view', 'sub_mf_meeting_minutes_view', 'sub_mf_id_card_view',
         'sub_dep_dashboard_view', 'sub_dep_assets_view', 'sub_dep_reports_view',
@@ -1470,7 +1581,7 @@ export const RolePermissionManagement: React.FC = () => {
         'sub_daily_balancing_view', 'sub_trial_balance_view', 'sub_audit_summary_view',
         'sub_office_expenses_view', 'sub_office_exp_registry_view',
         'sub_member_accounts_view', 'sub_loan_accounts_view',
-        'sub_ins_dashboard_view', 'sub_ins_report_view',
+        'sub_ins_dashboard_view', 'sub_ins_report_view', 'sub_ins_claims_view', 'sub_ins_notice_view',
         'sub_mf_dashboard_view', 'sub_mf_reports_view', 'sub_mf_signature_sheet_view', 'sub_mf_deposit_sheet_view', 'sub_mf_meeting_minutes_view',
         'sub_dep_dashboard_view', 'sub_dep_reports_view', 'sub_dep_accounting_view',
         'sub_admin_logs_view'
@@ -2099,6 +2210,27 @@ export const RolePermissionManagement: React.FC = () => {
                     </div>
 
                     <div className="flex items-center space-x-2 shrink-0" onClick={e => e.stopPropagation()}>
+                      {menuGroup.id === 'insurance' && (() => {
+                        if (isSuperAdminRole) {
+                          return (
+                            <span className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-50 border border-teal-200 text-teal-800 text-[9.5px] font-bold">
+                              <Building2 size={10} />
+                              All Branches
+                            </span>
+                          );
+                        }
+                        const badge = getInsuranceBranchAccessSummary([], workingRole?.permissions, availableBranches);
+                        return (
+                          <span className={`hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[9.5px] font-bold ${
+                            badge
+                              ? 'bg-teal-50 border-teal-200 text-teal-800'
+                              : 'bg-slate-100 border-slate-200 text-slate-600'
+                          }`}>
+                            <Building2 size={10} />
+                            {badge ? badge.label.replace(/^Ins:\s*/i, '') : 'Own Branch Only'}
+                          </span>
+                        );
+                      })()}
                       <span className="text-[10px] font-mono font-bold text-slate-500">
                         {activePermsInMenu}/{totalPermsInMenu}
                       </span>
@@ -2257,6 +2389,98 @@ export const RolePermissionManagement: React.FC = () => {
                           })}
                         </tbody>
                       </table>
+
+                      {/* Insurance Branch Visibility Scope Control */}
+                      {menuGroup.id === 'insurance' && (
+                        <div className="px-4 py-3 bg-teal-50/50 border-t border-teal-100 space-y-2.5">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <div className="p-1.5 rounded-lg bg-teal-100 text-teal-800">
+                                <Building2 size={13} />
+                              </div>
+                              <div>
+                                <div className="text-[11px] font-black text-teal-950 uppercase tracking-wide">
+                                  Insurance Branch Visibility Scope
+                                </div>
+                                <p className="text-[10px] text-teal-800/80 font-medium">
+                                  Control whether users in this role see only their logged-in branch or other branches in Insurance Dashboard, Report & Alerts.
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+
+                          {isSuperAdminRole ? (
+                            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-teal-200 text-[11px] font-bold text-teal-900">
+                              <ShieldCheck size={13} className="text-teal-700" />
+                              <span>Super Admin always has unrestricted All Branches visibility.</span>
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                {([
+                                  { id: 'login_only', label: 'Own Branch Only (Default)' },
+                                  { id: 'selected', label: 'Selected Branches' },
+                                  { id: 'all', label: 'All Branches' }
+                                ] as const).map(opt => {
+                                  const isActive = roleInsuranceBranchAccess.mode === opt.id;
+                                  return (
+                                    <button
+                                      key={opt.id}
+                                      type="button"
+                                      disabled={isDayEnded}
+                                      onClick={() => handleSetRoleInsuranceBranchMode(opt.id)}
+                                      className={`px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-all cursor-pointer disabled:opacity-50 ${
+                                        isActive
+                                          ? 'bg-[#015e52] text-white border-[#015e52] shadow-2xs'
+                                          : 'bg-white text-slate-700 border-slate-200 hover:border-teal-400'
+                                      }`}
+                                    >
+                                      {opt.label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+
+                              {roleInsuranceBranchAccess.mode === 'selected' && (
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-0.5">
+                                  {availableBranches.map(b => {
+                                    const bKey = resolveCanonicalBranchKey(b.id, availableBranches);
+                                    const isChecked = roleInsuranceBranchAccess.explicitBranchKeys.includes(bKey);
+                                    return (
+                                      <label
+                                        key={b.id}
+                                        className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[11px] font-bold cursor-pointer transition-colors ${
+                                          isChecked
+                                            ? 'bg-white border-teal-500 text-teal-950 shadow-2xs'
+                                            : 'bg-white/80 border-slate-200 text-slate-600 hover:border-teal-300'
+                                        }`}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={isChecked}
+                                          disabled={isDayEnded}
+                                          onChange={() => handleToggleRoleInsuranceBranch(bKey)}
+                                          className="w-3.5 h-3.5 rounded text-teal-600 border-slate-300"
+                                        />
+                                        <span className="truncate">{b.name}</span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              )}
+
+                              <p className="text-[10px] font-semibold text-slate-600">
+                                {roleInsuranceBranchAccess.mode === 'login_only' &&
+                                  'Strict Branch Isolation: Staff can view and work on Insurance records of their logged-in branch only.'}
+                                {roleInsuranceBranchAccess.mode === 'selected' &&
+                                  'Multi-Branch Scope: Staff can switch & filter Insurance data across the checked branches (plus their own logged-in branch).'}
+                                {roleInsuranceBranchAccess.mode === 'all' &&
+                                  'Head Office / Full Scope: Staff can view and filter Insurance data across all cooperative branches.'}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

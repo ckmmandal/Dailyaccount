@@ -4,6 +4,7 @@ import { supabase } from './supabase';
 import { assertDayNotEnded } from '../utils/dayEndLock';
 import { 
   LoanInsuranceRecord, 
+  PolicyHistoryEntry,
   InsuranceClaimRecord, 
   InsurancePartnerCompany,
   ClaimLifecycleStage,
@@ -14,8 +15,130 @@ import {
 const STORAGE_KEYS = {
   RECORDS: 'saccos_db_loan_insurance_records',
   CLAIMS: 'saccos_db_loan_insurance_claims',
-  COMPANIES: 'saccos_db_loan_insurance_companies'
+  COMPANIES: 'saccos_db_loan_insurance_companies',
+  RATES: 'saccos_db_loan_insurance_rates',
+  NOTICES: 'saccos_db_loan_insurance_notices'
 };
+
+export interface LoanInsuranceRateRow {
+  id: string;
+  termYears: number;
+  termLabel: string;
+  ratePercent: number;
+  amountPer100k: number;
+  updatedAt?: number;
+}
+
+export type InsuranceNoticeCategory = 'Notice' | 'Rule' | 'Guideline' | 'Claim';
+
+export interface InsuranceNoticeItem {
+  id: string;
+  title: string;
+  category: InsuranceNoticeCategory;
+  summary: string;
+  points: string[];
+  effectiveDateBs?: string;
+  isPinned?: boolean;
+  updatedBy?: string;
+  updatedAt: number;
+}
+
+export const toNepaliDigits = (value: string | number): string => {
+  const map: Record<string, string> = {
+    '0': '०',
+    '1': '१',
+    '2': '२',
+    '3': '३',
+    '4': '४',
+    '5': '५',
+    '6': '६',
+    '7': '७',
+    '8': '८',
+    '9': '९'
+  };
+  return String(value).replace(/[0-9]/g, d => map[d] || d);
+};
+
+export const DEFAULT_LOAN_INSURANCE_RATES: LoanInsuranceRateRow[] = [
+  { id: 'rate_1y', termYears: 1, termLabel: '१ वर्ष', ratePercent: 0.35, amountPer100k: 350 },
+  { id: 'rate_2y', termYears: 2, termLabel: '२ वर्ष', ratePercent: 0.54, amountPer100k: 540 },
+  { id: 'rate_3y', termYears: 3, termLabel: '३ वर्ष', ratePercent: 0.74, amountPer100k: 740 },
+  { id: 'rate_4y', termYears: 4, termLabel: '४ वर्ष', ratePercent: 0.95, amountPer100k: 950 },
+  { id: 'rate_5y', termYears: 5, termLabel: '५ वर्ष', ratePercent: 1.65, amountPer100k: 1165 },
+  { id: 'rate_6y', termYears: 6, termLabel: '६ वर्ष', ratePercent: 1.39, amountPer100k: 1390 },
+  { id: 'rate_7y', termYears: 7, termLabel: '७ वर्ष', ratePercent: 1.63, amountPer100k: 1630 },
+  { id: 'rate_8y', termYears: 8, termLabel: '८ वर्ष', ratePercent: 1.88, amountPer100k: 1875 }
+];
+
+export const DEFAULT_INSURANCE_NOTICES: InsuranceNoticeItem[] = [
+  {
+    id: 'ins_notice_overview',
+    title: 'ऋण बीमा के हो र यसका मुख्य फाइदाहरू',
+    category: 'Guideline',
+    summary:
+      'संस्थाबाट कर्जा लिने सदस्यको असामयिक मृत्यु वा पूर्ण स्थायी अशक्तता भएमा बाँकी कर्जा रकम बीमा मार्फत फछर्यौट गरी परिवारलाई ऋणको आर्थिक भारबाट सुरक्षित राख्ने सुरक्षा योजना हो।',
+    points: [
+      'ऋणी सदस्यको असामयिक निधन वा पूर्ण स्थायी अशक्तता भएमा बीमित साँवा कर्जा बीमा कम्पनी/सुरक्षा कोषबाट भुक्तानी हुन्छ।',
+      'ऋणीको परिवार वा जमानतकर्तामाथि ऋणको अतिरिक्त आर्थिक दबाब पर्नबाट जोगिन्छ।',
+      'न्यूनतम एकमुष्ट प्रिमियम दरमा १ वर्षदेखि ८ वर्षसम्मको कर्जा अवधिलाई पूर्ण सुरक्षा प्रदान गरिन्छ।',
+      'संस्थाको कर्जा लगानी सुरक्षित रहने हुँदा सदस्य र सहकारी दुवैको जोखिम न्यूनीकरण हुन्छ।'
+    ],
+    effectiveDateBs: '२०८२-०४-०१',
+    isPinned: true,
+    updatedBy: 'Central Insurance Desk',
+    updatedAt: 1752624000000
+  },
+  {
+    id: 'ins_notice_rules',
+    title: 'ऋण बीमा योग्यता, उमेर सीमा तथा नवीकरण नियमहरू',
+    category: 'Rule',
+    summary:
+      'सहकारी संस्थाबाट प्रवाह हुने सम्पूर्ण आवधिक तथा व्यवसायिक कर्जामा कर्जा प्रवाहकै दिन अनिवार्य रूपमा ऋण बीमा लागू हुने व्यवस्था छ।',
+    points: [
+      'बीमा प्रवेश उमेर: न्यूनतम १८ वर्ष पूरा भई अधिकतम ६५ वर्ष ननाघेका स्वस्थ ऋणी सदस्यहरू योग्य मानिन्छन्।',
+      'प्रिमियम भुक्तानी: कर्जा अवधि (१ देखि ८ वर्ष) अनुसार तोकिएको दररेट बमोजिम प्रिमियम कर्जा प्रवाहकै बखत दाखिला गर्नुपर्दछ।',
+      'पोलिसी नवीकरण: कर्जा अवधि थप भएमा वा बीमा म्याद समाप्त हुनु अगावै (कम्तीमा १५ दिनअघि) अनिवार्य नवीकरण गराउनुपर्नेछ।',
+      'इच्छाएको व्यक्ति (Nominee): बीमा फाराम भर्दा ऋणी सदस्यको कानुनी हकवाला (Nominee) को नाम, नाता र जन्ममिति स्पष्ट उल्लेख हुनुपर्दछ।'
+    ],
+    effectiveDateBs: '२०८२-०४-०१',
+    isPinned: false,
+    updatedBy: 'Credit & Risk Department',
+    updatedAt: 1752624000000
+  },
+  {
+    id: 'ins_notice_claim',
+    title: 'बीमा दाबी (Claim) प्रक्रिया र आवश्यक कागजातहरू',
+    category: 'Claim',
+    summary:
+      'कुनै अप्रिय घटना घटेमा घटना भएको मितिले ३५ दिन भित्र सम्बन्धित शाखा कार्यालयमा लिखित जानकारी तथा आवश्यक प्रमाणहरू पेश गरी दाबी प्रक्रिया अगाडि बढाउनुपर्दछ।',
+    points: [
+      'स्थानीय तहबाट जारी आधिकारिक मृत्यु दर्ता प्रमाणपत्र (वा पूर्ण अशक्तता प्रमाणित मेडिकल बोर्डको प्रतिवेदन)।',
+      'ऋणी सदस्य र हकवाला (Nominee) को नागरिकता प्रमाणपत्रको प्रतिलिपि तथा नाता प्रमाणित कागजात।',
+      'संस्थाको कर्जा तमसुक, बीमा प्रमाणपत्र (Policy Copy) र घटनाको मितिसम्मको कर्जा साँवा-ब्याज विवरण।',
+      'अस्पतालमा उपचार भएको भए चिकित्सकको प्रतिवेदन/डिस्चार्ज सारांश र दुर्घटनाको हकमा प्रहरी मुचुल्का प्रतिवेदन।'
+    ],
+    effectiveDateBs: '२०८२-०४-०१',
+    isPinned: false,
+    updatedBy: 'Claims Settlement Unit',
+    updatedAt: 1752624000000
+  },
+  {
+    id: 'ins_notice_branch_circular',
+    title: 'सबै शाखाका लागि ऋण बीमा अद्यावधिक तथा प्रिमियम दाखिला सूचना',
+    category: 'Notice',
+    summary:
+      'सबै शाखा प्रमुख तथा कर्जा अधिकृतहरूले नयाँ कर्जा प्रवाह गर्दा अद्यावधिक ऋण बीमा दररेट तालिका अनुसार प्रिमियम संकलन गरी सोही दिन प्रणालीमा प्रविष्ट गर्न सूचित गरिन्छ।',
+    points: [
+      'म्याद समाप्त हुन लागेका पोलिसीहरूको विवरण प्रत्येक हप्ता Maturity Alerts बाट जाँच गरी नवीकरण फलोअप गर्नुहोला।',
+      'प्रिमियम Due रहेका पुराना पोलिसीहरूको रकम समयमै असुल गरी Payment Status अद्यावधिक राख्नुहोला।',
+      'कुनै दररेट संशोधन वा नयाँ बीमा कम्पनीको परिपत्र आएमा मुख्य कार्यालयको निर्देशन अनुसार यसै Notice खण्डमा अद्यावधिक गरिनेछ।'
+    ],
+    effectiveDateBs: '२०८३-०१-०१',
+    isPinned: true,
+    updatedBy: 'Head Office Administration',
+    updatedAt: 1776124800000
+  }
+];
 
 const mapCompanyToRow = (c: InsurancePartnerCompany) => ({
   id: c.id,
@@ -52,6 +175,76 @@ const safeNumOrNull = (val: unknown): number | null => {
   if (val === undefined || val === null || val === '') return null;
   const n = Number(val);
   return Number.isFinite(n) ? n : null;
+};
+
+const RECORD_META_PREFIX = '__REC_META_V1__:';
+type RemovableReportTab = 'closed' | 'expired' | 'renewal' | 'premium' | 'statement';
+
+const encodeRecordNotesWithMeta = (
+  notes?: string,
+  hiddenReportTabs?: RemovableReportTab[],
+  policyHistory?: PolicyHistoryEntry[],
+  recordKind?: LoanInsuranceRecord['recordKind'],
+  parentPolicyId?: string
+): string | null => {
+  const cleanTabs = Array.isArray(hiddenReportTabs)
+    ? Array.from(new Set(hiddenReportTabs.filter(Boolean)))
+    : [];
+  const cleanHistory = Array.isArray(policyHistory)
+    ? policyHistory.filter(Boolean)
+    : [];
+  const hasKind = Boolean(recordKind && recordKind !== 'base');
+  const hasParent = Boolean(parentPolicyId);
+  if (cleanTabs.length > 0 || cleanHistory.length > 0 || hasKind || hasParent) {
+    return `${RECORD_META_PREFIX}${JSON.stringify({
+      notes: notes || '',
+      hiddenReportTabs: cleanTabs.length > 0 ? cleanTabs : undefined,
+      policyHistory: cleanHistory.length > 0 ? cleanHistory : undefined,
+      recordKind: hasKind ? recordKind : undefined,
+      parentPolicyId: hasParent ? parentPolicyId : undefined
+    })}`;
+  }
+  return notes || null;
+};
+
+const decodeRecordNotesWithMeta = (
+  raw: unknown
+): {
+  notes?: string;
+  hiddenReportTabs?: RemovableReportTab[];
+  policyHistory?: PolicyHistoryEntry[];
+  recordKind?: LoanInsuranceRecord['recordKind'];
+  parentPolicyId?: string;
+} => {
+  if (!raw) return {};
+  const str = String(raw);
+  if (str.startsWith(RECORD_META_PREFIX)) {
+    try {
+      const parsed = JSON.parse(str.slice(RECORD_META_PREFIX.length)) as {
+        notes?: string;
+        hiddenReportTabs?: RemovableReportTab[];
+        policyHistory?: PolicyHistoryEntry[];
+        recordKind?: LoanInsuranceRecord['recordKind'];
+        parentPolicyId?: string;
+      };
+      const tabs = Array.isArray(parsed.hiddenReportTabs)
+        ? parsed.hiddenReportTabs.filter(Boolean)
+        : undefined;
+      const history = Array.isArray(parsed.policyHistory)
+        ? parsed.policyHistory.filter(Boolean)
+        : undefined;
+      return {
+        notes: parsed.notes || undefined,
+        hiddenReportTabs: tabs && tabs.length > 0 ? tabs : undefined,
+        policyHistory: history && history.length > 0 ? history : undefined,
+        recordKind: parsed.recordKind || undefined,
+        parentPolicyId: parsed.parentPolicyId || undefined
+      };
+    } catch {
+      return {};
+    }
+  }
+  return { notes: str };
 };
 
 const mapRecordToRow = (rec: LoanInsuranceRecord) => ({
@@ -116,12 +309,20 @@ const mapRecordToRow = (rec: LoanInsuranceRecord) => ({
   signature_member: rec.signatureMember || null,
   signature_manager: rec.signatureManager || null,
   signature_officer: rec.signatureOfficer || null,
-  notes: rec.notes || null,
+  notes: encodeRecordNotesWithMeta(
+    rec.notes,
+    rec.hiddenReportTabs,
+    rec.policyHistory,
+    rec.recordKind,
+    rec.parentPolicyId
+  ),
   created_at: Math.round(Number(rec.createdAt) || Date.now()),
   updated_at: Math.round(Number(rec.updatedAt) || Date.now())
 });
 
-const mapRowToRecord = (r: Record<string, unknown>): LoanInsuranceRecord => ({
+const mapRowToRecord = (r: Record<string, unknown>): LoanInsuranceRecord => {
+  const notesMeta = decodeRecordNotesWithMeta(r.notes);
+  return {
   id: String(r.id),
   sn: r.sn !== undefined && r.sn !== null ? Number(r.sn) : undefined,
   policyNo: String(r.policy_no || ''),
@@ -184,10 +385,15 @@ const mapRowToRecord = (r: Record<string, unknown>): LoanInsuranceRecord => ({
   signatureMember: r.signature_member ? String(r.signature_member) : undefined,
   signatureManager: r.signature_manager ? String(r.signature_manager) : undefined,
   signatureOfficer: r.signature_officer ? String(r.signature_officer) : undefined,
-  notes: r.notes ? String(r.notes) : undefined,
+  notes: notesMeta.notes,
+  hiddenReportTabs: notesMeta.hiddenReportTabs,
+  policyHistory: notesMeta.policyHistory,
+  recordKind: notesMeta.recordKind,
+  parentPolicyId: notesMeta.parentPolicyId,
   createdAt: Number(r.created_at) || Date.now(),
   updatedAt: Number(r.updated_at) || Date.now()
-});
+  };
+};
 
 const mapClaimToRow = (c: InsuranceClaimRecord) => ({
   id: c.id,
@@ -223,78 +429,141 @@ const mapClaimToRow = (c: InsuranceClaimRecord) => ({
   approved_by: c.approvedBy || null,
   remarks: c.remarks || null,
   supporting_documents: Array.isArray(c.supportingDocuments) ? c.supportingDocuments : [],
-  document_url: c.documentUrl || null,
+  document_url:
+    c.documentFiles && Object.keys(c.documentFiles).length > 0
+      ? `__DOC_FILES_V1__:${JSON.stringify({
+          primaryUrl: c.documentUrl || '',
+          files: c.documentFiles
+        })}`
+      : c.documentUrl || null,
   created_at: Math.round(Number(c.createdAt) || Date.now()),
   updated_at: Math.round(Number(c.updatedAt) || Date.now())
 });
 
-const mapRowToClaim = (r: Record<string, unknown>): InsuranceClaimRecord => ({
-  id: String(r.id),
-  claimNo: String(r.claim_no || ''),
-  insuranceRecordId: String(r.insurance_record_id || ''),
-  policyNo: String(r.policy_no || ''),
-  memberId: String(r.member_id || ''),
-  memberName: String(r.member_name || ''),
-  citizenshipNo: r.citizenship_no ? String(r.citizenship_no) : undefined,
-  loanAccountNo: r.loan_account_no ? String(r.loan_account_no) : undefined,
-  branchId: String(r.branch_id || 'main'),
-  claimDate: String(r.claim_date || ''),
-  claimDateBs: r.claim_date_bs ? String(r.claim_date_bs) : undefined,
-  incidentDate: r.incident_date ? String(r.incident_date) : undefined,
-  incidentDateBs: r.incident_date_bs ? String(r.incident_date_bs) : undefined,
-  claimCause: String(r.claim_cause || ''),
-  outstandingLoanAtClaim: Number(r.outstanding_loan_at_claim) || 0,
-  claimAmountRequested: Number(r.claim_amount_requested) || 0,
-  claimAmountApproved: r.claim_amount_approved !== undefined && r.claim_amount_approved !== null ? Number(r.claim_amount_approved) : undefined,
-  disbursedAmount: r.disbursed_amount !== undefined && r.disbursed_amount !== null ? Number(r.disbursed_amount) : undefined,
-  disbursementDate: r.disbursement_date ? String(r.disbursement_date) : undefined,
-  disbursementDateBs: r.disbursement_date_bs ? String(r.disbursement_date_bs) : undefined,
-  payoutMethod: r.payout_method ? (String(r.payout_method) as InsuranceClaimRecord['payoutMethod']) : undefined,
-  lifecycleStage: r.lifecycle_stage ? (String(r.lifecycle_stage) as ClaimLifecycleStage) : undefined,
-  status: (String(r.status || 'Submitted') as ClaimStatusType),
-  insurerReferenceNo: r.insurer_reference_no ? String(r.insurer_reference_no) : undefined,
-  settlementDate: r.settlement_date ? String(r.settlement_date) : undefined,
-  settlementDateBs: r.settlement_date_bs ? String(r.settlement_date_bs) : undefined,
-  settlementVoucherNo: r.settlement_voucher_no ? String(r.settlement_voucher_no) : undefined,
-  deathCertificateNo: r.death_certificate_no ? String(r.death_certificate_no) : undefined,
-  hospitalReportSummary: r.hospital_report_summary ? String(r.hospital_report_summary) : undefined,
-  verifiedBy: r.verified_by ? String(r.verified_by) : undefined,
-  approvedBy: r.approved_by ? String(r.approved_by) : undefined,
-  remarks: r.remarks ? String(r.remarks) : undefined,
-  supportingDocuments: Array.isArray(r.supporting_documents) ? (r.supporting_documents as string[]) : [],
-  documentUrl: r.document_url ? String(r.document_url) : undefined,
-  createdAt: Number(r.created_at) || Date.now(),
-  updatedAt: Number(r.updated_at) || Date.now()
-});
-
-const syncRecordsToSupabase = async (records: LoanInsuranceRecord[]): Promise<void> => {
-  if (!supabase || records.length === 0) return;
-  try {
-    const { error } = await supabase.from('loan_insurance_records').upsert(records.map(mapRecordToRow), { onConflict: 'id' });
-    if (error) console.warn('Supabase loan_insurance_records upsert warning:', error.message);
-  } catch (err) {
-    console.warn('Supabase loan_insurance_records sync failed:', err);
+const parseClaimDocumentPayload = (
+  raw: unknown
+): { documentUrl?: string; documentFiles?: Record<string, { name: string; dataUrl: string }> } => {
+  if (!raw) return {};
+  const str = String(raw);
+  if (str.startsWith('__DOC_FILES_V1__:')) {
+    try {
+      const parsed = JSON.parse(str.slice('__DOC_FILES_V1__:'.length)) as {
+        primaryUrl?: string;
+        files?: Record<string, { name: string; dataUrl: string }>;
+      };
+      return {
+        documentUrl: parsed.primaryUrl || undefined,
+        documentFiles: parsed.files && typeof parsed.files === 'object' ? parsed.files : undefined
+      };
+    } catch {
+      return {};
+    }
   }
+  return { documentUrl: str };
 };
 
-const syncClaimsToSupabase = async (claims: InsuranceClaimRecord[]): Promise<void> => {
-  if (!supabase || claims.length === 0) return;
-  try {
-    const { error } = await supabase.from('insurance_claims').upsert(claims.map(mapClaimToRow), { onConflict: 'id' });
-    if (error) console.warn('Supabase insurance_claims upsert warning:', error.message);
-  } catch (err) {
-    console.warn('Supabase insurance_claims sync failed:', err);
-  }
+const mapRowToClaim = (r: Record<string, unknown>): InsuranceClaimRecord => {
+  const docPayload = parseClaimDocumentPayload(r.document_url);
+  return {
+    id: String(r.id),
+    claimNo: String(r.claim_no || ''),
+    insuranceRecordId: String(r.insurance_record_id || ''),
+    policyNo: String(r.policy_no || ''),
+    memberId: String(r.member_id || ''),
+    memberName: String(r.member_name || ''),
+    citizenshipNo: r.citizenship_no ? String(r.citizenship_no) : undefined,
+    loanAccountNo: r.loan_account_no ? String(r.loan_account_no) : undefined,
+    branchId: String(r.branch_id || 'main'),
+    claimDate: String(r.claim_date || ''),
+    claimDateBs: r.claim_date_bs ? String(r.claim_date_bs) : undefined,
+    incidentDate: r.incident_date ? String(r.incident_date) : undefined,
+    incidentDateBs: r.incident_date_bs ? String(r.incident_date_bs) : undefined,
+    claimCause: String(r.claim_cause || ''),
+    outstandingLoanAtClaim: Number(r.outstanding_loan_at_claim) || 0,
+    claimAmountRequested: Number(r.claim_amount_requested) || 0,
+    claimAmountApproved: r.claim_amount_approved !== undefined && r.claim_amount_approved !== null ? Number(r.claim_amount_approved) : undefined,
+    disbursedAmount: r.disbursed_amount !== undefined && r.disbursed_amount !== null ? Number(r.disbursed_amount) : undefined,
+    disbursementDate: r.disbursement_date ? String(r.disbursement_date) : undefined,
+    disbursementDateBs: r.disbursement_date_bs ? String(r.disbursement_date_bs) : undefined,
+    payoutMethod: r.payout_method ? (String(r.payout_method) as InsuranceClaimRecord['payoutMethod']) : undefined,
+    lifecycleStage: r.lifecycle_stage ? (String(r.lifecycle_stage) as ClaimLifecycleStage) : undefined,
+    status: (String(r.status || 'Submitted') as ClaimStatusType),
+    insurerReferenceNo: r.insurer_reference_no ? String(r.insurer_reference_no) : undefined,
+    settlementDate: r.settlement_date ? String(r.settlement_date) : undefined,
+    settlementDateBs: r.settlement_date_bs ? String(r.settlement_date_bs) : undefined,
+    settlementVoucherNo: r.settlement_voucher_no ? String(r.settlement_voucher_no) : undefined,
+    deathCertificateNo: r.death_certificate_no ? String(r.death_certificate_no) : undefined,
+    hospitalReportSummary: r.hospital_report_summary ? String(r.hospital_report_summary) : undefined,
+    verifiedBy: r.verified_by ? String(r.verified_by) : undefined,
+    approvedBy: r.approved_by ? String(r.approved_by) : undefined,
+    remarks: r.remarks ? String(r.remarks) : undefined,
+    supportingDocuments: Array.isArray(r.supporting_documents) ? (r.supporting_documents as string[]) : [],
+    documentUrl: docPayload.documentUrl,
+    documentFiles: docPayload.documentFiles,
+    createdAt: Number(r.created_at) || Date.now(),
+    updatedAt: Number(r.updated_at) || Date.now()
+  };
 };
 
-const syncCompaniesToSupabase = async (companies: InsurancePartnerCompany[]): Promise<void> => {
-  if (!supabase || companies.length === 0) return;
-  try {
-    const { error } = await supabase.from('insurance_companies').upsert(companies.map(mapCompanyToRow), { onConflict: 'id' });
-    if (error) console.warn('Supabase insurance_companies upsert warning:', error.message);
-  } catch (err) {
-    console.warn('Supabase insurance_companies sync failed:', err);
-  }
+// Sequential Supabase write queue + mutation counter so reads never overwrite pending local mutations
+let localMutationSeq = 0;
+let pendingSupabaseWrite: Promise<void> = Promise.resolve();
+
+const markLocalMutation = () => {
+  localMutationSeq += 1;
+};
+
+const enqueueSupabaseWrite = (task: () => Promise<void>): Promise<void> => {
+  const next = pendingSupabaseWrite
+    .catch(() => undefined)
+    .then(task)
+    .catch(err => {
+      console.warn('Queued Supabase insurance write failed:', err);
+    });
+  pendingSupabaseWrite = next;
+  return next;
+};
+
+const syncRecordsToSupabase = (records: LoanInsuranceRecord[]): Promise<void> => {
+  if (!supabase || records.length === 0) return Promise.resolve();
+  const payload = records.map(mapRecordToRow);
+  return enqueueSupabaseWrite(async () => {
+    if (!supabase) return;
+    try {
+      const { error } = await supabase.from('loan_insurance_records').upsert(payload, { onConflict: 'id' });
+      if (error) console.warn('Supabase loan_insurance_records upsert warning:', error.message);
+    } catch (err) {
+      console.warn('Supabase loan_insurance_records sync failed:', err);
+    }
+  });
+};
+
+const syncClaimsToSupabase = (claims: InsuranceClaimRecord[]): Promise<void> => {
+  if (!supabase || claims.length === 0) return Promise.resolve();
+  const payload = claims.map(mapClaimToRow);
+  return enqueueSupabaseWrite(async () => {
+    if (!supabase) return;
+    try {
+      const { error } = await supabase.from('insurance_claims').upsert(payload, { onConflict: 'id' });
+      if (error) console.warn('Supabase insurance_claims upsert warning:', error.message);
+    } catch (err) {
+      console.warn('Supabase insurance_claims sync failed:', err);
+    }
+  });
+};
+
+const syncCompaniesToSupabase = (companies: InsurancePartnerCompany[]): Promise<void> => {
+  if (!supabase || companies.length === 0) return Promise.resolve();
+  const payload = companies.map(mapCompanyToRow);
+  return enqueueSupabaseWrite(async () => {
+    if (!supabase) return;
+    try {
+      const { error } = await supabase.from('insurance_companies').upsert(payload, { onConflict: 'id' });
+      if (error) console.warn('Supabase insurance_companies upsert warning:', error.message);
+    } catch (err) {
+      console.warn('Supabase insurance_companies sync failed:', err);
+    }
+  });
 };
 
 // Date Normalization & Bidirectional AD <-> BS Conversion Helpers
@@ -814,6 +1083,7 @@ export const loanInsuranceService = {
 
   // Save all policies (syncs to localStorage & Supabase)
   saveRecords(records: LoanInsuranceRecord[]): void {
+    markLocalMutation();
     localStorage.setItem(STORAGE_KEYS.RECORDS, JSON.stringify(records));
     void syncRecordsToSupabase(records);
   },
@@ -821,6 +1091,7 @@ export const loanInsuranceService = {
   // Add a new policy
   addRecord(record: Omit<LoanInsuranceRecord, 'id' | 'createdAt' | 'updatedAt'>): LoanInsuranceRecord {
     assertDayNotEnded(record.branchId);
+    markLocalMutation();
     const records = this.getRecords();
     const startDate = record.policyStartDate || new Date().toISOString().split('T')[0];
     const expiryDate = record.policyExpiryDate || new Date(Date.now() + 365*24*60*60*1000).toISOString().split('T')[0];
@@ -847,13 +1118,17 @@ export const loanInsuranceService = {
     return newRecord;
   },
 
-  // Update policy
+  // Update policy (matches exact record id first to avoid colliding on shared policyNo)
   updateRecord(id: string, updates: Partial<LoanInsuranceRecord>): LoanInsuranceRecord | null {
     assertDayNotEnded(updates.branchId);
     const records = this.getRecords();
-    const index = records.findIndex(r => String(r.id) === String(id) || String(r.policyNo) === String(id));
+    let index = records.findIndex(r => String(r.id) === String(id));
+    if (index === -1) {
+      index = records.findIndex(r => String(r.policyNo) === String(id));
+    }
     if (index === -1) return null;
 
+    markLocalMutation();
     const current = records[index];
     const startDate = updates.policyStartDate || current.policyStartDate;
     const expiryDate = updates.policyExpiryDate || current.policyExpiryDate;
@@ -872,28 +1147,50 @@ export const loanInsuranceService = {
     return records[index];
   },
 
-  // Delete policy
+  // Delete policy (matches exact record id first to avoid deleting sibling records with same policyNo)
   deleteRecord(id: string): boolean {
     assertDayNotEnded();
     const records = this.getRecords();
-    const target = records.find(r => String(r.id) === String(id) || String(r.policyNo) === String(id));
-    const filtered = records.filter(r => String(r.id) !== String(id) && String(r.policyNo) !== String(id));
-    if (filtered.length !== records.length) {
-      localStorage.setItem(STORAGE_KEYS.RECORDS, JSON.stringify(filtered));
-      if (supabase) {
-        const delId = target?.id || String(id);
-        void (async () => {
-          try {
-            const { error } = await supabase.from('loan_insurance_records').delete().eq('id', delId);
-            if (error) console.warn('Supabase loan_insurance_records delete warning:', error.message);
-          } catch (err) {
-            console.warn('Supabase loan_insurance_records delete failed:', err);
-          }
-        })();
-      }
-      return true;
+    let targetIndex = records.findIndex(r => String(r.id) === String(id));
+    if (targetIndex === -1) {
+      targetIndex = records.findIndex(r => String(r.policyNo) === String(id));
     }
-    return false;
+    if (targetIndex === -1) return false;
+
+    markLocalMutation();
+    const target = records[targetIndex];
+    const filtered = records.filter((_, idx) => idx !== targetIndex);
+    localStorage.setItem(STORAGE_KEYS.RECORDS, JSON.stringify(filtered));
+    if (supabase) {
+      const delId = target.id;
+      void enqueueSupabaseWrite(async () => {
+        if (!supabase) return;
+        try {
+          const { error } = await supabase.from('loan_insurance_records').delete().eq('id', delId);
+          if (error) console.warn('Supabase loan_insurance_records delete warning:', error.message);
+        } catch (err) {
+          console.warn('Supabase loan_insurance_records delete failed:', err);
+        }
+      });
+    }
+    return true;
+  },
+
+  // Remove policy only from specific non-primary Report sub-tab(s) (Closed, Expired, Renewal, Premium, Statement)
+  removeRecordFromReportTab(
+    id: string,
+    tabOrTabs: RemovableReportTab | RemovableReportTab[]
+  ): LoanInsuranceRecord | null {
+    assertDayNotEnded();
+    const records = this.getRecords();
+    const existing =
+      records.find(r => String(r.id) === String(id)) ||
+      records.find(r => String(r.policyNo) === String(id));
+    if (!existing) return null;
+    const prevTabs = Array.isArray(existing.hiddenReportTabs) ? existing.hiddenReportTabs : [];
+    const tabsToAdd = Array.isArray(tabOrTabs) ? tabOrTabs : [tabOrTabs];
+    const nextTabs = Array.from(new Set([...prevTabs, ...tabsToAdd])) as RemovableReportTab[];
+    return this.updateRecord(existing.id, { hiddenReportTabs: nextTabs });
   },
 
   // Bulk import policies from parsed array
@@ -1189,12 +1486,14 @@ export const loanInsuranceService = {
   },
 
   saveClaims(claims: InsuranceClaimRecord[]): void {
+    markLocalMutation();
     localStorage.setItem(STORAGE_KEYS.CLAIMS, JSON.stringify(claims));
     void syncClaimsToSupabase(claims);
   },
 
   addClaim(claim: Omit<InsuranceClaimRecord, 'id' | 'createdAt' | 'updatedAt' | 'claimNo'>): InsuranceClaimRecord {
     assertDayNotEnded();
+    markLocalMutation();
     const claims = this.getClaims();
     const claimDate = claim.claimDate || new Date().toISOString().split('T')[0];
     const claimNo = `CLM-${new Date().getFullYear()}-${String(claims.length + 1).padStart(3, '0')}`;
@@ -1214,11 +1513,6 @@ export const loanInsuranceService = {
     localStorage.setItem(STORAGE_KEYS.CLAIMS, JSON.stringify(claims));
     void syncClaimsToSupabase([newClaim]);
 
-    // Update the corresponding policy status to Claimed
-    if (claim.insuranceRecordId) {
-      this.updateRecord(claim.insuranceRecordId, { status: 'Claimed' });
-    }
-
     return newClaim;
   },
 
@@ -1228,6 +1522,7 @@ export const loanInsuranceService = {
     const index = claims.findIndex(c => c.id === id);
     if (index === -1) return null;
 
+    markLocalMutation();
     const current = claims[index];
     const claimDate = updates.claimDate || current.claimDate;
 
@@ -1240,10 +1535,6 @@ export const loanInsuranceService = {
     };
     localStorage.setItem(STORAGE_KEYS.CLAIMS, JSON.stringify(claims));
     void syncClaimsToSupabase([claims[index]]);
-
-    if (updates.status === 'Settled' && claims[index].insuranceRecordId) {
-      this.updateRecord(claims[index].insuranceRecordId, { status: 'Settled' });
-    }
 
     return claims[index];
   },
@@ -1266,6 +1557,27 @@ export const loanInsuranceService = {
     });
   },
 
+  deleteClaim(id: string): boolean {
+    assertDayNotEnded();
+    const claims = this.getClaims();
+    const filtered = claims.filter(c => String(c.id) !== String(id));
+    if (filtered.length === claims.length) return false;
+    markLocalMutation();
+    localStorage.setItem(STORAGE_KEYS.CLAIMS, JSON.stringify(filtered));
+    if (supabase) {
+      void enqueueSupabaseWrite(async () => {
+        if (!supabase) return;
+        try {
+          const { error } = await supabase.from('insurance_claims').delete().eq('id', String(id));
+          if (error) console.warn('Supabase insurance_claims delete warning:', error.message);
+        } catch (err) {
+          console.warn('Supabase insurance_claims delete failed:', err);
+        }
+      });
+    }
+    return true;
+  },
+
   // Companies
   getCompanies(): InsurancePartnerCompany[] {
     try {
@@ -1286,12 +1598,93 @@ export const loanInsuranceService = {
     void syncCompaniesToSupabase(companies);
   },
 
+  // Loan Insurance Rate Chart (Editable & Persisted)
+  getRates(): LoanInsuranceRateRow[] {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.RATES);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed
+            .map((row: Partial<LoanInsuranceRateRow>, idx: number) => ({
+              id: String(row.id || `rate_${idx + 1}`),
+              termYears: Number(row.termYears) || idx + 1,
+              termLabel: String(row.termLabel || `${toNepaliDigits(Number(row.termYears) || idx + 1)} वर्ष`),
+              ratePercent: Number(row.ratePercent) || 0,
+              amountPer100k: Number(row.amountPer100k) || 0,
+              updatedAt: row.updatedAt ? Number(row.updatedAt) : undefined
+            }))
+            .sort((a, b) => a.termYears - b.termYears);
+        }
+      }
+    } catch {
+      // ignore parse errors
+    }
+    return DEFAULT_LOAN_INSURANCE_RATES.map(r => ({ ...r }));
+  },
+
+  saveRates(rates: LoanInsuranceRateRow[]): LoanInsuranceRateRow[] {
+    assertDayNotEnded();
+    const cleaned = rates
+      .map((row, idx) => ({
+        id: row.id || `rate_${Date.now()}_${idx}`,
+        termYears: Math.max(0.5, Number(row.termYears) || idx + 1),
+        termLabel: (row.termLabel || '').trim() || `${toNepaliDigits(Number(row.termYears) || idx + 1)} वर्ष`,
+        ratePercent: Math.max(0, Number(row.ratePercent) || 0),
+        amountPer100k: Math.max(0, Math.round(Number(row.amountPer100k) || 0)),
+        updatedAt: Date.now()
+      }))
+      .sort((a, b) => a.termYears - b.termYears);
+    localStorage.setItem(STORAGE_KEYS.RATES, JSON.stringify(cleaned));
+    return cleaned;
+  },
+
+  resetRates(): LoanInsuranceRateRow[] {
+    assertDayNotEnded();
+    const defaults = DEFAULT_LOAN_INSURANCE_RATES.map(r => ({ ...r, updatedAt: Date.now() }));
+    localStorage.setItem(STORAGE_KEYS.RATES, JSON.stringify(defaults));
+    return defaults;
+  },
+
+  // Loan Insurance Notices & Guidelines (Editable & Persisted)
+  getNotices(): InsuranceNoticeItem[] {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.NOTICES);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore parse errors
+    }
+    return DEFAULT_INSURANCE_NOTICES.map(n => ({ ...n, points: [...n.points] }));
+  },
+
+  saveNotices(notices: InsuranceNoticeItem[]): InsuranceNoticeItem[] {
+    assertDayNotEnded();
+    localStorage.setItem(STORAGE_KEYS.NOTICES, JSON.stringify(notices));
+    return notices;
+  },
+
+  resetNotices(): InsuranceNoticeItem[] {
+    assertDayNotEnded();
+    const defaults = DEFAULT_INSURANCE_NOTICES.map(n => ({ ...n, points: [...n.points], updatedAt: Date.now() }));
+    localStorage.setItem(STORAGE_KEYS.NOTICES, JSON.stringify(defaults));
+    return defaults;
+  },
+
   // Sync & Hydrate from Supabase (also pushes local records if Supabase tables are empty)
   async syncAllFromSupabase(): Promise<{
     records: LoanInsuranceRecord[];
     claims: InsuranceClaimRecord[];
     companies: InsurancePartnerCompany[];
   }> {
+    // Wait for any in-flight local writes/deletes to finish before reading back from Supabase
+    await pendingSupabaseWrite;
+
+    const seqAtStart = localMutationSeq;
     const localRecords = this.getRecords();
     const localClaims = this.getClaims();
     const localCompanies = this.getCompanies();
@@ -1306,6 +1699,15 @@ export const loanInsuranceService = {
         supabase.from('insurance_claims').select('*').order('created_at', { ascending: false }),
         supabase.from('insurance_companies').select('*')
       ]);
+
+      // If another local mutation occurred while the fetch was in flight, never overwrite fresher local state
+      if (localMutationSeq !== seqAtStart) {
+        return {
+          records: this.getRecords(),
+          claims: this.getClaims(),
+          companies: this.getCompanies()
+        };
+      }
 
       let finalRecords = localRecords;
       if (!recRes.error && Array.isArray(recRes.data)) {

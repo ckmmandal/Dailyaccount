@@ -1813,8 +1813,8 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
               onClick={() => setMode('single')}
               className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap inline-flex items-center gap-1.5 ${
                 mode === 'single'
-                  ? 'bg-white text-slate-900 shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
               }`}
             >
               <User className="w-3.5 h-3.5" />
@@ -1825,14 +1825,14 @@ export const MemberIdCardModule: React.FC<MemberIdCardModuleProps> = ({
               onClick={() => setMode('bulk')}
               className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap inline-flex items-center gap-1.5 ${
                 mode === 'bulk'
-                  ? 'bg-white text-slate-900 shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/70'
               }`}
             >
               <Users className="w-3.5 h-3.5" />
               <span>Bulk Cards</span>
               {selectedBulkIds.size > 0 && (
-                <span className="font-mono tabular-nums text-[11px] text-blue-700">({selectedBulkIds.size})</span>
+                <span className={`font-mono tabular-nums text-[11px] ${mode === 'bulk' ? 'text-blue-100' : 'text-blue-700'}`}>({selectedBulkIds.size})</span>
               )}
             </button>
           </div>
