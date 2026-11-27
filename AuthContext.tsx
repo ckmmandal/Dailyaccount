@@ -97,7 +97,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const saved = localStorage.getItem('ZEN_AUTH_SETTINGS') || localStorage.getItem('saccos_db_settings');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (!parsed.logoUrl || parsed.logoUrl.includes('picsum.photos')) {
+        if (
+          parsed.logoUrl === undefined ||
+          parsed.logoUrl === null ||
+          (typeof parsed.logoUrl === 'string' && parsed.logoUrl.includes('picsum.photos'))
+        ) {
           parsed.logoUrl = '/system_logo.png';
         }
         return parsed;
@@ -183,7 +187,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const finalSettings = s ? {
         ...DEFAULT_SETTINGS,
         ...s,
-        logoUrl: (s.logoUrl && !s.logoUrl.includes('picsum.photos')) ? s.logoUrl : '/system_logo.png'
+        logoUrl:
+          s.logoUrl === undefined || s.logoUrl === null
+            ? '/system_logo.png'
+            : s.logoUrl.includes('picsum.photos')
+              ? '/system_logo.png'
+              : s.logoUrl
       } : (settings || DEFAULT_SETTINGS);
       setSettings(finalSettings);
       try {
@@ -378,7 +387,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const finalSettings = s ? {
         ...DEFAULT_SETTINGS,
         ...s,
-        logoUrl: (s.logoUrl && !s.logoUrl.includes('picsum.photos')) ? s.logoUrl : '/system_logo.png'
+        logoUrl:
+          s.logoUrl === undefined || s.logoUrl === null
+            ? '/system_logo.png'
+            : s.logoUrl.includes('picsum.photos')
+              ? '/system_logo.png'
+              : s.logoUrl
       } : DEFAULT_SETTINGS;
       setSettings(finalSettings);
       try {

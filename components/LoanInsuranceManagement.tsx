@@ -4028,7 +4028,7 @@ export const LoanInsuranceManagement: React.FC = () => {
                             </span>
                           </td>
                           <td className="px-4 py-3 font-mono text-slate-600 text-xs whitespace-nowrap">{r.citizenshipNo || 'N/A'}</td>
-                          <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{r.dateOfBirth || 'N/A'}</td>
+                          <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{r.dateOfBirth || r.dateOfBirthBs || 'N/A'}</td>
                           <td className="px-4 py-3 font-bold text-slate-900 font-mono whitespace-nowrap">
                             {(r.loanAmount || 0).toLocaleString()}
                           </td>

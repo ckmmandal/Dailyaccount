@@ -1123,17 +1123,17 @@ const AppLayout: React.FC = () => {
             aria-label="Go to Dashboard"
             className="w-full h-full flex items-center justify-center cursor-pointer focus:outline-hidden focus-visible:ring-2 focus-visible:ring-emerald-600 rounded-lg"
           >
-            <img 
-              src={(settings?.logoUrl && !settings.logoUrl.includes('picsum.photos')) ? settings.logoUrl : '/system_logo.png'} 
-              alt="Logo" 
-              onError={(e) => {
-                const target = e.currentTarget;
-                if (!target.src.includes('system_logo.png')) {
-                  target.src = '/system_logo.png';
-                }
-              }}
-              className="h-16 max-h-[4.25rem] max-w-full object-contain filter drop-shadow-2xs transition-transform hover:scale-105" 
-            />
+            {settings?.logoUrl && !settings.logoUrl.includes('picsum.photos') ? (
+              <img 
+                src={settings.logoUrl} 
+                alt="Logo" 
+                className="h-16 max-h-[4.25rem] max-w-full object-contain filter drop-shadow-2xs transition-transform hover:scale-105" 
+              />
+            ) : (
+              <div className="h-12 w-12 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 flex items-center justify-center font-black text-sm tracking-tight">
+                {(settings?.systemName || 'CO').slice(0, 2).toUpperCase()}
+              </div>
+            )}
           </NavLink>
         </div>
 

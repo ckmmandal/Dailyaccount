@@ -322,6 +322,26 @@ const mapRecordToRow = (rec: LoanInsuranceRecord) => ({
 
 const mapRowToRecord = (r: Record<string, unknown>): LoanInsuranceRecord => {
   const notesMeta = decodeRecordNotesWithMeta(r.notes);
+  const rawDobAd = r.date_of_birth ? String(r.date_of_birth).trim() : '';
+  const rawDobBs = r.date_of_birth_bs ? String(r.date_of_birth_bs).trim() : '';
+  let resolvedDobAd = rawDobAd ? normalizeAdDate(rawDobAd) || rawDobAd : '';
+  let resolvedDobBs = rawDobBs ? normalizeBsDate(rawDobBs) || rawDobBs : '';
+  if (resolvedDobBs && !resolvedDobAd) {
+    resolvedDobAd = convertBsToAd(resolvedDobBs);
+  } else if (resolvedDobAd && !resolvedDobBs) {
+    resolvedDobBs = convertAdToBs(resolvedDobAd);
+  }
+
+  const rawNomDobAd = r.nominee_dob ? String(r.nominee_dob).trim() : '';
+  const rawNomDobBs = r.nominee_dob_bs ? String(r.nominee_dob_bs).trim() : '';
+  let resolvedNomDobAd = rawNomDobAd ? normalizeAdDate(rawNomDobAd) || rawNomDobAd : '';
+  let resolvedNomDobBs = rawNomDobBs ? normalizeBsDate(rawNomDobBs) || rawNomDobBs : '';
+  if (resolvedNomDobBs && !resolvedNomDobAd) {
+    resolvedNomDobAd = convertBsToAd(resolvedNomDobBs);
+  } else if (resolvedNomDobAd && !resolvedNomDobBs) {
+    resolvedNomDobBs = convertAdToBs(resolvedNomDobAd);
+  }
+
   return {
   id: String(r.id),
   sn: r.sn !== undefined && r.sn !== null ? Number(r.sn) : undefined,
@@ -354,8 +374,8 @@ const mapRowToRecord = (r: Record<string, unknown>): LoanInsuranceRecord => {
   status: (String(r.status || 'Active') as LoanInsuranceStatus),
   termMonths: r.term_months !== undefined && r.term_months !== null ? Number(r.term_months) : undefined,
   age: r.age !== undefined && r.age !== null ? Number(r.age) : undefined,
-  dateOfBirth: r.date_of_birth ? String(r.date_of_birth) : undefined,
-  dateOfBirthBs: r.date_of_birth_bs ? String(r.date_of_birth_bs) : undefined,
+  dateOfBirth: resolvedDobAd || undefined,
+  dateOfBirthBs: resolvedDobBs || undefined,
   address: r.address ? String(r.address) : undefined,
   occupation: r.occupation ? String(r.occupation) : undefined,
   disability: r.disability ? String(r.disability) : undefined,
@@ -365,8 +385,8 @@ const mapRowToRecord = (r: Record<string, unknown>): LoanInsuranceRecord => {
   nomineeRelation: String(r.nominee_relation || ''),
   nomineeContact: r.nominee_contact ? String(r.nominee_contact) : undefined,
   nomineeCitizenship: r.nominee_citizenship ? String(r.nominee_citizenship) : undefined,
-  nomineeDob: r.nominee_dob ? String(r.nominee_dob) : undefined,
-  nomineeDobBs: r.nominee_dob_bs ? String(r.nominee_dob_bs) : undefined,
+  nomineeDob: resolvedNomDobAd || undefined,
+  nomineeDobBs: resolvedNomDobBs || undefined,
   nomineeGender: r.nominee_gender ? String(r.nominee_gender) : undefined,
   documentUrl: r.document_url ? String(r.document_url) : undefined,
   documentName: r.document_name ? String(r.document_name) : undefined,
@@ -566,10 +586,34 @@ const syncCompaniesToSupabase = (companies: InsurancePartnerCompany[]): Promise<
   });
 };
 
+// Helper to convert Nepali Unicode digits (०-९) to ASCII digits (0-9)
+const toAsciiDigits = (input: string): string =>
+  input.replace(/[०-९]/g, d => String('०१२३४५६७८९'.indexOf(d)));
+
 // Date Normalization & Bidirectional AD <-> BS Conversion Helpers
 export const normalizeBsDate = (bsDateStr: string | number): string => {
-  if (!bsDateStr) return '';
-  const cleaned = String(bsDateStr).trim().replace(/\./g, '/').replace(/-/g, '/');
+  if (bsDateStr === undefined || bsDateStr === null || bsDateStr === '') return '';
+  const str = toAsciiDigits(String(bsDateStr).trim());
+  if (!str) return '';
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+
+  // 1. Handle Excel numeric serial date (e.g. 55275 for 5/2/2051 -> 2051-05-02, 51176 for 2/10/2040 -> 2040-02-10)
+  if (typeof bsDateStr === 'number' || /^\d{5}(\.\d+)?$/.test(str)) {
+    const num = Number(str);
+    if (num > 20000 && num < 100000) {
+      const parsed = XLSX.SSF?.parse_date_code?.(num);
+      if (parsed && parsed.y > 1900 && parsed.y < 2200) {
+        return `${parsed.y}-${pad(parsed.m)}-${pad(parsed.d)}`;
+      }
+      const jsDate = new Date(Math.round((num - 25569) * 86400 * 1000));
+      if (!isNaN(jsDate.getTime()) && jsDate.getUTCFullYear() > 1900 && jsDate.getUTCFullYear() < 2200) {
+        return `${jsDate.getUTCFullYear()}-${pad(jsDate.getUTCMonth() + 1)}-${pad(jsDate.getUTCDate())}`;
+      }
+    }
+  }
+
+  const cleaned = str.replace(/\./g, '/').replace(/-/g, '/');
   const parts = cleaned.split('/').map(p => parseInt(p, 10)).filter(n => !isNaN(n));
   if (parts.length !== 3) return '';
   
@@ -590,28 +634,32 @@ export const normalizeBsDate = (bsDateStr: string | number): string => {
       month = parts[0];
       day = parts[1];
     } else {
-      // In Nepal, D/M/YYYY is standard in spreadsheets (e.g. 5/8/2047 -> Day: 5, Month: 8, Year: 2047)
+      // In Nepal, D/M/YYYY is standard in text spreadsheets (e.g. 5/8/2047 -> Day: 5, Month: 8, Year: 2047)
       day = parts[0];
       month = parts[1];
     }
   }
   if (!year || month < 1 || month > 12 || day < 1 || day > 32) return '';
-  const pad = (n: number) => String(n).padStart(2, '0');
   return `${year}-${pad(month)}-${pad(day)}`;
 };
 
 export const normalizeAdDate = (adDateStr: string | number): string => {
-  if (!adDateStr) return '';
-  const str = String(adDateStr).trim();
+  if (adDateStr === undefined || adDateStr === null || adDateStr === '') return '';
+  const str = toAsciiDigits(String(adDateStr).trim());
+  if (!str) return '';
 
-  // 1. If it's a numeric Excel serial date (e.g. 46335) or a pure 5-digit number
-  if (typeof adDateStr === 'number' || (/^\d{5}$/.test(str) && !str.includes('/') && !str.includes('-'))) {
-    const num = Number(adDateStr);
-    if (num > 20000 && num < 80000) {
-      // Excel serial date epoch offset
+  // 1. If it's a numeric Excel serial date (e.g. 46335 or 46353.5)
+  if (typeof adDateStr === 'number' || (/^\d{5}(\.\d+)?$/.test(str) && !str.includes('/') && !str.includes('-'))) {
+    const num = Number(str);
+    if (num > 20000 && num < 100000) {
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const parsed = XLSX.SSF?.parse_date_code?.(num);
+      if (parsed && parsed.y > 1900 && parsed.y < 2200) {
+        return `${parsed.y}-${pad(parsed.m)}-${pad(parsed.d)}`;
+      }
+      // Fallback: Excel serial date epoch offset
       const jsDate = new Date(Math.round((num - 25569) * 86400 * 1000));
       if (!isNaN(jsDate.getTime())) {
-        const pad = (n: number) => String(n).padStart(2, '0');
         return `${jsDate.getUTCFullYear()}-${pad(jsDate.getUTCMonth() + 1)}-${pad(jsDate.getUTCDate())}`;
       }
     }
@@ -1350,10 +1398,13 @@ export const loanInsuranceService = {
             const rawDocBs = getRowVal(row, 'DOC_BS', 'DOC (BS)', 'DOC BS', 'start_date_bs', 'doc_bs');
 
             let policyStartDate = normalizeAdDate(rawDocAd);
+            let policyStartDateBs = normalizeBsDate(rawDocBs);
+            if (!policyStartDate && policyStartDateBs) {
+              policyStartDate = convertBsToAd(policyStartDateBs);
+            }
             if (!policyStartDate) {
               policyStartDate = new Date().toISOString().split('T')[0];
             }
-            let policyStartDateBs = normalizeBsDate(rawDocBs);
             if (!policyStartDateBs && policyStartDate) {
               policyStartDateBs = convertAdToBs(policyStartDate);
             }

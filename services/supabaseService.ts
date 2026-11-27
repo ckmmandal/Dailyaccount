@@ -3985,7 +3985,11 @@ export const supabaseService = {
         if (error && error.code !== 'PGRST116') throw error;
         const settings = data?.data || getLocalDB<SystemSettings>('settings', null as unknown as SystemSettings);
         if (settings) {
-          if (!settings.logoUrl || settings.logoUrl.includes('picsum.photos')) {
+          if (
+            settings.logoUrl === undefined ||
+            settings.logoUrl === null ||
+            (typeof settings.logoUrl === 'string' && settings.logoUrl.includes('picsum.photos'))
+          ) {
             settings.logoUrl = '/system_logo.png';
           }
         }
@@ -3994,7 +3998,12 @@ export const supabaseService = {
       } catch (e) {
         console.warn("Falling back to localStorage for getSettings:", e);
         const settings = getLocalDB<SystemSettings>('settings', null as unknown as SystemSettings);
-        if (settings && (!settings.logoUrl || settings.logoUrl.includes('picsum.photos'))) {
+        if (
+          settings &&
+          (settings.logoUrl === undefined ||
+            settings.logoUrl === null ||
+            (typeof settings.logoUrl === 'string' && settings.logoUrl.includes('picsum.photos')))
+        ) {
           settings.logoUrl = '/system_logo.png';
         }
         return settings;
@@ -4005,7 +4014,10 @@ export const supabaseService = {
     invalidateMemoryCache('settings');
     const finalSettings = {
       ...settings,
-      logoUrl: (settings.logoUrl && !settings.logoUrl.includes('picsum.photos')) ? settings.logoUrl : '/system_logo.png'
+      logoUrl:
+        settings.logoUrl && !settings.logoUrl.includes('picsum.photos')
+          ? settings.logoUrl
+          : ''
     };
     saveLocalDB('settings', finalSettings);
     try {

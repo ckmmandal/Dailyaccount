@@ -60,7 +60,7 @@ const SystemSettingsPage: React.FC = () => {
     try {
       const finalSettings = {
         ...settings,
-        logoUrl: (settings.logoUrl && !settings.logoUrl.includes('picsum.photos')) ? settings.logoUrl : '/system_logo.png'
+        logoUrl: settings.logoUrl && !settings.logoUrl.includes('picsum.photos') ? settings.logoUrl : ''
       };
       await storageService.saveSettings(finalSettings);
       try {
@@ -195,10 +195,30 @@ const SystemSettingsPage: React.FC = () => {
       };
       reader.readAsDataURL(file);
     }
+    e.target.value = '';
   };
 
-  const removeLogo = () => {
-    setSettings(prev => prev ? ({ ...prev, logoUrl: '/system_logo.png' }) : prev);
+  const removeLogo = async () => {
+    if (!settings) return;
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    const nextSettings: SystemSettings = {
+      ...settings,
+      logoUrl: ''
+    };
+    setSettings(nextSettings);
+    try {
+      localStorage.setItem('ZEN_AUTH_SETTINGS', JSON.stringify(nextSettings));
+      localStorage.setItem('saccos_db_settings', JSON.stringify(nextSettings));
+      window.dispatchEvent(new Event('settingsUpdated'));
+      window.dispatchEvent(new Event('storage'));
+      await storageService.saveSettings(nextSettings);
+      await refreshSettings();
+      await storageService.saveLog(user?.username || 'admin', 'REMOVE_LOGO', 'Removed official institution logo');
+    } catch (error) {
+      console.error('Failed to persist logo removal:', error);
+    }
   };
 
   return (
@@ -302,7 +322,7 @@ const SystemSettingsPage: React.FC = () => {
                     const nextSettings: SystemSettings = {
                       ...settings,
                       allowDayReopenSpecialAccess: nextAllow,
-                      logoUrl: (settings.logoUrl && !settings.logoUrl.includes('picsum.photos')) ? settings.logoUrl : '/system_logo.png'
+                      logoUrl: settings.logoUrl && !settings.logoUrl.includes('picsum.photos') ? settings.logoUrl : ''
                     };
                     setSettings(nextSettings);
                     try {
@@ -945,7 +965,7 @@ const SystemSettingsPage: React.FC = () => {
                   const nextSettings: SystemSettings = {
                     ...settings,
                     allowBackDateEntry: nextAllow,
-                    logoUrl: (settings.logoUrl && !settings.logoUrl.includes('picsum.photos')) ? settings.logoUrl : '/system_logo.png'
+                    logoUrl: settings.logoUrl && !settings.logoUrl.includes('picsum.photos') ? settings.logoUrl : ''
                   };
                   setSettings(nextSettings);
                   try {
