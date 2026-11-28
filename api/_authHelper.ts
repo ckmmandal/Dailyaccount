@@ -114,12 +114,24 @@ export function validateStrongPasswordServer(password: string): string | null {
   return null;
 }
 
+export function hasServiceRoleKey(): boolean {
+  return Boolean((process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim());
+}
+
 export function getServerSupabase(): SupabaseClient | null {
-  const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").trim().replace(/\/+$/, "");
+  const url = (
+    process.env.SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    ""
+  )
+    .trim()
+    .replace(/\/+$/, "");
   const key = (
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
     process.env.SUPABASE_ANON_KEY ||
     process.env.VITE_SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
     ""
   ).trim();
   if (!url || !key) return null;

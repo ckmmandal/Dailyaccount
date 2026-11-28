@@ -5,13 +5,14 @@ import {
   Save, Landmark, CheckCircle2, Camera, Image as ImageIcon, Trash2, Globe,
   Mail, Bell, BellOff, Receipt, FileText, KeyRound, CalendarCheck,
   Send, RefreshCw, AlertCircle, Check, X, Sliders, Server, AtSign, UserCheck,
-  Clock, ShieldCheck, Timer, CalendarOff, Calendar, Lock, Unlock
+  Clock, ShieldCheck, Timer, CalendarOff, Calendar, Lock, Unlock, Smartphone
 } from 'lucide-react';
 import { useAuth, DEFAULT_SETTINGS } from '../AuthContext';
 import { sendTestEmailApi, getStoredSmtpConfig } from '../services/pdfEmailService';
 import { getAuthHeaders } from '../services/authToken';
 import { useDayEndLock } from '../utils/dayEndLock';
 import { DayEndFieldset } from './DayEndFieldset';
+import { AuthenticatorSetupCard } from './AuthenticatorSetupCard';
 
 const DEFAULT_EMAIL_SETTINGS: EmailNotificationSettings = {
   enabled: true,
@@ -88,6 +89,17 @@ const SystemSettingsPage: React.FC = () => {
   const currentAutoLogoutMinutes = settings.autoLogoutMinutes !== undefined ? settings.autoLogoutMinutes : 30;
   const isBackDateAllowed = settings.allowBackDateEntry !== false;
   const isSpecialDayReopenAllowed = settings.allowDayReopenSpecialAccess === true;
+  const isTwoStepLoginEnabled = settings.twoStepLoginEnabled === true;
+  const currentTwoStepMethod: 'smart' | 'authenticator' | 'email' =
+    settings.twoStepLoginMethod === 'smart' || settings.twoStepLoginMethod === 'email'
+      ? settings.twoStepLoginMethod
+      : 'authenticator';
+  const currentTwoStepFrequency: 'every_login' | 'once_per_day' | 'once_per_7_days' | 'once_per_30_days' =
+    settings.twoStepFrequency === 'every_login' ||
+    settings.twoStepFrequency === 'once_per_7_days' ||
+    settings.twoStepFrequency === 'once_per_30_days'
+      ? settings.twoStepFrequency
+      : 'once_per_day';
   const emailSettings = settings.emailNotifications || DEFAULT_EMAIL_SETTINGS;
   const isMasterEnabled = emailSettings.enabled;
 
@@ -358,6 +370,314 @@ const SystemSettingsPage: React.FC = () => {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* SECTION 2D (SUPER ADMIN ACCESS): 1-CLICK 2-STEP LOGIN (GOOGLE AUTHENTICATOR + EMAIL OTP) */}
+      {isSuperAdmin && (
+        <div className="bg-white rounded-2xl border border-emerald-200 shadow-sm overflow-hidden">
+          <div className="py-3 px-5 bg-gradient-to-r from-slate-900 via-emerald-950 to-slate-900 text-white flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+            <div className="flex items-center space-x-2.5">
+              <div className={`p-2 rounded-lg border ${isTwoStepLoginEnabled ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/30' : 'bg-slate-700/60 text-slate-300 border-slate-500/30'}`}>
+                <ShieldCheck size={18} />
+              </div>
+              <div>
+                <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                  <h4 className="text-sm font-black italic tracking-tight uppercase">
+                    2-Step Login Security (Google Authenticator & Email OTP)
+                  </h4>
+                  <span className={`text-[8.5px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider border ${
+                    isTwoStepLoginEnabled
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/30'
+                      : 'bg-slate-700/80 text-slate-300 border-slate-500/40'
+                  }`}>
+                    {isTwoStepLoginEnabled
+                      ? currentTwoStepMethod === 'authenticator'
+                        ? 'Google Auth Active'
+                        : currentTwoStepMethod === 'email'
+                        ? 'Email OTP Active'
+                        : 'Smart 2FA Active'
+                      : 'Password Only'}
+                  </span>
+                </div>
+                <p className="text-[10px] font-medium text-slate-300">
+                  1-Click Super Admin switch supporting Google Authenticator app (TOTP) and Email OTP verification
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-4 md:p-5 bg-emerald-50/35 space-y-4">
+            <div
+              className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 p-4 rounded-xl border-2 transition-all duration-300 bg-white shadow-sm"
+              style={{ borderColor: isTwoStepLoginEnabled ? '#10b981' : '#cbd5e1' }}
+            >
+              <div className="flex items-start space-x-3">
+                <div className={`p-2.5 rounded-xl transition-colors duration-300 shrink-0 ${
+                  isTwoStepLoginEnabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
+                }`}>
+                  <KeyRound size={20} />
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                    <h5 className="text-sm font-black text-slate-800 uppercase tracking-tight">
+                      Require 2-Step Verification on Every Sign-In
+                    </h5>
+                    <span className={`px-2 py-0.5 rounded-full text-[8.5px] font-black uppercase tracking-widest ${
+                      isTwoStepLoginEnabled ? 'bg-emerald-600 text-white' : 'bg-slate-500 text-white'
+                    }`}>
+                      {isTwoStepLoginEnabled ? 'ENABLED' : 'DISABLED'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-600 mt-1 max-w-2xl leading-relaxed">
+                    {isTwoStepLoginEnabled
+                      ? currentTwoStepMethod === 'authenticator'
+                        ? 'GOOGLE AUTHENTICATOR (AUTO 1-TIME QR): On first login, unpaired users automatically see a one-time QR code, scan it, and verify the 6-digit code to sign in. Future logins ask only for the 6-digit code.'
+                        : currentTwoStepMethod === 'smart'
+                        ? 'SMART MODE: Users who paired Google Authenticator verify via the app; everyone else receives a 6-digit Email OTP automatically.'
+                        : 'EMAIL OTP ONLY: Every user must verify a 6-digit code sent to their registered email address on every sign-in.'
+                      : 'DISABLED: Users sign in directly with username & password. When turned ON in Google Authenticator mode, users automatically see a one-time QR setup on their next login.'}
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-bold">
+                    {user?.email ? (
+                      <span className="inline-flex items-center space-x-1 bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-md">
+                        <Mail size={11} />
+                        <span>Your Admin Fallback Email: {user.email}</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center space-x-1 bg-rose-50 text-rose-700 border border-rose-200 px-2 py-0.5 rounded-md">
+                        <AlertCircle size={11} />
+                        <span>Add an email in User Management or pair Google Authenticator below before enabling</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-3 self-end md:self-center shrink-0">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                  {isTwoStepLoginEnabled ? 'Enabled' : 'Disabled'}
+                </span>
+                <button
+                  id="toggle-two-step-login-switch"
+                  type="button"
+                  onClick={async () => {
+                    if (!settings) return;
+                    const nextEnabled = !isTwoStepLoginEnabled;
+                    const nextSettings: SystemSettings = {
+                      ...settings,
+                      twoStepLoginEnabled: nextEnabled,
+                      twoStepLoginMethod: currentTwoStepMethod,
+                      twoStepFrequency: currentTwoStepFrequency,
+                      logoUrl: settings.logoUrl && !settings.logoUrl.includes('picsum.photos') ? settings.logoUrl : ''
+                    };
+                    setSettings(nextSettings);
+                    try {
+                      localStorage.setItem('ZEN_AUTH_SETTINGS', JSON.stringify(nextSettings));
+                      localStorage.setItem('saccos_db_settings', JSON.stringify(nextSettings));
+                      window.dispatchEvent(new Event('settingsUpdated'));
+                      window.dispatchEvent(new Event('storage'));
+                      await storageService.saveSettings(nextSettings);
+                      await storageService.saveLog(
+                        user?.username || 'admin',
+                        'TOGGLE_TWO_STEP_LOGIN',
+                        `${nextEnabled ? 'Enabled' : 'Disabled'} 2-Step Login (${currentTwoStepMethod})`
+                      );
+                      await refreshSettings();
+                      setSaved(true);
+                      setTimeout(() => setSaved(false), 2000);
+                    } catch {
+                      // localStorage & event already updated
+                    }
+                  }}
+                  className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors duration-300 focus:outline-none shadow-inner cursor-pointer ${
+                    isTwoStepLoginEnabled ? 'bg-emerald-600' : 'bg-slate-400'
+                  }`}
+                  title={isTwoStepLoginEnabled ? 'Disable 2-Step Login' : 'Enable 2-Step Login'}
+                >
+                  <span
+                    className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-300 shadow-md ${
+                      isTwoStepLoginEnabled ? 'translate-x-8' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            {/* Verification Method Selector */}
+            <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-2xs space-y-2.5">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-700 flex items-center space-x-1.5">
+                  <Smartphone size={13} className="text-emerald-600" />
+                  <span>2-Step Verification Method</span>
+                </span>
+                <span className="text-[9.5px] font-semibold text-slate-400">
+                  Applies immediately when 2-Step Login is enabled
+                </span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                {(
+                  [
+                    {
+                      id: 'authenticator' as const,
+                      title: 'Google Authenticator (Recommended)',
+                      desc: '1-time QR setup on first login & instant 6-digit verify; future logins ask only for the app code',
+                    },
+                    {
+                      id: 'smart' as const,
+                      title: 'Smart (Auth + Email Fallback)',
+                      desc: 'Uses Google Authenticator if paired, else sends an automatic 6-digit Email OTP',
+                    },
+                    {
+                      id: 'email' as const,
+                      title: 'Email OTP Only',
+                      desc: 'Always sends a 6-digit verification code via SMTP email',
+                    },
+                  ]
+                ).map(opt => {
+                  const active = currentTwoStepMethod === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={async () => {
+                        if (!settings || opt.id === currentTwoStepMethod) return;
+                        const nextSettings: SystemSettings = {
+                          ...settings,
+                          twoStepLoginMethod: opt.id,
+                          logoUrl: settings.logoUrl && !settings.logoUrl.includes('picsum.photos') ? settings.logoUrl : ''
+                        };
+                        setSettings(nextSettings);
+                        try {
+                          localStorage.setItem('ZEN_AUTH_SETTINGS', JSON.stringify(nextSettings));
+                          localStorage.setItem('saccos_db_settings', JSON.stringify(nextSettings));
+                          window.dispatchEvent(new Event('settingsUpdated'));
+                          window.dispatchEvent(new Event('storage'));
+                          await storageService.saveSettings(nextSettings);
+                          await storageService.saveLog(
+                            user?.username || 'admin',
+                            'UPDATE_TWO_STEP_METHOD',
+                            `Changed 2-Step Login verification method to ${opt.id}`
+                          );
+                          await refreshSettings();
+                          setSaved(true);
+                          setTimeout(() => setSaved(false), 2000);
+                        } catch {
+                          // localStorage & event already updated
+                        }
+                      }}
+                      className={`text-left p-3 rounded-xl border-2 transition-all cursor-pointer ${
+                        active
+                          ? 'bg-emerald-50/70 border-emerald-500 shadow-2xs'
+                          : 'bg-slate-50/60 border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className={`text-[11px] font-black uppercase tracking-tight ${active ? 'text-emerald-800' : 'text-slate-700'}`}>
+                          {opt.title}
+                        </span>
+                        {active && <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />}
+                      </div>
+                      <p className="text-[10px] text-slate-500 font-medium mt-1 leading-snug">
+                        {opt.desc}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Verification Frequency Selector */}
+            <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-2xs space-y-2.5">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-700 flex items-center space-x-1.5">
+                  <Clock size={13} className="text-emerald-600" />
+                  <span>How Often to Ask for 6-Digit Code (Same Browser / Office PC)</span>
+                </span>
+                <span className="text-[9.5px] font-semibold text-slate-400">
+                  New or unknown devices ALWAYS require a 6-digit code
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                {(
+                  [
+                    {
+                      id: 'once_per_day' as const,
+                      title: 'Once Per Day (Recommended)',
+                      desc: '1 time per Nepal calendar day on the same PC; resets automatically next morning',
+                    },
+                    {
+                      id: 'every_login' as const,
+                      title: 'Every Login',
+                      desc: 'Strictest: asks for a 6-digit code every time a user signs in or after auto-logout',
+                    },
+                    {
+                      id: 'once_per_7_days' as const,
+                      title: 'Once Every 7 Days',
+                      desc: 'Trusted office browser remembers verification for 7 days',
+                    },
+                    {
+                      id: 'once_per_30_days' as const,
+                      title: 'Once Every 30 Days',
+                      desc: 'Trusted office browser remembers verification for 30 days',
+                    },
+                  ]
+                ).map(opt => {
+                  const active = currentTwoStepFrequency === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={async () => {
+                        if (!settings || opt.id === currentTwoStepFrequency) return;
+                        const nextSettings: SystemSettings = {
+                          ...settings,
+                          twoStepFrequency: opt.id,
+                          logoUrl: settings.logoUrl && !settings.logoUrl.includes('picsum.photos') ? settings.logoUrl : ''
+                        };
+                        setSettings(nextSettings);
+                        try {
+                          localStorage.setItem('ZEN_AUTH_SETTINGS', JSON.stringify(nextSettings));
+                          localStorage.setItem('saccos_db_settings', JSON.stringify(nextSettings));
+                          window.dispatchEvent(new Event('settingsUpdated'));
+                          window.dispatchEvent(new Event('storage'));
+                          await storageService.saveSettings(nextSettings);
+                          await storageService.saveLog(
+                            user?.username || 'admin',
+                            'UPDATE_TWO_STEP_FREQUENCY',
+                            `Changed 2-Step Login prompt frequency to ${opt.id}`
+                          );
+                          await refreshSettings();
+                          setSaved(true);
+                          setTimeout(() => setSaved(false), 2000);
+                        } catch {
+                          // localStorage & event already updated
+                        }
+                      }}
+                      className={`text-left p-3 rounded-xl border-2 transition-all cursor-pointer ${
+                        active
+                          ? 'bg-emerald-50/70 border-emerald-500 shadow-2xs'
+                          : 'bg-slate-50/60 border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <span className={`text-[10.5px] font-black uppercase tracking-tight ${active ? 'text-emerald-800' : 'text-slate-700'}`}>
+                          {opt.title}
+                        </span>
+                        {active && <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />}
+                      </div>
+                      <p className="text-[10px] text-slate-500 font-medium mt-1 leading-snug">
+                        {opt.desc}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Super Admin Personal Google Authenticator Pairing Card */}
+            <AuthenticatorSetupCard compact />
           </div>
         </div>
       )}

@@ -6,6 +6,28 @@ import dns from "dns";
 import { createServer as createViteServer } from "vite";
 import nodemailer from "nodemailer";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import {
+  TOTP_VAULT_SETTING_ID,
+  TWO_STEP_TRUST_COOKIE_NAME,
+  type TwoStepFrequency,
+  buildOtpAuthUri,
+  buildTwoStepTrustCookieHeader,
+  deleteUserTotpSecret,
+  extractCookieValue,
+  generateQrDataUrl,
+  generateTotpSecret,
+  getTotpEnrolledUserIds,
+  getTrustMaxAgeSeconds,
+  getUserTotpEntry,
+  getUserTotpSecret,
+  normalizeTwoStepFrequency,
+  setUserTotpSecret,
+  signTotpSetupToken,
+  signTwoStepTrustToken,
+  verifyTotpCode,
+  verifyTotpSetupToken,
+  verifyTwoStepTrustToken,
+} from "./api/_totpHelper.js";
 
 // Load local .env file without overriding already-set process environment variables
 function loadLocalEnv(): void {
@@ -167,6 +189,23 @@ function setSessionCookie(res: Response, token: string): void {
     "Set-Cookie",
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/api; Max-Age=${maxAgeSec}${secureFlag}`
   );
+}
+
+function appendSetCookie(res: Response, cookieStr: string): void {
+  const existing = res.getHeader("Set-Cookie");
+  if (!existing) {
+    res.setHeader("Set-Cookie", cookieStr);
+  } else if (Array.isArray(existing)) {
+    res.setHeader("Set-Cookie", [...existing.map(String), cookieStr]);
+  } else {
+    res.setHeader("Set-Cookie", [String(existing), cookieStr]);
+  }
+}
+
+function isRequestHttps(req: Request): boolean {
+  if (req.secure) return true;
+  const proto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
+  return proto === "https" || process.env.NODE_ENV === "production";
 }
 
 function clearSessionCookie(res: Response): void {
@@ -376,11 +415,30 @@ const otpChallenges = new Map<string, OtpChallenge>();
 const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_OTP_ATTEMPTS = 5;
 
+interface LoginOtpChallenge {
+  method: "email" | "authenticator" | "authenticator_setup";
+  userId: string;
+  username: string;
+  fullName: string;
+  email: string;
+  otpHash: string;
+  pendingTotpSecret?: string;
+  expiresAt: number;
+  attempts: number;
+}
+
+const loginOtpChallenges = new Map<string, LoginOtpChallenge>();
+const LOGIN_OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const LOGIN_TOTP_SETUP_TTL_MS = 10 * 60 * 1000; // 10 minutes for first-time QR scan
+
 function pruneOtpChallenges(): void {
   const now = Date.now();
   for (const [id, ch] of otpChallenges.entries()) {
     const expiry = Math.max(ch.expiresAt, ch.resetExpiresAt || 0);
     if (expiry <= now) otpChallenges.delete(id);
+  }
+  for (const [id, ch] of loginOtpChallenges.entries()) {
+    if (ch.expiresAt <= now) loginOtpChallenges.delete(id);
   }
 }
 
@@ -840,12 +898,639 @@ app.post("/api/auth/login", async (req, res) => {
       }
     }
 
+    // Check global 2-Step Login setting directly from Supabase
+    let twoStepEnabled = false;
+    let twoStepMethod: "smart" | "authenticator" | "email" = "authenticator";
+    let twoStepFrequency: TwoStepFrequency = "once_per_day";
+    let twoStepCompanyName = "Ratauli Saving and Credit Cooperative Ltd";
+    let twoStepCompanyAddress = "Pipra Rural Municipality -6 (Mahottari)";
+    let twoStepLogoUrl = "";
+    try {
+      const { data: settingsRow } = await sb
+        .from("settings")
+        .select("data")
+        .eq("id", "global")
+        .maybeSingle();
+      const sData =
+        settingsRow && settingsRow.data && typeof settingsRow.data === "object"
+          ? (settingsRow.data as Record<string, unknown>)
+          : null;
+      if (sData) {
+        twoStepEnabled = sData.twoStepLoginEnabled === true;
+        if (sData.twoStepLoginMethod === "email" || sData.twoStepLoginMethod === "authenticator" || sData.twoStepLoginMethod === "smart") {
+          twoStepMethod = sData.twoStepLoginMethod;
+        }
+        twoStepFrequency = normalizeTwoStepFrequency(sData.twoStepFrequency);
+        if (typeof sData.systemName === "string" && sData.systemName.trim()) {
+          twoStepCompanyName = sData.systemName.trim();
+        }
+        if (typeof sData.address === "string" && sData.address.trim()) {
+          twoStepCompanyAddress = sData.address.trim();
+        }
+        if (typeof sData.logoUrl === "string" && sData.logoUrl.trim()) {
+          twoStepLogoUrl = sData.logoUrl.trim();
+        }
+      }
+    } catch {
+      // Non-blocking settings lookup
+    }
+
+    if (twoStepEnabled) {
+      pruneOtpChallenges();
+
+      // Check if user has Google Authenticator paired (used in 'smart' and 'authenticator' modes)
+      let userTotpEntry: { enabledAt: number } | null = null;
+      let userTotpSecret: string | null = null;
+      if (twoStepMethod !== "email") {
+        userTotpEntry = await getUserTotpEntry(sb, String(matchedRow.id)).catch(() => null);
+        if (userTotpEntry) {
+          userTotpSecret = await getUserTotpSecret(sb, String(matchedRow.id), SESSION_SECRET).catch(() => null);
+        }
+      }
+
+      const requiredMethodForTrust: "authenticator" | "email" =
+        twoStepMethod === "authenticator" || (twoStepMethod === "smart" && Boolean(userTotpSecret))
+          ? "authenticator"
+          : "email";
+
+      // Honor trusted-device cookie when frequency is once_per_day / once_per_7_days / once_per_30_days
+      // (Never skips first-time QR enrollment because currentTotpEnabledAt is null when unpaired)
+      const trustCookie = extractCookieValue(req.headers.cookie, TWO_STEP_TRUST_COOKIE_NAME);
+      const isTrustedDevice = verifyTwoStepTrustToken(
+        trustCookie,
+        {
+          userId: String(matchedRow.id),
+          requiredMethod: requiredMethodForTrust,
+          currentTotpEnabledAt: userTotpEntry?.enabledAt ?? null,
+          frequency: twoStepFrequency,
+        },
+        SESSION_SECRET
+      );
+      if (isTrustedDevice) {
+        const token = issueSessionForUser(safeUser);
+        setSessionCookie(res, token);
+        return res.json({ success: true, user: safeUser, token, twoStepTrustedDevice: true });
+      }
+
+      if (twoStepMethod !== "email" && userTotpSecret) {
+        const challengeId = crypto.randomBytes(20).toString("hex");
+        loginOtpChallenges.set(challengeId, {
+          method: "authenticator",
+          userId: String(matchedRow.id),
+          username: safeUser.username,
+          fullName: safeUser.fullName,
+          email: "",
+          otpHash: "",
+          expiresAt: Date.now() + LOGIN_OTP_TTL_MS,
+          attempts: 0,
+        });
+        return res.json({
+          success: true,
+          requiresTwoStep: true,
+          twoStepMethod: "authenticator",
+          challengeId,
+          expiresInSeconds: Math.floor(LOGIN_OTP_TTL_MS / 1000),
+          message: "Open Google Authenticator and enter the 6-digit code.",
+        });
+      }
+
+      if (twoStepMethod === "authenticator") {
+        const pendingSecret = generateTotpSecret();
+        const issuer = (twoStepCompanyName || "Ratauli SACCOS").slice(0, 40);
+        const otpAuthUri = buildOtpAuthUri({
+          secret: pendingSecret,
+          accountName: safeUser.username,
+          issuer,
+        });
+        const qrDataUrl = await generateQrDataUrl(otpAuthUri);
+        const challengeId = crypto.randomBytes(20).toString("hex");
+        loginOtpChallenges.set(challengeId, {
+          method: "authenticator_setup",
+          userId: String(matchedRow.id),
+          username: safeUser.username,
+          fullName: safeUser.fullName,
+          email: "",
+          otpHash: "",
+          pendingTotpSecret: pendingSecret,
+          expiresAt: Date.now() + LOGIN_TOTP_SETUP_TTL_MS,
+          attempts: 0,
+        });
+        return res.json({
+          success: true,
+          requiresTwoStep: true,
+          twoStepMethod: "authenticator_setup",
+          challengeId,
+          qrDataUrl,
+          expiresInSeconds: Math.floor(LOGIN_TOTP_SETUP_TTL_MS / 1000),
+          message: "One-time setup: Scan this QR code in Google Authenticator and enter the 6-digit code to sign in.",
+        });
+      }
+
+      let recipientEmail =
+        typeof matchedRow.email === "string" && matchedRow.email.includes("@") ? matchedRow.email.trim() : "";
+
+      if (!recipientEmail) {
+        try {
+          const { data: emps } = await sb.from("employees").select("full_name, employee_code, email");
+          const linked = (emps || []).find(
+            (e) =>
+              typeof e.email === "string" &&
+              e.email.includes("@") &&
+              (String(e.full_name || "").toLowerCase().trim() === String(matchedRow.full_name || "").toLowerCase().trim() ||
+                String(e.employee_code || "").toLowerCase().trim() === String(matchedRow.username || "").toLowerCase().trim())
+          );
+          if (linked?.email) {
+            recipientEmail = String(linked.email).trim();
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      if (!recipientEmail) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "2-Step Login is enabled, but no email address is registered for your account. Please ask your Super Admin to add your email.",
+        });
+      }
+
+      const smtp = createServerSmtpTransporter(twoStepCompanyName);
+      if (!smtp) {
+        return res.status(503).json({
+          success: false,
+          message: "2-Step Login is enabled, but server email (SMTP_USER / SMTP_PASS) is not configured.",
+        });
+      }
+
+      const otpCode = crypto.randomInt(100000, 1000000).toString();
+      const challengeId = crypto.randomBytes(20).toString("hex");
+      loginOtpChallenges.set(challengeId, {
+        method: "email",
+        userId: String(matchedRow.id),
+        username: safeUser.username,
+        fullName: safeUser.fullName,
+        email: recipientEmail,
+        otpHash: sha256Hex(`${matchedRow.id}:${otpCode}`),
+        expiresAt: Date.now() + LOGIN_OTP_TTL_MS,
+        attempts: 0,
+      });
+
+      const logoAttachment = await getLogoAttachment(twoStepLogoUrl);
+      const safeCompany = escapeHtml(twoStepCompanyName);
+      const safeAddress = escapeHtml(twoStepCompanyAddress);
+      const safeDisplayName = escapeHtml(safeUser.fullName || safeUser.username);
+
+      await smtp.transporter.sendMail({
+        from: smtp.from,
+        to: recipientEmail,
+        subject: `Login Verification Code: ${otpCode} - ${twoStepCompanyName}`,
+        text: `Hello ${safeUser.fullName || safeUser.username},\n\nYour 2-Step Login verification code is: ${otpCode}\n\nThis code is valid for 5 minutes. If you did not try to sign in, please change your password immediately.\n\n${twoStepCompanyName}\n${twoStepCompanyAddress}`,
+        html: `
+          <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 18px; border: 1px solid #e2e8f0; overflow: hidden;">
+            <div style="background: #065f46; padding: 22px 26px; color: #ffffff;">
+              <div style="font-size: 16px; font-weight: 900; text-transform: uppercase;">${safeCompany}</div>
+              <div style="font-size: 12px; margin-top: 4px; opacity: 0.9;">${safeAddress}</div>
+            </div>
+            <div style="padding: 30px 26px; text-align: center; color: #1e293b;">
+              <h3 style="margin: 0 0 10px 0; font-size: 18px; color: #0f172a;">2-Step Login Verification Code</h3>
+              <p style="margin: 0 0 22px 0; font-size: 14px; color: #475569;">Hello <strong>${safeDisplayName}</strong>, enter this 6-digit code to complete your sign-in:</p>
+              <div style="background: #f0fdf4; border: 2px dashed #10b981; border-radius: 12px; padding: 18px; margin: 0 auto 22px auto; max-width: 260px;">
+                <span style="font-family: monospace; font-size: 32px; font-weight: 900; letter-spacing: 8px; color: #047857; display: block;">${otpCode}</span>
+              </div>
+              <p style="margin: 0; font-size: 12px; color: #64748b;">Valid for 5 minutes. Never share this code with anyone.</p>
+            </div>
+          </div>
+        `,
+        attachments: [logoAttachment],
+      });
+
+      return res.json({
+        success: true,
+        requiresTwoStep: true,
+        twoStepMethod: "email",
+        challengeId,
+        maskedEmail: maskEmailAddress(recipientEmail),
+        expiresInSeconds: Math.floor(LOGIN_OTP_TTL_MS / 1000),
+        message: "A 6-digit verification code has been sent to your registered email.",
+      });
+    }
+
     const token = issueSessionForUser(safeUser);
     setSessionCookie(res, token);
     return res.json({ success: true, user: safeUser, token });
   } catch (err: unknown) {
     console.error("Server login error:", err);
     return res.status(500).json({ success: false, message: "Could not complete login. Please try again." });
+  }
+});
+
+app.post("/api/auth/verify-login-otp", async (req, res) => {
+  try {
+    pruneOtpChallenges();
+    const clientIp = req.ip || req.socket.remoteAddress || "unknown";
+    if (!checkRateLimit(`login-otp-verify:${clientIp}`, 15, 10 * 60 * 1000)) {
+      return res.status(429).json({
+        success: false,
+        message: "Too many verification attempts. Please wait 10 minutes and try again.",
+      });
+    }
+
+    const { challengeId, otpCode } = req.body || {};
+    if (typeof challengeId !== "string" || !challengeId.trim()) {
+      return res.status(400).json({ success: false, message: "Verification session expired. Please sign in again." });
+    }
+
+    const challenge = loginOtpChallenges.get(challengeId.trim());
+    if (!challenge || challenge.expiresAt <= Date.now()) {
+      loginOtpChallenges.delete(challengeId.trim());
+      return res.status(400).json({ success: false, message: "Verification code expired. Please sign in again." });
+    }
+
+    if (challenge.attempts >= MAX_OTP_ATTEMPTS) {
+      loginOtpChallenges.delete(challengeId.trim());
+      return res.status(429).json({
+        success: false,
+        message: "Too many incorrect codes entered. Please sign in again to get a new code.",
+      });
+    }
+
+    const sb = getServerSupabase();
+    if (!sb) {
+      return res.status(503).json({ success: false, message: "Authentication database is not configured." });
+    }
+
+    const cleanOtp = typeof otpCode === "string" ? otpCode.replace(/\D/g, "").trim() : "";
+    let codeValid = false;
+    if (challenge.method === "authenticator_setup") {
+      codeValid = Boolean(
+        challenge.pendingTotpSecret && verifyTotpCode(challenge.pendingTotpSecret, cleanOtp, 1)
+      );
+    } else if (challenge.method === "authenticator") {
+      const secret = await getUserTotpSecret(sb, challenge.userId, SESSION_SECRET);
+      codeValid = Boolean(secret && verifyTotpCode(secret, cleanOtp, 1));
+    } else {
+      const providedHash = sha256Hex(`${challenge.userId}:${cleanOtp}`);
+      const expectedBuf = Buffer.from(challenge.otpHash, "hex");
+      const providedBuf = Buffer.from(providedHash, "hex");
+      codeValid = expectedBuf.length === providedBuf.length && crypto.timingSafeEqual(expectedBuf, providedBuf);
+    }
+
+    if (!codeValid) {
+      challenge.attempts += 1;
+      return res.status(401).json({
+        success: false,
+        message:
+          challenge.method === "authenticator_setup"
+            ? "Invalid 6-digit code. Make sure your phone clock is set to automatic and enter the latest code from Google Authenticator."
+            : challenge.method === "authenticator"
+            ? "Invalid 6-digit Google Authenticator code. Please check the current code in your app."
+            : "Invalid verification code. Please check your email.",
+      });
+    }
+
+    let totpJustEnrolled = false;
+    let enrolledTotpAt: number | null = null;
+    if (challenge.method === "authenticator_setup" && challenge.pendingTotpSecret) {
+      const existingEntry = await getUserTotpEntry(sb, challenge.userId);
+      if (existingEntry) {
+        loginOtpChallenges.delete(challengeId.trim());
+        return res.status(409).json({
+          success: false,
+          message: "Google Authenticator is already set up for this account. Please sign in again and enter your 6-digit code.",
+        });
+      }
+      enrolledTotpAt = await setUserTotpSecret(
+        sb,
+        challenge.userId,
+        challenge.username,
+        challenge.pendingTotpSecret,
+        SESSION_SECRET
+      );
+      totpJustEnrolled = true;
+    } else if (challenge.method === "authenticator") {
+      const currentEntry = await getUserTotpEntry(sb, challenge.userId).catch(() => null);
+      enrolledTotpAt = currentEntry?.enabledAt ?? null;
+    }
+
+    loginOtpChallenges.delete(challengeId.trim());
+
+    const { data: userRow, error } = await sb.from("users").select("*").eq("id", challenge.userId).maybeSingle();
+    if (error || !userRow) {
+      return res.status(404).json({ success: false, message: "User account no longer exists." });
+    }
+    if (userRow.status === "Inactive") {
+      return res.status(403).json({
+        success: false,
+        message: "Your account has been deactivated. Please contact the administrator.",
+      });
+    }
+
+    const safeUser = mapDbUserRowToClientUser(userRow);
+    if (!safeUser.branchId || !safeUser.designation) {
+      try {
+        const { data: emps } = await sb.from("employees").select("full_name, email, employee_code, branch_id, designation");
+        if (Array.isArray(emps)) {
+          const linked = emps.find((e) => {
+            const empName = String(e.full_name || "").toLowerCase().trim();
+            const uName = safeUser.fullName.toLowerCase().trim();
+            const empEmail = String(e.email || "").toLowerCase().trim();
+            const uEmail = (safeUser.email || "").toLowerCase().trim();
+            const empCode = String(e.employee_code || "").toLowerCase().trim();
+            const uUsername = safeUser.username.toLowerCase().trim();
+            return (
+              (empName !== "" && empName === uName) ||
+              (empEmail !== "" && uEmail !== "" && empEmail === uEmail) ||
+              (empCode !== "" && empCode === uUsername)
+            );
+          });
+          if (linked) {
+            if (!safeUser.branchId && linked.branch_id) safeUser.branchId = String(linked.branch_id);
+            if (!safeUser.designation && linked.designation) safeUser.designation = String(linked.designation);
+          }
+        }
+      } catch {
+        // Non-blocking enrichment
+      }
+    }
+
+    const token = issueSessionForUser(safeUser);
+    setSessionCookie(res, token);
+
+    // Issue or clear trusted-device 2FA cookie according to configured frequency
+    try {
+      const { data: settingsRow } = await sb.from("settings").select("data").eq("id", "global").maybeSingle();
+      const sData =
+        settingsRow && settingsRow.data && typeof settingsRow.data === "object"
+          ? (settingsRow.data as Record<string, unknown>)
+          : null;
+      const freq = normalizeTwoStepFrequency(sData?.twoStepFrequency);
+      const trustMethod: "authenticator" | "email" =
+        challenge.method === "email" ? "email" : "authenticator";
+      const trustToken = signTwoStepTrustToken(
+        {
+          userId: challenge.userId,
+          method: trustMethod,
+          totpEnabledAt: enrolledTotpAt,
+          frequency: freq,
+        },
+        SESSION_SECRET
+      );
+      const trustHeader = buildTwoStepTrustCookieHeader(
+        trustToken,
+        getTrustMaxAgeSeconds(freq),
+        isRequestHttps(req)
+      );
+      appendSetCookie(res, trustHeader);
+    } catch {
+      // Non-blocking trusted-device cookie update
+    }
+
+    return res.json({ success: true, user: safeUser, token, totpJustEnrolled });
+  } catch (err: unknown) {
+    console.error("Verify login OTP error:", err);
+    return res.status(500).json({ success: false, message: "Could not verify login code. Please try again." });
+  }
+});
+
+app.post("/api/auth/resend-login-otp", async (req, res) => {
+  try {
+    pruneOtpChallenges();
+    const clientIp = req.ip || req.socket.remoteAddress || "unknown";
+    if (!checkRateLimit(`login-otp-resend:${clientIp}`, 5, 10 * 60 * 1000)) {
+      return res.status(429).json({
+        success: false,
+        message: "Too many resend requests. Please wait a few minutes and try again.",
+      });
+    }
+
+    const { challengeId } = req.body || {};
+    if (typeof challengeId !== "string" || !challengeId.trim()) {
+      return res.status(400).json({ success: false, message: "Verification session expired. Please sign in again." });
+    }
+
+    const challenge = loginOtpChallenges.get(challengeId.trim());
+    if (!challenge || challenge.expiresAt <= Date.now()) {
+      loginOtpChallenges.delete(challengeId.trim());
+      return res.status(400).json({ success: false, message: "Verification session expired. Please sign in again." });
+    }
+    if (challenge.method !== "email") {
+      return res.status(400).json({ success: false, message: "Email resend is only available for Email OTP login." });
+    }
+
+    const sb = getServerSupabase();
+    let companyName = "Ratauli Saving and Credit Cooperative Ltd";
+    let companyAddress = "Pipra Rural Municipality -6 (Mahottari)";
+    let logoUrl = "";
+    if (sb) {
+      try {
+        const { data: settingsRow } = await sb.from("settings").select("data").eq("id", "global").maybeSingle();
+        const sData =
+          settingsRow && settingsRow.data && typeof settingsRow.data === "object"
+            ? (settingsRow.data as Record<string, unknown>)
+            : null;
+        if (sData) {
+          if (typeof sData.systemName === "string" && sData.systemName.trim()) companyName = sData.systemName.trim();
+          if (typeof sData.address === "string" && sData.address.trim()) companyAddress = sData.address.trim();
+          if (typeof sData.logoUrl === "string" && sData.logoUrl.trim()) logoUrl = sData.logoUrl.trim();
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const smtp = createServerSmtpTransporter(companyName);
+    if (!smtp) {
+      return res.status(503).json({ success: false, message: "Server email service is not configured." });
+    }
+
+    const newOtp = crypto.randomInt(100000, 1000000).toString();
+    challenge.otpHash = sha256Hex(`${challenge.userId}:${newOtp}`);
+    challenge.expiresAt = Date.now() + LOGIN_OTP_TTL_MS;
+    challenge.attempts = 0;
+
+    const logoAttachment = await getLogoAttachment(logoUrl);
+    await smtp.transporter.sendMail({
+      from: smtp.from,
+      to: challenge.email,
+      subject: `New Login Verification Code: ${newOtp} - ${companyName}`,
+      text: `Hello ${challenge.fullName || challenge.username},\n\nYour new 2-Step Login verification code is: ${newOtp}\n\nThis code is valid for 5 minutes.\n\n${companyName}\n${companyAddress}`,
+      html: `
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 18px; border: 1px solid #e2e8f0; overflow: hidden;">
+          <div style="background: #065f46; padding: 22px 26px; color: #ffffff;">
+            <div style="font-size: 16px; font-weight: 900; text-transform: uppercase;">${escapeHtml(companyName)}</div>
+            <div style="font-size: 12px; margin-top: 4px; opacity: 0.9;">${escapeHtml(companyAddress)}</div>
+          </div>
+          <div style="padding: 30px 26px; text-align: center; color: #1e293b;">
+            <h3 style="margin: 0 0 10px 0; font-size: 18px; color: #0f172a;">New 2-Step Login Verification Code</h3>
+            <p style="margin: 0 0 22px 0; font-size: 14px; color: #475569;">Hello <strong>${escapeHtml(challenge.fullName || challenge.username)}</strong>, enter this 6-digit code to complete your sign-in:</p>
+            <div style="background: #f0fdf4; border: 2px dashed #10b981; border-radius: 12px; padding: 18px; margin: 0 auto 22px auto; max-width: 260px;">
+              <span style="font-family: monospace; font-size: 32px; font-weight: 900; letter-spacing: 8px; color: #047857; display: block;">${newOtp}</span>
+            </div>
+            <p style="margin: 0; font-size: 12px; color: #64748b;">Valid for 5 minutes. Never share this code with anyone.</p>
+          </div>
+        </div>
+      `,
+      attachments: [logoAttachment],
+    });
+
+    return res.json({
+      success: true,
+      challengeId: challengeId.trim(),
+      maskedEmail: maskEmailAddress(challenge.email),
+      expiresInSeconds: Math.floor(LOGIN_OTP_TTL_MS / 1000),
+      message: "A new verification code has been sent to your registered email.",
+    });
+  } catch (err: unknown) {
+    console.error("Resend login OTP error:", err);
+    return res.status(500).json({ success: false, message: "Could not resend verification code." });
+  }
+});
+
+// ==========================================
+// GOOGLE AUTHENTICATOR (TOTP RFC 6238) ROUTES
+// ==========================================
+app.get("/api/auth/totp-status", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const authUser = req.authUser!;
+    const sb = getServerSupabase();
+    if (!sb) return res.status(503).json({ success: false, message: "Database service unavailable." });
+    const entry = await getUserTotpEntry(sb, authUser.sub);
+    return res.json({
+      success: true,
+      enabled: Boolean(entry),
+      enabledAt: entry?.enabledAt ?? null,
+    });
+  } catch (err) {
+    console.error("TOTP status error:", err);
+    return res.status(500).json({ success: false, message: "Could not read Authenticator status." });
+  }
+});
+
+app.get("/api/auth/totp-enrolled-list", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const authUser = req.authUser!;
+    const liveAuthz = await resolveLiveUserAuthz(authUser);
+    if (!liveAuthz.active || (!liveAuthz.isAdmin && !liveAuthz.permissions.has("manage_users"))) {
+      return res.status(403).json({ success: false, message: "Administrator privileges are required." });
+    }
+    const sb = getServerSupabase();
+    if (!sb) return res.status(503).json({ success: false, message: "Database service unavailable." });
+    const userIds = await getTotpEnrolledUserIds(sb);
+    return res.json({ success: true, userIds, enrolledUserIds: userIds });
+  } catch (err) {
+    console.error("TOTP enrolled list error:", err);
+    return res.status(500).json({ success: false, message: "Could not read Authenticator enrollment list." });
+  }
+});
+
+app.post("/api/auth/totp-setup", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const authUser = req.authUser!;
+    const sb = getServerSupabase();
+    let issuer = "Ratauli SACCOS";
+    if (sb) {
+      try {
+        const { data: settingsRow } = await sb.from("settings").select("data").eq("id", "global").maybeSingle();
+        const sName = (settingsRow?.data as Record<string, unknown> | null)?.systemName;
+        if (typeof sName === "string" && sName.trim()) {
+          issuer = sName.trim().slice(0, 40);
+        }
+      } catch {
+        // default issuer
+      }
+    }
+    const secret = generateTotpSecret();
+    const uri = buildOtpAuthUri({ secret, accountName: authUser.username, issuer });
+    const qrDataUrl = await generateQrDataUrl(uri);
+    const setupToken = signTotpSetupToken(
+      { userId: authUser.sub, username: authUser.username, plainSecret: secret },
+      SESSION_SECRET
+    );
+    return res.json({
+      success: true,
+      qrDataUrl,
+      manualKey: secret,
+      setupToken,
+    });
+  } catch (err) {
+    console.error("TOTP setup error:", err);
+    return res.status(500).json({ success: false, message: "Could not initialize Google Authenticator setup." });
+  }
+});
+
+app.post("/api/auth/totp-enable", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const authUser = req.authUser!;
+    const { setupToken, code } = req.body || {};
+    const pending = verifyTotpSetupToken(String(setupToken || ""), SESSION_SECRET);
+    if (!pending || pending.userId !== authUser.sub) {
+      return res.status(400).json({ success: false, message: "Setup session expired. Please generate a new QR code." });
+    }
+    if (!verifyTotpCode(pending.plainSecret, String(code || ""), 1)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid 6-digit code. Make sure your phone clock is set to automatic and enter the latest code.",
+      });
+    }
+    const sb = getServerSupabase();
+    if (!sb) return res.status(503).json({ success: false, message: "Database service unavailable." });
+    const enabledAt = await setUserTotpSecret(sb, authUser.sub, authUser.username, pending.plainSecret, SESSION_SECRET);
+    return res.json({ success: true, enabled: true, enabledAt, message: "Google Authenticator activated." });
+  } catch (err) {
+    console.error("TOTP enable error:", err);
+    return res.status(500).json({ success: false, message: "Could not activate Google Authenticator." });
+  }
+});
+
+app.post("/api/auth/totp-disable", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const authUser = req.authUser!;
+    const { verification } = req.body || {};
+    const input = typeof verification === "string" ? verification.trim() : "";
+    if (!input) {
+      return res.status(400).json({ success: false, message: "Current 6-digit code or password is required." });
+    }
+    const sb = getServerSupabase();
+    if (!sb) return res.status(503).json({ success: false, message: "Database service unavailable." });
+
+    const existingSecret = await getUserTotpSecret(sb, authUser.sub, SESSION_SECRET);
+    let verified = Boolean(existingSecret && verifyTotpCode(existingSecret, input, 1));
+    if (!verified) {
+      const { data: userRow } = await sb.from("users").select("password").eq("id", authUser.sub).maybeSingle();
+      if (userRow && typeof userRow.password === "string" && verifyPassword(input, userRow.password).valid) {
+        verified = true;
+      }
+    }
+    if (!verified) {
+      return res.status(401).json({ success: false, message: "Incorrect Authenticator code or password." });
+    }
+    await deleteUserTotpSecret(sb, authUser.sub);
+    return res.json({ success: true, enabled: false, message: "Google Authenticator unlinked." });
+  } catch (err) {
+    console.error("TOTP disable error:", err);
+    return res.status(500).json({ success: false, message: "Could not unlink Google Authenticator." });
+  }
+});
+
+app.post("/api/auth/totp-admin-reset", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const authUser = req.authUser!;
+    const liveAuthz = await resolveLiveUserAuthz(authUser);
+    if (!liveAuthz.active || (!liveAuthz.isAdmin && !liveAuthz.permissions.has("manage_users"))) {
+      return res.status(403).json({ success: false, message: "Administrator privileges are required to reset user 2FA." });
+    }
+    const targetUserId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
+    if (!targetUserId) {
+      return res.status(400).json({ success: false, message: "Target user ID is required." });
+    }
+    const sb = getServerSupabase();
+    if (!sb) return res.status(503).json({ success: false, message: "Database service unavailable." });
+    await deleteUserTotpSecret(sb, targetUserId);
+    return res.json({ success: true, message: "Google Authenticator has been reset for this user." });
+  } catch (err) {
+    console.error("TOTP admin reset error:", err);
+    return res.status(500).json({ success: false, message: "Could not reset Google Authenticator." });
   }
 });
 
@@ -2437,6 +3122,20 @@ app.all("/api/supabase-proxy/rest/v1/:table", async (req: AuthenticatedRequest, 
     const isAdmin = Boolean(liveAuthz?.isAdmin);
     const hasPerm = (perm: string) => isAdmin || Boolean(liveAuthz?.permissions.has(perm));
 
+    // Strictly block direct browser access to the encrypted server-side TOTP vault
+    if (table === "settings") {
+      const qId = typeof req.query.id === "string" ? req.query.id.trim() : "";
+      const bodyItems = Array.isArray(req.body) ? req.body : req.body && typeof req.body === "object" ? [req.body] : [];
+      const touchesVault =
+        qId.includes(TOTP_VAULT_SETTING_ID) ||
+        bodyItems.some(
+          (item) => item && typeof item === "object" && String((item as Record<string, unknown>).id || "").trim() === TOTP_VAULT_SETTING_ID
+        );
+      if (touchesVault) {
+        return res.status(403).json({ message: "Server security vault cannot be accessed directly." });
+      }
+    }
+
     // Audit logs are strictly append-only (cannot be altered or deleted even by admins)
     if (table === "audit_logs" && (method === "DELETE" || method === "PATCH" || method === "PUT")) {
       return res.status(403).json({ message: "Audit logs cannot be modified or deleted." });
@@ -2582,6 +3281,24 @@ app.all("/api/supabase-proxy/rest/v1/:table", async (req: AuthenticatedRequest, 
         return res.send(JSON.stringify(stripPasswordsFromPayload(parsed)));
       } catch {
         return res.send(rawText);
+      }
+    }
+
+    // Strip server-side encrypted TOTP vault row from any broad settings query response
+    if (table === "settings" && contentType.includes("application/json") && rawText.trim()) {
+      try {
+        const parsed = JSON.parse(rawText);
+        if (Array.isArray(parsed)) {
+          const filtered = parsed.filter(
+            (row) => !(row && typeof row === "object" && (row as Record<string, unknown>).id === TOTP_VAULT_SETTING_ID)
+          );
+          return res.send(JSON.stringify(filtered));
+        }
+        if (parsed && typeof parsed === "object" && (parsed as Record<string, unknown>).id === TOTP_VAULT_SETTING_ID) {
+          return res.status(403).json({ message: "Server security vault cannot be accessed directly." });
+        }
+      } catch {
+        // pass through non-JSON
       }
     }
 

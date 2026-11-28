@@ -210,16 +210,36 @@ function isSafeRemoteImageUrl(rawUrl: string): boolean {
 
 export function applyCors(req: VercelRequest, res: VercelResponse): boolean {
   const allowedOrigin = DEFAULT_APP_URL;
-  const reqOrigin = typeof req.headers?.origin === "string" ? req.headers.origin : "";
-  if (reqOrigin && (reqOrigin === allowedOrigin || reqOrigin.startsWith("http://localhost:"))) {
+  const reqOrigin = typeof req.headers?.origin === "string" ? req.headers.origin.trim() : "";
+  const expectedHost = String(req.headers["x-forwarded-host"] || req.headers.host || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+
+  let originAllowed = false;
+  if (reqOrigin) {
+    if (reqOrigin === allowedOrigin || reqOrigin.startsWith("http://localhost:")) {
+      originAllowed = true;
+    } else if (expectedHost) {
+      try {
+        if (new URL(reqOrigin).host.toLowerCase() === expectedHost) {
+          originAllowed = true;
+        }
+      } catch {
+        originAllowed = false;
+      }
+    }
+  }
+
+  if (originAllowed) {
     res.setHeader("Access-Control-Allow-Origin", reqOrigin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Vary", "Origin");
   }
-  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS,POST");
+  res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS,POST,PUT,PATCH,DELETE");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Authorization, X-CSRF-Token, X-Requested-With, Accept, Content-Type"
+    "Authorization, X-CSRF-Token, X-Requested-With, Accept, Content-Type, apikey, Prefer, Range, Accept-Profile, Content-Profile"
   );
 
   if (req.method === "OPTIONS") {

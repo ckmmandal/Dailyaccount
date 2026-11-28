@@ -8,12 +8,13 @@ import {
   X, UserCheck, 
   RefreshCw, Eye, EyeOff, Briefcase,
   KeyRound, Clock, Copy, Check, ShieldAlert, Sparkles,
-  Mail, CheckCircle2, AlertCircle
+  Mail, CheckCircle2, AlertCircle, Smartphone
 } from 'lucide-react';
 import { ConfirmationModal } from './ConfirmationModal';
 import { validateStrongPassword, getPasswordExpiryDetails } from '../utils/passwordPolicy';
 import { PasswordRequirementGuide } from './PasswordRequirementGuide';
 import { sendPasswordResetEmailApi } from '../services/pdfEmailService';
+import { getAuthHeaders } from '../services/authToken';
 import { isDayEndedForBranch, getDayEndedBlockMessage, useDayEndLock } from '../utils/dayEndLock';
 import { DayEndFieldset } from './DayEndFieldset';
 import {
@@ -83,6 +84,10 @@ const UserManagement: React.FC = () => {
   const [showPassword, setShowPassword] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState<{ isOpen: boolean; id: string } | null>(null);
+  const [totpEnrolledIds, setTotpEnrolledIds] = useState<Set<string>>(new Set());
+  const [resettingTotpId, setResettingTotpId] = useState<string | null>(null);
+  const [confirmResetTotp, setConfirmResetTotp] = useState<{ isOpen: boolean; user: User } | null>(null);
+  const [totpNotice, setTotpNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   
   const [newUser, setNewUser] = useState<Partial<User>>({
     fullName: '', 
@@ -310,10 +315,77 @@ Please use at least 8 characters with upper, lower, number, and special characte
           roleId: r[0]?.id || prev.roleId
         }));
       }
+
+      try {
+        const totpRes = await fetch('/api/auth/totp-enrolled-list', {
+          method: 'GET',
+          credentials: 'same-origin',
+          headers: getAuthHeaders()
+        });
+        if (totpRes.ok) {
+          const totpData = await totpRes.json().catch(() => ({}));
+          const rawIds = Array.isArray(totpData.enrolledUserIds)
+            ? totpData.enrolledUserIds
+            : Array.isArray(totpData.userIds)
+            ? totpData.userIds
+            : null;
+          if (rawIds) {
+            setTotpEnrolledIds(new Set(rawIds.map((id: unknown) => String(id))));
+          }
+        }
+      } catch {
+        // Non-blocking: ignore if user doesn't have TOTP list access
+      }
     } catch (error) {
       console.error("Failed to fetch user data", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const executeResetUserTotp = async () => {
+    if (!confirmResetTotp) return;
+    const targetUser = confirmResetTotp.user;
+    setConfirmResetTotp(null);
+    setResettingTotpId(targetUser.id);
+    setTotpNotice(null);
+    try {
+      const res = await fetch('/api/auth/totp-admin-reset', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ userId: targetUser.id })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        setTotpNotice({
+          type: 'error',
+          text: data.message || `Could not reset Google Authenticator for @${targetUser.username}.`
+        });
+        return;
+      }
+      setTotpEnrolledIds(prev => {
+        const next = new Set(prev);
+        next.delete(targetUser.id);
+        return next;
+      });
+      await storageService.saveLog(
+        'admin',
+        'ADMIN_RESET_TOTP',
+        `Admin reset Google Authenticator (TOTP) for user @${targetUser.username} (${targetUser.fullName})`
+      ).catch(() => {});
+      setTotpNotice({
+        type: 'success',
+        text: `Google Authenticator reset for @${targetUser.username}. They can now pair a new device.`
+      });
+      setTimeout(() => setTotpNotice(null), 5000);
+    } catch {
+      setTotpNotice({
+        type: 'error',
+        text: `Network error while resetting Google Authenticator for @${targetUser.username}.`
+      });
+    } finally {
+      setResettingTotpId(null);
     }
   };
 
@@ -536,8 +608,10 @@ Please use at least 8 characters with upper, lower, number, and special characte
   };
 
   const handleDelete = (id: string) => {
-    if (id === 'admin-temp') {
-      console.warn("Cannot delete primary system account.");
+    const target = users.find(u => u.id === id);
+    const adminCount = users.filter(u => String(u.username || '').trim().toLowerCase() === 'admin').length;
+    if (target && String(target.username || '').trim().toLowerCase() === 'admin' && adminCount <= 1) {
+      console.warn("Cannot delete the only primary Super Admin account.");
       return;
     }
     setConfirmDelete({ isOpen: true, id });
@@ -562,7 +636,16 @@ Please use at least 8 characters with upper, lower, number, and special characte
   };
 
   const filteredUsers = useMemo(() => {
-    return users.filter(u => {
+    const seenUsernames = new Set<string>();
+    const uniqueUsers = users.filter(u => {
+      const uname = String(u.username || '').trim().toLowerCase();
+      if (!uname) return true;
+      if (seenUsernames.has(uname)) return false;
+      seenUsernames.add(uname);
+      return true;
+    });
+
+    return uniqueUsers.filter(u => {
       const searchStr = (filter || '').toLowerCase();
       const fName = (u.fullName || '').toLowerCase();
       const uName = (u.username || '').toLowerCase();
@@ -594,7 +677,7 @@ Please use at least 8 characters with upper, lower, number, and special characte
              <div className="p-2 bg-blue-50 text-blue-600 rounded-lg shadow-inner"><Users size={18}/></div>
              <div>
                 <h3 className="text-base font-black italic tracking-tighter text-slate-950 uppercase leading-none">Identity Access Hub</h3>
-                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mt-0.5 italic">Total Managed Users: {users.length}</p>
+                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mt-0.5 italic">Total Managed Users: {filteredUsers.length}</p>
              </div>
           </div>
           
@@ -619,6 +702,27 @@ Please use at least 8 characters with upper, lower, number, and special characte
              </button>
           </div>
        </div>
+
+       {totpNotice && (
+         <div className={`p-3 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 animate-in fade-in ${
+           totpNotice.type === 'success'
+             ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+             : 'bg-rose-50 border-rose-200 text-rose-800'
+         }`}>
+           <div className="flex items-center space-x-2">
+             {totpNotice.type === 'success' ? <CheckCircle2 size={15} className="shrink-0" /> : <AlertCircle size={15} className="shrink-0" />}
+             <span>{totpNotice.text}</span>
+           </div>
+           <button
+             type="button"
+             onClick={() => setTotpNotice(null)}
+             className="p-1 hover:bg-black/5 rounded-lg"
+             aria-label="Dismiss message"
+           >
+             <X size={14} />
+           </button>
+         </div>
+       )}
 
        {/* Users Table */}
        <div className="bg-white rounded-[1.5rem] border-2 border-slate-950 shadow-lg overflow-hidden font-bold">
@@ -666,11 +770,17 @@ Please use at least 8 characters with upper, lower, number, and special characte
                                    </div>
                                    <div className="flex items-center space-x-1 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-[10px] text-slate-800 font-mono font-bold">
                                       <span className="opacity-60 text-[8px]">P:</span>
-                                      <span>{showPassword[u.id] ? u.password : '••••••••'}</span>
+                                      <span>{showPassword[u.id] ? (u.password || 'Protected') : '••••••••'}</span>
                                       <button onClick={() => togglePassword(u.id)} className="text-slate-400 hover:text-blue-600 transition-colors ml-1">
                                          {showPassword[u.id] ? <EyeOff size={11}/> : <Eye size={11}/>}
                                       </button>
                                    </div>
+                                   {totpEnrolledIds.has(u.id) && (
+                                     <div className="inline-flex items-center space-x-1 bg-emerald-50 border border-emerald-200 text-emerald-700 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wide">
+                                       <Smartphone size={9} />
+                                       <span>Google Auth</span>
+                                     </div>
+                                   )}
                                 </div>
                              </td>
                              <td className="p-2 border-r border-slate-100">
@@ -738,6 +848,17 @@ Please use at least 8 characters with upper, lower, number, and special characte
                              </td>
                              <td className="p-2">
                                 <div className="flex justify-center space-x-1.5">
+                                   {totpEnrolledIds.has(u.id) && (
+                                     <button
+                                       type="button"
+                                       disabled={resettingTotpId === u.id}
+                                       onClick={() => setConfirmResetTotp({ isOpen: true, user: u })}
+                                       title="Reset Google Authenticator (Lost Phone)"
+                                       className="p-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white rounded-lg transition-all shadow-2xs cursor-pointer disabled:opacity-40"
+                                     >
+                                       <Smartphone size={13} className={resettingTotpId === u.id ? 'animate-pulse' : ''} />
+                                     </button>
+                                   )}
                                    <button 
                                      type="button"
                                      disabled={isDayEnded}
@@ -1556,6 +1677,18 @@ Please use at least 8 characters with upper, lower, number, and special characte
         message="Are you sure you want to delete this user? This action cannot be undone."
         onConfirm={executeDelete}
         onCancel={() => setConfirmDelete(null)}
+      />
+
+      <ConfirmationModal
+        isOpen={confirmResetTotp?.isOpen || false}
+        title="Reset Google Authenticator"
+        message={
+          confirmResetTotp
+            ? `Unlink Google Authenticator for @${confirmResetTotp.user.username} (${confirmResetTotp.user.fullName})? They will fall back to Email OTP (in Smart Mode) or can pair a new phone.`
+            : ''
+        }
+        onConfirm={executeResetUserTotp}
+        onCancel={() => setConfirmResetTotp(null)}
       />
     </div>
   );

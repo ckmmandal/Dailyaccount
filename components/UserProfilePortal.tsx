@@ -17,6 +17,7 @@ import { EmployeeKYCModal } from './EmployeeKYCModal';
 import { NepaliDatePicker } from './NepaliDatePicker';
 import { validateStrongPassword } from '../utils/passwordPolicy';
 import { PasswordRequirementGuide } from './PasswordRequirementGuide';
+import { AuthenticatorSetupCard } from './AuthenticatorSetupCard';
 import NepaliDate from 'nepali-date-converter';
 
 const NEPALI_MONTHS = [
@@ -1721,6 +1722,8 @@ export const UserProfilePortal: React.FC<UserProfilePortalProps> = ({ user, onCl
                   </button>
                 </div>
               </form>
+
+              <AuthenticatorSetupCard />
             </div>
           )}
 

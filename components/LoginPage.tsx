@@ -4,7 +4,7 @@ import { storageService } from '../services/storageService';
 import { setAuthToken } from '../services/authToken';
 import { 
   Lock, User as UserIcon, AlertCircle, Eye, EyeOff, ArrowRight, 
-  KeyRound, CheckCircle2, ShieldCheck
+  KeyRound, CheckCircle2, ShieldCheck, Mail, ArrowLeft, RefreshCw, Smartphone
 } from 'lucide-react';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
 import { User } from '../types';
@@ -62,6 +62,17 @@ export const LoginPage: React.FC = () => {
   const [isForgotPasswordOpen, setIsForgotPasswordOpen] = useState(false);
   const [successToast, setSuccessToast] = useState<string | null>(null);
   const [needsBootstrap, setNeedsBootstrap] = useState(false);
+  const [twoStepChallenge, setTwoStepChallenge] = useState<{
+    challengeId: string;
+    maskedEmail: string;
+    username: string;
+    method: 'authenticator' | 'authenticator_setup' | 'email';
+    qrDataUrl?: string;
+  } | null>(null);
+  const [twoStepOtp, setTwoStepOtp] = useState('');
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
+  const [isResendingOtp, setIsResendingOtp] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
   const [bootstrapForm, setBootstrapForm] = useState({
     fullName: 'System Administrator',
     username: 'admin',
@@ -70,6 +81,19 @@ export const LoginPage: React.FC = () => {
     confirmPassword: ''
   });
   const usernameInputRef = useRef<HTMLInputElement>(null);
+  const otpInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const t = setTimeout(() => setResendCooldown(prev => Math.max(0, prev - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [resendCooldown]);
+
+  useEffect(() => {
+    if (twoStepChallenge) {
+      setTimeout(() => otpInputRef.current?.focus(), 60);
+    }
+  }, [twoStepChallenge]);
 
   useEffect(() => {
     // Fast fetch latest system logo from server or storage
@@ -149,8 +173,47 @@ export const LoginPage: React.FC = () => {
       });
 
       const data = await response.json().catch(() => ({}));
+      if (response.ok && data.success && data.requiresTwoStep && data.challengeId) {
+        const method: 'authenticator' | 'authenticator_setup' | 'email' =
+          data.twoStepMethod === 'authenticator_setup'
+            ? 'authenticator_setup'
+            : data.twoStepMethod === 'authenticator'
+            ? 'authenticator'
+            : 'email';
+        const safeQrUrl =
+          typeof data.qrDataUrl === 'string' && data.qrDataUrl.startsWith('data:image/png;base64,')
+            ? data.qrDataUrl
+            : undefined;
+        setTwoStepChallenge({
+          challengeId: String(data.challengeId),
+          maskedEmail: String(data.maskedEmail || 'your registered email'),
+          username: enteredUsername,
+          method,
+          qrDataUrl: safeQrUrl
+        });
+        setTwoStepOtp('');
+        setResendCooldown(method === 'email' ? 30 : 0);
+        setSuccessToast(
+          data.message ||
+            (method === 'authenticator_setup'
+              ? 'Scan the QR code in Google Authenticator and enter the 6-digit code to complete setup & sign in.'
+              : method === 'authenticator'
+              ? 'Enter the 6-digit code from your Google Authenticator app.'
+              : 'Verification code sent to your registered email.')
+        );
+        return;
+      }
+
       if (!response.ok || !data.success || !data.user) {
-        setError(data.message || 'Invalid username or password.');
+        if (typeof data.message === 'string' && data.message.trim()) {
+          setError(data.message);
+        } else if (response.status === 404) {
+          setError('Login API (/api/auth/login) not found on this deployment. Please push the latest code and redeploy.');
+        } else if (response.status >= 500) {
+          setError(`Server error (HTTP ${response.status}) while verifying login. Please check Vercel Environment Variables and redeploy.`);
+        } else {
+          setError('Invalid username or password.');
+        }
         return;
       }
 
@@ -171,6 +234,107 @@ export const LoginPage: React.FC = () => {
       setError('Could not connect to server. Please try again.');
     } finally {
       setIsLoggingIn(false);
+    }
+  };
+
+  const handleVerifyTwoStepOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!twoStepChallenge) return;
+    const cleanOtp = twoStepOtp.replace(/\D/g, '').trim();
+    if (cleanOtp.length !== 6) {
+      setError(
+        twoStepChallenge.method === 'authenticator' || twoStepChallenge.method === 'authenticator_setup'
+          ? 'Please enter the 6-digit code from your Google Authenticator app.'
+          : 'Please enter the 6-digit verification code sent to your email.'
+      );
+      return;
+    }
+
+    setIsVerifyingOtp(true);
+    setError('');
+    setSuccessToast(null);
+
+    try {
+      const response = await fetch('/api/auth/verify-login-otp', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          challengeId: twoStepChallenge.challengeId,
+          otpCode: cleanOtp
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success || !data.user) {
+        setError(data.message || 'Invalid or expired verification code. Please try again.');
+        return;
+      }
+
+      if (data.token) {
+        setAuthToken(data.token);
+      }
+
+      const verifiedMethodLabel =
+        twoStepChallenge.method === 'authenticator_setup'
+          ? '2-Step Google Authenticator (First-Time Setup)'
+          : twoStepChallenge.method === 'authenticator'
+          ? '2-Step Google Authenticator'
+          : '2-Step Email OTP';
+      const authenticatedUser = data.user as User;
+      setTwoStepChallenge(null);
+      setTwoStepOtp('');
+      login(authenticatedUser);
+      void storageService.saveLog(
+        authenticatedUser.id || authenticatedUser.username,
+        'USER_LOGIN',
+        `User @${authenticatedUser.username} (${authenticatedUser.fullName}) signed in via ${verifiedMethodLabel}`,
+        authenticatedUser.branchId || 'main'
+      ).catch(() => {});
+    } catch (err) {
+      console.error('2-Step OTP verification error', err);
+      setError('Could not verify code. Please check your connection and try again.');
+    } finally {
+      setIsVerifyingOtp(false);
+    }
+  };
+
+  const handleResendTwoStepOtp = async () => {
+    if (!twoStepChallenge || resendCooldown > 0 || isResendingOtp) return;
+    setIsResendingOtp(true);
+    setError('');
+    setSuccessToast(null);
+    try {
+      const response = await fetch('/api/auth/resend-login-otp', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeId: twoStepChallenge.challengeId })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        setError(data.message || 'Could not resend verification code. Please sign in again.');
+        return;
+      }
+      if (data.challengeId) {
+        setTwoStepChallenge(prev =>
+          prev
+            ? {
+                ...prev,
+                challengeId: String(data.challengeId),
+                maskedEmail: String(data.maskedEmail || prev.maskedEmail)
+              }
+            : null
+        );
+      }
+      setTwoStepOtp('');
+      setResendCooldown(30);
+      setSuccessToast('A new 6-digit verification code has been sent to your email.');
+    } catch (err) {
+      console.error('Resend 2-Step OTP error', err);
+      setError('Could not resend code. Please try again.');
+    } finally {
+      setIsResendingOtp(false);
     }
   };
 
@@ -222,53 +386,87 @@ export const LoginPage: React.FC = () => {
       </div>
 
       {/* Main Fully Transparent Frosted Glass Card */}
-      <div className="relative z-10 w-full max-w-[850px] rounded-3xl overflow-hidden border border-white/25 bg-transparent shadow-[0_25px_65px_rgba(0,0,0,0.45)] flex flex-col md:flex-row">
-        {/* Left Side - Transparent Emerald Glass Brand Panel */}
-        <div className="w-full md:w-[44%] bg-[#013b31]/25 backdrop-blur-sm p-7 sm:p-8 lg:p-9 flex flex-col items-center justify-between text-white border-b md:border-b-0 md:border-r border-white/20">
-          <div className="hidden md:block h-2" />
+      <div
+        className={`relative z-10 w-full ${
+          twoStepChallenge?.method === 'authenticator_setup' ? 'max-w-[400px]' : 'max-w-[850px]'
+        } rounded-3xl overflow-hidden border border-white/25 bg-transparent shadow-[0_25px_65px_rgba(0,0,0,0.45)] flex flex-col md:flex-row`}
+      >
+        {/* Left Side - Transparent Emerald Glass Brand Panel (hidden during 1-time QR setup) */}
+        {twoStepChallenge?.method !== 'authenticator_setup' && (
+          <div className="w-full md:w-[44%] bg-[#013b31]/25 backdrop-blur-sm p-7 sm:p-8 lg:p-9 flex flex-col items-center justify-between text-white border-b md:border-b-0 md:border-r border-white/20">
+            <div className="hidden md:block h-2" />
 
-          <div className="my-4 md:my-auto flex flex-col items-center text-center space-y-5 w-full">
-            <div className="w-28 h-28 sm:w-32 sm:h-32 bg-white rounded-2xl shadow-[0_12px_32px_rgba(0,0,0,0.35)] flex items-center justify-center p-2.5 border border-white/40 transition-transform hover:scale-105 duration-300 overflow-hidden">
-              <img
-                src={
-                  (settings?.logoUrl && !settings.logoUrl.includes('picsum.photos'))
-                    ? settings.logoUrl
-                    : (serverLogo || '/system_logo.png')
-                }
-                onError={(e) => {
-                  const target = e.currentTarget;
-                  if (!target.src.includes('system_logo.png')) {
-                    target.src = '/system_logo.png';
+            <div className="my-4 md:my-auto flex flex-col items-center text-center space-y-5 w-full">
+              <div className="w-28 h-28 sm:w-32 sm:h-32 bg-white rounded-2xl shadow-[0_12px_32px_rgba(0,0,0,0.35)] flex items-center justify-center p-2.5 border border-white/40 transition-transform hover:scale-105 duration-300 overflow-hidden">
+                <img
+                  src={
+                    (settings?.logoUrl && !settings.logoUrl.includes('picsum.photos'))
+                      ? settings.logoUrl
+                      : (serverLogo || '/system_logo.png')
                   }
-                }}
-                className="w-full h-full object-contain"
-                alt="SACCOS Official Logo"
-              />
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    if (!target.src.includes('system_logo.png')) {
+                      target.src = '/system_logo.png';
+                    }
+                  }}
+                  className="w-full h-full object-contain"
+                  alt="SACCOS Official Logo"
+                />
+              </div>
+              <div className="w-full px-1">
+                <h2 className="text-[13.5px] sm:text-[14.5px] font-bold tracking-tight text-white leading-snug drop-shadow-sm">
+                  Ratauli Saving & Credit Cooperative Limited
+                </h2>
+              </div>
             </div>
-            <div className="w-full px-1">
-              <h2 className="text-[13.5px] sm:text-[14.5px] font-bold tracking-tight text-white leading-snug drop-shadow-sm">
-                Ratauli Saving & Credit Cooperative Limited
-              </h2>
-            </div>
-          </div>
 
-          <div className="w-full pt-4 mt-2 border-t border-white/20 text-[11.5px] text-white/85 text-center font-semibold tracking-wide">
-            Daily Account Management System
+            <div className="w-full pt-4 mt-2 border-t border-white/20 text-[11.5px] text-white/85 text-center font-semibold tracking-wide">
+              Daily Account Management System
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Right Side - Transparent Glass Sign-In Form */}
-        <div className="w-full md:w-[56%] bg-[#0f1322]/20 backdrop-blur-sm p-7 sm:p-10 md:p-11 flex flex-col justify-center">
-          <div className="mb-6">
-            <h2 className="text-2xl sm:text-[30px] font-black text-white tracking-tight leading-tight drop-shadow-sm">
-              {needsBootstrap ? 'Initial Admin Setup' : 'Sign in to your account'}
-            </h2>
-            <p className="text-slate-100/85 text-xs sm:text-sm font-medium mt-1.5">
-              {needsBootstrap
-                ? 'No accounts exist yet. Create your primary administrator account with a strong password.'
-                : 'Enter your credentials to access the system.'}
-            </p>
-          </div>
+        <div
+          className={`w-full ${
+            twoStepChallenge?.method === 'authenticator_setup'
+              ? 'bg-[#091124]/60 backdrop-blur-md px-6 py-7 sm:px-8 sm:py-8'
+              : 'md:w-[56%] bg-[#0f1322]/20 backdrop-blur-sm p-7 sm:p-10 md:p-11'
+          } flex flex-col justify-center`}
+        >
+          {twoStepChallenge?.method === 'authenticator_setup' ? (
+            <div className="text-center mb-5">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/35 text-emerald-300 flex items-center justify-center mx-auto mb-3">
+                <ShieldCheck size={20} />
+              </div>
+              <h2 className="text-[20px] sm:text-[22px] font-bold text-white tracking-tight leading-none whitespace-nowrap">
+                Setup Google Authenticator
+              </h2>
+              <p className="text-slate-200/80 text-[12px] font-medium mt-2 whitespace-nowrap">
+                Scan the QR code and enter the 6-digit code
+              </p>
+            </div>
+          ) : (
+            <div className="mb-6">
+              <h2 className="text-2xl sm:text-[30px] font-black text-white tracking-tight leading-tight drop-shadow-sm">
+                {needsBootstrap
+                  ? 'Initial Admin Setup'
+                  : twoStepChallenge
+                  ? '2-Step Verification'
+                  : 'Sign in to your account'}
+              </h2>
+              <p className="text-slate-100/85 text-xs sm:text-sm font-medium mt-1.5">
+                {needsBootstrap
+                  ? 'No accounts exist yet. Create your primary administrator account with a strong password.'
+                  : twoStepChallenge
+                  ? twoStepChallenge.method === 'authenticator'
+                    ? 'Open Google Authenticator and enter the 6-digit code.'
+                    : `Enter the 6-digit code sent to ${twoStepChallenge.maskedEmail}`
+                  : 'Enter your credentials to access the system.'}
+              </p>
+            </div>
+          )}
 
           {needsBootstrap ? (
             <form onSubmit={handleBootstrapAdmin} className="space-y-3.5">
@@ -338,6 +536,121 @@ export const LoginPage: React.FC = () => {
                 <ShieldCheck size={17} />
                 <span>{isLoggingIn ? 'Creating Admin...' : 'Create Administrator Account'}</span>
               </button>
+            </form>
+          ) : twoStepChallenge ? (
+            <form onSubmit={handleVerifyTwoStepOtp} className="space-y-4">
+              {twoStepChallenge.method === 'authenticator_setup' ? (
+                twoStepChallenge.qrDataUrl ? (
+                  <div className="flex justify-center">
+                    <div className="inline-flex items-center justify-center bg-white rounded-2xl p-2 shadow-[0_12px_30px_rgba(0,0,0,0.35)] ring-1 ring-white/40">
+                      <img
+                        src={twoStepChallenge.qrDataUrl}
+                        alt="Google Authenticator Setup QR Code"
+                        className="w-[176px] h-[176px] block rounded-lg"
+                      />
+                    </div>
+                  </div>
+                ) : null
+              ) : twoStepChallenge.method === 'authenticator' ? (
+                <div className="flex items-center space-x-2.5 bg-emerald-500/20 border border-emerald-400/35 text-emerald-100 p-3 rounded-xl text-xs font-semibold backdrop-blur-sm">
+                  <Smartphone size={16} className="shrink-0 text-emerald-300" />
+                  <span>Google Authenticator code (refreshes every 30 seconds)</span>
+                </div>
+              ) : (
+                <div className="flex items-center space-x-2.5 bg-emerald-500/20 border border-emerald-400/35 text-emerald-100 p-3 rounded-xl text-xs font-semibold backdrop-blur-sm">
+                  <Mail size={16} className="shrink-0 text-emerald-300" />
+                  <span>Code sent to <strong className="text-white">{twoStepChallenge.maskedEmail}</strong> (valid for 5 minutes)</span>
+                </div>
+              )}
+
+              <div className="space-y-1.5 pt-1">
+                <label
+                  className={`text-xs font-semibold text-slate-200/95 block whitespace-nowrap ${
+                    twoStepChallenge.method === 'authenticator_setup' ? 'text-center' : ''
+                  }`}
+                >
+                  {twoStepChallenge.method === 'authenticator_setup'
+                    ? 'Enter 6-Digit Verification Code'
+                    : twoStepChallenge.method === 'authenticator'
+                    ? 'Google Authenticator 6-Digit Code'
+                    : '6-Digit Verification Code (OTP)'}
+                </label>
+                <input
+                  ref={otpInputRef}
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  value={twoStepOtp}
+                  onChange={e => setTwoStepOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="000000"
+                  className="login-glass-input w-full h-12 bg-white/10 hover:bg-white/15 focus:bg-white/20 border border-white/30 focus:border-emerald-400/80 rounded-xl pl-[0.45em] pr-2 text-center text-[22px] font-mono tabular-nums font-bold tracking-[0.45em] text-white outline-none focus:ring-2 focus:ring-emerald-400/25 transition-all placeholder:text-white/35"
+                  required
+                />
+              </div>
+
+              {error && (
+                <div className="flex items-center space-x-2 bg-rose-500/25 text-rose-100 px-3 py-2.5 rounded-xl border border-rose-400/40 text-xs font-semibold animate-in fade-in">
+                  <AlertCircle size={15} className="shrink-0 text-rose-300" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {successToast && !error && twoStepChallenge.method !== 'authenticator_setup' && (
+                <div className="flex items-center space-x-2.5 bg-emerald-500/25 text-emerald-100 p-3 rounded-xl border border-emerald-400/40 text-xs font-bold animate-in fade-in backdrop-blur-sm">
+                  <CheckCircle2 size={16} className="text-emerald-300 shrink-0" />
+                  <span>{successToast}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isVerifyingOtp || twoStepOtp.length !== 6}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-600/45 disabled:text-white/65 text-white h-11 rounded-xl font-semibold text-sm flex items-center justify-center space-x-2 shadow-lg active:scale-[0.99] transition-all whitespace-nowrap disabled:cursor-not-allowed"
+              >
+                <ShieldCheck size={17} className="shrink-0" />
+                <span className="whitespace-nowrap">
+                  {isVerifyingOtp ? 'Verifying...' : 'Verify & Sign In'}
+                </span>
+              </button>
+
+              <div
+                className={`flex items-center pt-0.5 text-xs ${
+                  twoStepChallenge.method === 'email' ? 'justify-between' : 'justify-center'
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTwoStepChallenge(null);
+                    setTwoStepOtp('');
+                    setError('');
+                    setSuccessToast(null);
+                  }}
+                  className="text-slate-200/80 hover:text-white font-semibold inline-flex items-center space-x-1.5 transition-colors whitespace-nowrap"
+                >
+                  <ArrowLeft size={14} className="shrink-0" />
+                  <span>Back to Login</span>
+                </button>
+
+                {twoStepChallenge.method === 'email' && (
+                  <button
+                    type="button"
+                    disabled={resendCooldown > 0 || isResendingOtp}
+                    onClick={handleResendTwoStepOtp}
+                    className="text-emerald-300 hover:text-emerald-200 font-bold inline-flex items-center space-x-1 transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <RefreshCw size={13} className={isResendingOtp ? 'animate-spin' : ''} />
+                    <span>
+                      {isResendingOtp
+                        ? 'Sending...'
+                        : resendCooldown > 0
+                        ? `Resend in ${resendCooldown}s`
+                        : 'Resend Code'}
+                    </span>
+                  </button>
+                )}
+              </div>
             </form>
           ) : (
 

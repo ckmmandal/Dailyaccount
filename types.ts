@@ -382,6 +382,9 @@ export interface SystemSettings {
   phone?: string;
   allowBackDateEntry?: boolean;
   allowDayReopenSpecialAccess?: boolean;
+  twoStepLoginEnabled?: boolean;
+  twoStepLoginMethod?: 'smart' | 'authenticator' | 'email';
+  twoStepFrequency?: 'every_login' | 'once_per_day' | 'once_per_7_days' | 'once_per_30_days';
   emailNotifications?: EmailNotificationSettings;
   autoLogoutMinutes?: number;
 }

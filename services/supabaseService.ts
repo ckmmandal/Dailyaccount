@@ -522,6 +522,58 @@ export const normalizeEmployeePayrollFields = (emp: Employee): Employee => {
   };
 };
 
+const scoreUserRecord = (u: Partial<User> & { createdAt?: string; created_at?: string }): number => {
+  let score = 0;
+  const id = String(u.id || '').trim().toLowerCase();
+  const mobile = String(u.mobile || '').trim();
+  const email = String(u.email || '').trim();
+  if (id && id !== 'admin-temp' && id !== 'admin-bootstrap') score += 50;
+  if (id.length >= 20) score += 20;
+  if (email && email.includes('@')) score += 30;
+  if (mobile && mobile !== '9800000000') score += 10;
+  if (mobile === '9800000000' && !email) score -= 40;
+  if (u.profilePhoto) score += 5;
+  if (u.createdAt || u.created_at) score += 5;
+  return score;
+};
+
+const deduplicateUsers = (list: User[]): User[] => {
+  if (!Array.isArray(list)) return [];
+  const byUsername = new Map<string, User>();
+  const withoutUsername: User[] = [];
+  const seenIds = new Set<string>();
+
+  for (const raw of list) {
+    if (!raw || typeof raw !== 'object') continue;
+    const uname = String(raw.username || '').trim().toLowerCase();
+    if (!uname) {
+      const uid = String(raw.id || '').trim();
+      if (uid && seenIds.has(uid)) continue;
+      if (uid) seenIds.add(uid);
+      withoutUsername.push(raw);
+      continue;
+    }
+
+    const existing = byUsername.get(uname);
+    if (!existing) {
+      byUsername.set(uname, raw);
+    } else if (scoreUserRecord(raw) > scoreUserRecord(existing)) {
+      byUsername.set(uname, raw);
+    }
+  }
+
+  // If a real admin record exists, never keep a stray legacy admin-temp entry
+  const result = [...byUsername.values(), ...withoutUsername];
+  const hasRealAdmin = result.some(
+    u =>
+      String(u.username || '').trim().toLowerCase() === 'admin' &&
+      String(u.id || '').trim().toLowerCase() !== 'admin-temp'
+  );
+  return hasRealAdmin
+    ? result.filter(u => String(u.id || '').trim().toLowerCase() !== 'admin-temp')
+    : result;
+};
+
 // Helper functions for LocalStorage fallback DB
 const getLocalDB = <T>(key: string, defaultVal: T): T => {
   try {
@@ -546,6 +598,15 @@ const getLocalDB = <T>(key: string, defaultVal: T): T => {
               }
             }
             return finalDeduped as unknown as T;
+          }
+          if (key === 'users' && Array.isArray(parsed)) {
+            const dedupedUsers = deduplicateUsers(parsed as User[]);
+            if (dedupedUsers.length !== parsed.length) {
+              try { localStorage.setItem(`saccos_db_${key}`, JSON.stringify(dedupedUsers)); } catch (e) {
+                console.warn("Could not save deduplicated users:", e);
+              }
+            }
+            return dedupedUsers as unknown as T;
           }
           return parsed;
         }
@@ -3817,7 +3878,17 @@ export const supabaseService = {
         const mapped = mapRow(row);
         const local = getLocalDB<User[]>('users', []);
         const safeLocal = Array.isArray(local) ? local : [];
-        saveLocalDB('users', [mapped, ...safeLocal.filter(u => u && u.id !== mapped.id)]);
+        const mappedUname = String(mapped.username || '').trim().toLowerCase();
+        const merged = deduplicateUsers([
+          mapped,
+          ...safeLocal.filter(
+            u =>
+              u &&
+              u.id !== mapped.id &&
+              (!mappedUname || String(u.username || '').trim().toLowerCase() !== mappedUname)
+          ),
+        ]);
+        saveLocalDB('users', merged);
         return mapped;
       }
     } catch (e) {
@@ -3869,27 +3940,20 @@ export const supabaseService = {
             forcePasswordChange: u.force_password_change ?? u.forcePasswordChange ?? false,
             createdAt: u.created_at
           }));
-          const seenUsernames = new Set<string>();
-          const deduped = parsed.filter((u) => {
-            const uname = String(u.username || '').trim().toLowerCase();
-            if (!uname) return true;
-            if (seenUsernames.has(uname)) return false;
-            seenUsernames.add(uname);
-            return true;
-          });
+          const deduped = deduplicateUsers(parsed as User[]);
           saveLocalDB('users', deduped);
           return deduped;
         } catch (e) {
           console.warn("Falling back to localStorage for getUsers:", e);
           const local = getLocalDB<User[]>('users', []);
-          return Array.isArray(local) ? local : [];
+          return deduplicateUsers(Array.isArray(local) ? local : []);
         }
       }, { ttlMs: 60000, timeoutMs: 20000, fallbackLocalKey: 'users', defaultVal: [] });
-      return Array.isArray(res) ? res : [];
+      return deduplicateUsers(Array.isArray(res) ? res : []);
     } catch (err) {
       console.warn("Falling back to localStorage for getUsers on outer catch:", err);
       const local = getLocalDB<User[]>('users', []);
-      return Array.isArray(local) ? local : [];
+      return deduplicateUsers(Array.isArray(local) ? local : []);
     }
   },
   async saveUser(user: User) {
@@ -3927,7 +3991,15 @@ export const supabaseService = {
     const cacheSafeUser: User = { ...normalizedUser };
     delete cacheSafeUser.password;
     const local = getLocalDB<User[]>('users', []);
-    const updated = [cacheSafeUser, ...local.filter(u => u.id !== cacheSafeUser.id)];
+    const targetUname = String(cacheSafeUser.username || '').trim().toLowerCase();
+    const updated = deduplicateUsers([
+      cacheSafeUser,
+      ...local.filter(
+        u =>
+          u.id !== cacheSafeUser.id &&
+          (!targetUname || String(u.username || '').trim().toLowerCase() !== targetUname)
+      ),
+    ]);
     saveLocalDB('users', updated);
 
     try {

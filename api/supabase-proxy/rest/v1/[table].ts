@@ -6,6 +6,7 @@ import {
   isSameOriginMutationAllowed,
   resolveLiveUserAuthz,
 } from "../../../_authHelper.js";
+import { TOTP_VAULT_SETTING_ID } from "../../../_totpHelper.js";
 
 const SETTINGS_GOVERNANCE_TABLES = new Set([
   "roles",
@@ -125,8 +126,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(403).json({ message: "Cross-origin state-changing requests are not permitted." });
     }
 
-    const rawTable = req.query.table;
-    const table = (Array.isArray(rawTable) ? rawTable[0] : String(rawTable || "")).trim();
+    const rawTable = req.query?.table;
+    const urlTable = (req.url || "")
+      .split("?")[0]
+      .replace(/^\/api\/supabase-proxy\/rest\/v1\/?/, "")
+      .replace(/\/+$/, "");
+    const table = (Array.isArray(rawTable) ? rawTable[0] : String(rawTable || urlTable || "")).trim();
     if (!/^[a-zA-Z0-9_]+$/.test(table)) {
       return res.status(400).json({ message: "Invalid table identifier." });
     }
@@ -180,6 +185,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       parsedBody = await parseJsonBody<unknown>(req);
     }
 
+    if (table === "settings") {
+      const qId = typeof req.query.id === "string" ? req.query.id.trim() : "";
+      const bodyItems = Array.isArray(parsedBody) ? parsedBody : parsedBody && typeof parsedBody === "object" ? [parsedBody] : [];
+      const touchesVault =
+        qId.includes(TOTP_VAULT_SETTING_ID) ||
+        bodyItems.some(
+          (item) => item && typeof item === "object" && String((item as Record<string, unknown>).id || "").trim() === TOTP_VAULT_SETTING_ID
+        );
+      if (touchesVault) {
+        return res.status(403).json({ message: "Server security vault cannot be accessed directly." });
+      }
+    }
+
     if (!isReadOnly && table === "settings" && !isAdmin) {
       const queryId = typeof req.query.id === "string" ? req.query.id : "";
       const bodyItems = Array.isArray(parsedBody) ? parsedBody : parsedBody && typeof parsedBody === "object" ? [parsedBody] : [];
@@ -220,11 +238,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       isNonAdminSelfUserUpdate = true;
     }
 
-    const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").trim().replace(/\/+$/, "");
+    const supabaseUrl = (
+      process.env.SUPABASE_URL ||
+      process.env.VITE_SUPABASE_URL ||
+      process.env.NEXT_PUBLIC_SUPABASE_URL ||
+      ""
+    )
+      .trim()
+      .replace(/\/+$/, "");
     const supabaseKey = (
       process.env.SUPABASE_SERVICE_ROLE_KEY ||
       process.env.SUPABASE_ANON_KEY ||
       process.env.VITE_SUPABASE_ANON_KEY ||
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
       ""
     ).trim();
 
@@ -297,6 +323,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.send(JSON.stringify(stripPasswordsFromPayload(parsed)));
       } catch {
         return res.send(rawText);
+      }
+    }
+
+    if (table === "settings" && contentType.includes("application/json") && rawText.trim()) {
+      try {
+        const parsed = JSON.parse(rawText);
+        if (Array.isArray(parsed)) {
+          const filtered = parsed.filter(
+            (row) => !(row && typeof row === "object" && (row as Record<string, unknown>).id === TOTP_VAULT_SETTING_ID)
+          );
+          return res.send(JSON.stringify(filtered));
+        }
+        if (parsed && typeof parsed === "object" && (parsed as Record<string, unknown>).id === TOTP_VAULT_SETTING_ID) {
+          return res.status(403).json({ message: "Server security vault cannot be accessed directly." });
+        }
+      } catch {
+        // pass through
       }
     }
 
