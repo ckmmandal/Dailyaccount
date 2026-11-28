@@ -3869,12 +3869,16 @@ export const supabaseService = {
             forcePasswordChange: u.force_password_change ?? u.forcePasswordChange ?? false,
             createdAt: u.created_at
           }));
-          const local = getLocalDB<User[]>('users', []);
-          const safeLocal = Array.isArray(local) ? local : [];
-          const remoteIds = new Set(parsed.map(r => r.id));
-          const merged = [...parsed, ...safeLocal.filter(r => !remoteIds.has(r.id))];
-          saveLocalDB('users', merged);
-          return merged;
+          const seenUsernames = new Set<string>();
+          const deduped = parsed.filter((u) => {
+            const uname = String(u.username || '').trim().toLowerCase();
+            if (!uname) return true;
+            if (seenUsernames.has(uname)) return false;
+            seenUsernames.add(uname);
+            return true;
+          });
+          saveLocalDB('users', deduped);
+          return deduped;
         } catch (e) {
           console.warn("Falling back to localStorage for getUsers:", e);
           const local = getLocalDB<User[]>('users', []);
