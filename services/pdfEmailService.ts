@@ -2,6 +2,7 @@ import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { EmailNotificationSettings } from "../types";
 import { storageService } from "./storageService";
+import { getAuthHeaders } from "./authToken";
 
 export interface SmtpConfig {
   host: string;
@@ -17,7 +18,17 @@ const STORAGE_KEY = "ratauli_smtp_settings_v1";
 export function getStoredSmtpConfig(): SmtpConfig | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<SmtpConfig>;
+      return {
+        host: parsed.host || "smtp.gmail.com",
+        port: parsed.port || 465,
+        secure: parsed.secure !== false,
+        user: parsed.user || "",
+        pass: "",
+        from: parsed.from || ""
+      };
+    }
   } catch {
     // fallback
   }
@@ -25,14 +36,22 @@ export function getStoredSmtpConfig(): SmtpConfig | null {
     host: "smtp.gmail.com",
     port: 465,
     secure: true,
-    user: "info.rataulisaccos@gmail.com",
-    pass: "wkztblmirjnyltga",
-    from: "रतौली बचत तथा ऋण सहकारी संस्था लिमिटेड <info.rataulisaccos@gmail.com>"
+    user: "",
+    pass: "",
+    from: ""
   };
 }
 
 export function saveSmtpConfig(config: SmtpConfig): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+  const safeConfig: SmtpConfig = {
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    user: config.user,
+    pass: "",
+    from: config.from
+  };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(safeConfig));
 }
 
 export async function getEmailNotificationConfig(): Promise<EmailNotificationSettings> {
@@ -145,8 +164,7 @@ export async function sendPaySlipApi({
   body,
   html,
   pdfBase64,
-  filename,
-  smtpConfig
+  filename
 }: {
   to: string;
   subject: string;
@@ -168,17 +186,17 @@ export async function sendPaySlipApi({
 
     const response = await fetch("/api/send-pay-slip-email", {
       method: "POST",
-      headers: {
+      credentials: "same-origin",
+      headers: getAuthHeaders({
         "Content-Type": "application/json"
-      },
+      }),
       body: JSON.stringify({
         to,
         subject,
         body,
         html,
         pdfBase64,
-        filename,
-        smtpConfig: smtpConfig || getStoredSmtpConfig()
+        filename
       })
     });
 
@@ -219,8 +237,7 @@ export async function sendPasswordResetEmailApi({
   loginUrl,
   companyName,
   companyAddress,
-  logoUrl,
-  smtpConfig
+  logoUrl
 }: {
   to: string;
   userName: string;
@@ -244,9 +261,10 @@ export async function sendPasswordResetEmailApi({
 
     const response = await fetch("/api/send-password-reset-email", {
       method: "POST",
-      headers: {
+      credentials: "same-origin",
+      headers: getAuthHeaders({
         "Content-Type": "application/json"
-      },
+      }),
       body: JSON.stringify({
         to,
         userName,
@@ -255,8 +273,7 @@ export async function sendPasswordResetEmailApi({
         loginUrl: loginUrl || window.location.origin,
         companyName: companyName || "Ratauli Saving and Credit Cooperative Ltd",
         companyAddress: companyAddress || "Pipra Rural Municipality -6 (Mahottari)",
-        logoUrl: logoUrl,
-        smtpConfig: smtpConfig || getStoredSmtpConfig()
+        logoUrl: logoUrl
       })
     });
 
@@ -320,16 +337,18 @@ export async function sendLedgerNotificationEmailApi(params: SendLedgerNotificat
       };
     }
 
+    const { smtpConfig: _ignoredSmtp, ...safeParams } = params;
+    void _ignoredSmtp;
     const response = await fetch("/api/send-ledger-notification-email", {
       method: "POST",
-      headers: {
+      credentials: "same-origin",
+      headers: getAuthHeaders({
         "Content-Type": "application/json"
-      },
+      }),
       body: JSON.stringify({
-        ...params,
+        ...safeParams,
         companyName: params.companyName || "Ratauli Saving and Credit Cooperative Ltd",
-        companyAddress: params.companyAddress || "Pipra Rural Municipality -6 (Mahottari)",
-        smtpConfig: params.smtpConfig || getStoredSmtpConfig()
+        companyAddress: params.companyAddress || "Pipra Rural Municipality -6 (Mahottari)"
       })
     });
 
@@ -356,8 +375,7 @@ export async function sendLedgerNotificationEmailApi(params: SendLedgerNotificat
 export async function sendTestEmailApi({
   to,
   companyName,
-  companyAddress,
-  smtpConfig
+  companyAddress
 }: {
   to: string;
   companyName?: string;
@@ -367,14 +385,14 @@ export async function sendTestEmailApi({
   try {
     const response = await fetch("/api/send-test-email", {
       method: "POST",
-      headers: {
+      credentials: "same-origin",
+      headers: getAuthHeaders({
         "Content-Type": "application/json"
-      },
+      }),
       body: JSON.stringify({
         to,
         companyName: companyName || "Ratauli Saving and Credit Cooperative Ltd",
-        companyAddress: companyAddress || "Pipra Rural Municipality -6 (Mahottari)",
-        smtpConfig: smtpConfig || getStoredSmtpConfig()
+        companyAddress: companyAddress || "Pipra Rural Municipality -6 (Mahottari)"
       })
     });
 
@@ -441,18 +459,20 @@ export async function sendLeaveNotificationEmailApi(params: LeaveNotificationPar
     const emailConfig = await getEmailNotificationConfig();
     const adminEmail = emailConfig.adminNotificationEmail?.trim();
 
+    const { smtpConfig: _ignoredLeaveSmtp, ...safeLeaveParams } = params;
+    void _ignoredLeaveSmtp;
     const response = await fetch("/api/send-leave-status-email", {
       method: "POST",
-      headers: {
+      credentials: "same-origin",
+      headers: getAuthHeaders({
         "Content-Type": "application/json"
-      },
+      }),
       body: JSON.stringify({
-        ...params,
+        ...safeLeaveParams,
         cc: params.cc || (adminEmail && adminEmail !== params.to ? adminEmail : undefined),
         companyName: params.companyName || settings?.systemName || "Ratauli Saving and Credit Cooperative Ltd",
         companyAddress: params.companyAddress || settings?.address || "Pipra Rural Municipality -6 (Mahottari)",
-        logoUrl: params.logoUrl || settings?.logoUrl,
-        smtpConfig: params.smtpConfig || getStoredSmtpConfig()
+        logoUrl: params.logoUrl || settings?.logoUrl
       })
     });
 
@@ -502,12 +522,12 @@ export async function sendAttendanceReportEmailApi(params: AttendanceReportEmail
   message: string;
 }> {
   try {
-    const smtp = params.smtpConfig || getStoredSmtpConfig();
     const subject = params.subject || `Monthly Attendance Report - ${params.monthName} ${params.yearBs} (${params.employeeName})`;
     
     const response = await fetch("/api/send-pay-slip-email", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      headers: getAuthHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         to: params.to,
         subject,
@@ -515,8 +535,7 @@ export async function sendAttendanceReportEmailApi(params: AttendanceReportEmail
         body: `Monthly Attendance Report for ${params.employeeName} (${params.monthName} ${params.yearBs}).\n\nTotal Days: ${params.totalDays} | Working Days: ${params.workingDays} | Worked: ${params.workedDays} | Leave: ${params.leaveDays} | Late: ${params.lateDays} | Absent: ${params.absentDays}\n\nRatauli Saving and Credit Cooperative Ltd`,
         pdfBase64: params.pdfBase64,
         filename: `Attendance_${params.employeeName.replace(/\s+/g, '_')}_${params.monthName}_${params.yearBs}.pdf`,
-        logoUrl: params.logoUrl,
-        smtpConfig: smtp
+        logoUrl: params.logoUrl
       })
     });
     

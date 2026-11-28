@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { getAuthHeaders } from './authToken';
 
 function sanitizeUrl(url: string | undefined): string {
   if (!url) return 'https://pqxupzgjlegzibtrhcbz.supabase.co';
@@ -56,12 +57,39 @@ const inProcessLock = async <R>(
   }
 };
 
+// Route browser PostgREST calls through the authenticated backend proxy (/api/supabase-proxy/rest/v1/*)
+// so Supabase RLS can revoke all direct anonymous access while authenticated users work seamlessly.
+const proxiedSupabaseFetch: typeof fetch = (input, init) => {
+  if (typeof window !== 'undefined') {
+    const rawTarget = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    const restPrefix = `${supabaseUrl}/rest/v1/`;
+    if (rawTarget.startsWith(restPrefix)) {
+      const proxyPath = `/api/supabase-proxy${rawTarget.slice(supabaseUrl.length)}`;
+      const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+      headers.delete('apikey');
+      headers.delete('authorization');
+      headers.delete('Authorization');
+      const authHeaders = getAuthHeaders();
+      Object.entries(authHeaders).forEach(([k, v]) => headers.set(k, v));
+      return fetch(proxyPath, {
+        ...init,
+        headers,
+        credentials: 'same-origin',
+      });
+    }
+  }
+  return fetch(input, init);
+};
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: false,
     autoRefreshToken: false,
     detectSessionInUrl: false,
     lock: inProcessLock,
+  },
+  global: {
+    fetch: proxiedSupabaseFetch,
   },
 });
 
@@ -72,7 +100,7 @@ export async function testSupabaseConnection(
 ): Promise<{ success: boolean; data?: unknown; error?: string }> {
   for (let attempt = 1; attempt <= retries + 1; attempt++) {
     try {
-      const { data, error } = await supabase.from('settings').select('id').limit(1);
+      const { data, error } = await supabase.from('settings').select('id').eq('id', 'global').limit(1);
       if (!error) {
         console.log(`✅ Supabase Connected successfully to ${supabaseUrl}`);
         return { success: true, data };

@@ -1,11 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   KeyRound, ShieldCheck, Mail, ArrowRight, ArrowLeft, 
-  CheckCircle2, AlertCircle, X, Eye, EyeOff, RefreshCw, Lock, Loader2, Check
+  AlertCircle, X, Eye, EyeOff, RefreshCw, Loader2, Check
 } from 'lucide-react';
-import { supabaseService } from '../services/supabaseService';
 import { storageService } from '../services/storageService';
-import { User } from '../types';
 import { validateStrongPassword } from '../utils/passwordPolicy';
 import { PasswordRequirementGuide } from './PasswordRequirementGuide';
 import { isEmailCategoryAllowed } from '../services/pdfEmailService';
@@ -24,13 +22,16 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
   // Step 1: 'username', Step 2: 'otp', Step 3: 'new_password', Step 4: 'success'
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [usernameInput, setUsernameInput] = useState(initialUsername);
-  const [matchedUser, setMatchedUser] = useState<User | null>(null);
-  
-  // OTP state
-  const [generatedOtp, setGeneratedOtp] = useState('');
+  const [matchedUsername, setMatchedUsername] = useState('');
+  const [maskedEmail, setMaskedEmail] = useState('');
+  const [challengeId, setChallengeId] = useState('');
+  const [resetToken, setResetToken] = useState('');
+
+  // OTP state (verification happens strictly on server)
   const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', '']);
   const [resendCooldown, setResendCooldown] = useState(60);
   const [isSendingCode, setIsSendingCode] = useState(false);
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
   const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   // Password state
@@ -42,13 +43,12 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
 
   // Status & Feedback
   const [errorMessage, setErrorMessage] = useState('');
-  const [infoMessage, setInfoMessage] = useState('');
 
   const validation = validateStrongPassword(newPassword);
 
   // Timer for OTP resend
   useEffect(() => {
-    let timer: NodeJS.Timeout | undefined;
+    let timer: ReturnType<typeof setInterval> | undefined;
     if (step === 2 && resendCooldown > 0) {
       timer = setInterval(() => {
         setResendCooldown(prev => Math.max(0, prev - 1));
@@ -59,48 +59,12 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
     };
   }, [step, resendCooldown]);
 
-  // Determine user email
-  const getUserTargetEmail = async (user: User): Promise<string> => {
-    if (user.email && user.email.includes('@')) {
-      return user.email.trim();
-    }
-    try {
-      const employees = await supabaseService.getEmployees().catch(() => []);
-      const linked = employees.find(e => 
-        (e.email && (e.fullName?.toLowerCase().trim() === user.fullName?.toLowerCase().trim() ||
-                     e.employeeCode?.toLowerCase().trim() === user.username.toLowerCase().trim()))
-      );
-      if (linked && linked.email && linked.email.includes('@')) {
-        return linked.email.trim();
-      }
-    } catch (e) {
-      console.warn("Could not find linked employee email", e);
-    }
-    return user.email || `${user.username.toLowerCase()}@rataulisaccos.org.np`;
-  };
-
-  // Mask email for privacy display
-  const getMaskedEmail = (user: User) => {
-    const email = user.email || `${user.username.toLowerCase()}@rataulisaccos.org.np`;
-    const parts = email.split('@');
-    if (parts.length === 2) {
-      const name = parts[0];
-      const domain = parts[1];
-      const maskedName = name.length > 2 
-        ? name.charAt(0) + '****' + name.charAt(name.length - 1)
-        : name.charAt(0) + '****';
-      return `${maskedName}@${domain}`;
-    }
-    return '***@rataulisaccos.org.np';
-  };
-
-  // Step 1: Lookup user and send 6-digit OTP code to email
+  // Step 1: Request server-generated 6-digit OTP code via email
   const handleRequestCode = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setErrorMessage('');
-    setInfoMessage('');
 
-    const targetUser = usernameInput.trim().toLowerCase();
+    const targetUser = usernameInput.trim();
     if (!targetUser) {
       setErrorMessage('Please enter your username or email address.');
       return;
@@ -108,86 +72,44 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
 
     setIsSendingCode(true);
     try {
-      const users = await supabaseService.getUsers().catch(() => []);
-      const userList = Array.isArray(users) ? users : [];
-      let user = userList.find(u => 
-        u && (
-          u.username.toLowerCase() === targetUser || 
-          (u.email && u.email.toLowerCase() === targetUser) ||
-          (u.mobile && u.mobile.trim() === targetUser)
-        )
-      );
-
-      // Handle default system admin reset if needed
-      if (!user && targetUser === 'admin') {
-        user = {
-          id: 'admin-temp',
-          fullName: 'System Administrator',
-          username: 'admin',
-          email: 'admin@rataulisaccos.org.np',
-          mobile: '9800000000',
-          roleId: '1',
-          branchId: 'main',
-          status: 'Active',
-          accountCreated: Date.now(),
-          permissions: ['manage_users', 'manage_settings', 'view_reports']
-        };
-      }
-
-      if (!user) {
-        setErrorMessage('User not found in system. Please verify your username.');
-        setIsSendingCode(false);
+      const emailAllowed = await isEmailCategoryAllowed('security');
+      if (!emailAllowed.allowed) {
+        setErrorMessage(emailAllowed.reason || 'Security password reset emails are currently disabled in System Settings.');
         return;
       }
 
-      // Generate secure 6-digit numeric verification OTP
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      setGeneratedOtp(code);
-      setMatchedUser(user);
-      setOtpDigits(['', '', '', '', '', '']);
-      setResendCooldown(60);
-
-      // Send real email via backend API
-      const recipientEmail = await getUserTargetEmail(user);
       const settings = await storageService.getSettings().catch(() => null);
       const sysSettings = await storageService.getSystemSettings().catch(() => null);
       const effectiveLogo = settings?.logoUrl || sysSettings?.logoUrl;
       const effectiveName = settings?.systemName || sysSettings?.systemName || "Ratauli Saving and Credit Cooperative Ltd";
       const effectiveAddr = settings?.address || sysSettings?.address || "Pipra Rural Municipality -6 (Mahottari)";
-      
-      try {
-        const emailAllowed = await isEmailCategoryAllowed('security');
-        if (emailAllowed.allowed) {
-          const response = await fetch('/api/send-otp-email', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              to: recipientEmail,
-              username: user.fullName || user.username,
-              otpCode: code,
-              companyName: effectiveName,
-              companyAddress: effectiveAddr,
-              logoUrl: effectiveLogo,
-              smtpConfig: settings?.smtp
-            })
-          });
 
-          const resData = await response.json().catch(() => ({}));
-          if (!response.ok && !resData.success) {
-            console.warn("Backend OTP email warning:", resData.message);
-          }
-        } else {
-          console.log("OTP email dispatch skipped because security email notification is disabled:", emailAllowed.reason);
-        }
-      } catch (mailErr) {
-        console.warn("Could not dispatch email via backend route:", mailErr);
+      const response = await fetch('/api/auth/request-otp', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identifier: targetUser,
+          companyName: effectiveName,
+          companyAddress: effectiveAddr,
+          logoUrl: effectiveLogo
+        })
+      });
+
+      const resData = await response.json().catch(() => ({}));
+      if (!response.ok || !resData.success || !resData.challengeId) {
+        setErrorMessage(resData.message || 'Could not send verification code. Please check your username or contact admin.');
+        return;
       }
 
-      // Advance to Step 2
+      setChallengeId(String(resData.challengeId));
+      setMatchedUsername(String(resData.username || targetUser));
+      setMaskedEmail(String(resData.maskedEmail || ''));
+      setResetToken('');
+      setOtpDigits(['', '', '', '', '', '']);
+      setResendCooldown(60);
       setStep(2);
-      setInfoMessage(`A 6-digit verification code has been dispatched to ${getMaskedEmail(user)}.`);
 
-      // Focus first OTP box on render
       setTimeout(() => {
         otpInputRefs.current[0]?.focus();
       }, 300);
@@ -203,7 +125,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
   // Step 2: Handle OTP input
   const handleOtpDigitChange = (index: number, value: string) => {
     if (value.length > 1) {
-      // If pasted full 6-digit string
       const pasted = value.replace(/[^0-9]/g, '').slice(0, 6);
       if (pasted.length > 0) {
         const newDigits = [...otpDigits];
@@ -233,8 +154,8 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
     }
   };
 
-  // Verify OTP code
-  const handleVerifyOtp = (e: React.FormEvent) => {
+  // Verify OTP code on server
+  const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
@@ -244,17 +165,33 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
       return;
     }
 
-    if (enteredOtp !== generatedOtp) {
-      setErrorMessage('The entered 6-digit verification code is incorrect.');
-      return;
+    setIsVerifyingOtp(true);
+    try {
+      const response = await fetch('/api/auth/verify-otp-reset', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          challengeId,
+          otpCode: enteredOtp,
+          verifyOnly: true
+        })
+      });
+      const resData = await response.json().catch(() => ({}));
+      if (!response.ok || !resData.success || !resData.resetToken) {
+        setErrorMessage(resData.message || 'The entered 6-digit verification code is incorrect.');
+        return;
+      }
+      setResetToken(String(resData.resetToken));
+      setStep(3);
+    } catch {
+      setErrorMessage('Could not verify code with server. Please try again.');
+    } finally {
+      setIsVerifyingOtp(false);
     }
-
-    // OTP Verified -> Move to Step 3 (Set New Password)
-    setErrorMessage('');
-    setStep(3);
   };
 
-  // Step 3: Update and save new strong password
+  // Step 3: Submit verified resetToken + new strong password to server (server hashes & saves)
   const handleSaveNewPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
@@ -274,26 +211,39 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
       return;
     }
 
-    if (!matchedUser) {
-      setErrorMessage('Session lost. Please restart the recovery process.');
+    if (!challengeId || !resetToken) {
+      setErrorMessage('Verification session expired. Please restart the recovery process.');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      const updatedUser: User = {
-        ...matchedUser,
-        password: newPassword,
-        passwordUpdatedAt: Date.now(),
-        forcePasswordChange: false
-      };
+      const response = await fetch('/api/auth/verify-otp-reset', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          challengeId,
+          resetToken,
+          newPassword
+        })
+      });
+      const resData = await response.json().catch(() => ({}));
+      if (!response.ok || !resData.success) {
+        setErrorMessage(resData.message || 'Error changing password. Please try again.');
+        return;
+      }
 
-      await storageService.saveUser(updatedUser);
-      await storageService.saveLog(matchedUser.id, 'FORGOT_PASSWORD_RESET', `Password reset successfully via OTP verification for @${matchedUser.username}`);
+      const finalUsername = String(resData.username || matchedUsername);
+      void storageService.saveLog(
+        finalUsername || 'user',
+        'FORGOT_PASSWORD_RESET',
+        `Password reset successfully via server OTP verification for @${finalUsername}`
+      ).catch(() => {});
 
       setStep(4);
       setTimeout(() => {
-        onSuccess(matchedUser.username);
+        onSuccess(finalUsername);
       }, 2000);
     } catch (err: unknown) {
       console.error("Failed to reset password:", err);
@@ -396,8 +346,8 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                 <div>
                   <div className="text-[11px] font-black uppercase text-teal-800 tracking-wider">Email Verification Code Sent</div>
                   <p className="text-xs font-medium text-slate-600 mt-0.5 leading-relaxed">
-                    {matchedUser ? (
-                      <>A 6-digit verification code has been sent to <strong>{getMaskedEmail(matchedUser)}</strong> for user <strong>@{matchedUser.username}</strong>. Please check your inbox.</>
+                    {matchedUsername ? (
+                      <>A 6-digit verification code has been sent to <strong>{maskedEmail || 'your registered email'}</strong> for user <strong>@{matchedUsername}</strong>. Please check your inbox.</>
                     ) : (
                       <>A 6-digit verification code has been sent to your registered email address. Please check your inbox.</>
                     )}
@@ -458,11 +408,11 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={otpDigits.join('').length !== 6}
+                  disabled={isVerifyingOtp || otpDigits.join('').length !== 6}
                   className="flex-2 h-11 bg-gradient-to-r from-[#00695c] to-[#004d40] hover:from-[#00796b] hover:to-[#00382e] text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-lg shadow-teal-900/20 flex items-center justify-center space-x-2 transition-all disabled:opacity-50"
                 >
-                  <ShieldCheck size={16} />
-                  <span>Verify Code</span>
+                  {isVerifyingOtp ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />}
+                  <span>{isVerifyingOtp ? 'Verifying...' : 'Verify Code'}</span>
                 </button>
               </div>
             </form>
@@ -568,7 +518,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
               <div className="pt-2">
                 <button
                   type="button"
-                  onClick={() => onSuccess(matchedUser?.username || '')}
+                  onClick={() => onSuccess(matchedUsername || '')}
                   className="w-full h-11 bg-[#00695c] hover:bg-[#004d40] text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-lg transition-all flex items-center justify-center space-x-2"
                 >
                   <span>Proceed to Login</span>

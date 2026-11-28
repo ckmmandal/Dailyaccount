@@ -12,6 +12,7 @@ import {
 } from '../types';
 
 import { deduplicateEmployees } from './nameMatcher';
+import { getAuthHeaders } from './authToken';
 
 export const SUMIT_KUMAR_THAKUR_RECORD: Employee = {
   id: 'c6e60006-6666-4000-8000-000000000006',
@@ -559,28 +560,7 @@ const getLocalDB = <T>(key: string, defaultVal: T): T => {
       return OFFICIAL_MASTER_STAFF as unknown as T;
     }
     if (key === 'users') {
-      const defaultUsers: User[] = [
-
-        {
-          id: 'admin-temp',
-          fullName: 'System Administrator',
-          username: 'admin',
-          password: 'admin',
-          mobile: '9800000000',
-          roleId: '1',
-          branchId: 'main',
-          status: 'Active',
-          accountCreated: 1700000000000,
-          permissions: [
-            'view_transaction', 'add_transaction', 'edit_transaction', 'delete_transaction',
-            'view_reports', 'manage_users', 'manage_settings', 'view_cash_entry',
-            'view_daily_ledger', 'view_income_expense', 'view_ledger_names',
-            'view_consolidated_report', 'cross_branch_operation', 'manage_hr', 'manage_notices'
-          ]
-        }
-      ];
-      localStorage.setItem(`saccos_db_${key}`, JSON.stringify(defaultUsers));
-      return defaultUsers as unknown as T;
+      return [] as unknown as T;
     }
     if (key === 'branches') {
       const defaultBranches = [
@@ -632,16 +612,16 @@ const getLocalDB = <T>(key: string, defaultVal: T): T => {
           name: 'Prabhu Remit',
           code: 'PRB-01',
           accessId: 'PRABHU-HO-101',
-          username: 'ratauli_prabhu',
-          password: 'Prabhu@User2026',
-          txnPin: '4021',
+          username: '',
+          password: '',
+          txnPin: '',
           portalUrl: 'https://remit.prabhubank.com',
           status: 'Active',
           contactPhone: '01-4788500',
           contactEmail: 'remit@prabhubank.com',
           branchId: 'all',
-          notes: 'Daily limit NPR 500,000. Reset password every 90 days as per Prabhu policy.',
-          lastPasswordChanged: '2026-08-01',
+          notes: 'Daily limit NPR 500,000. Configure portal credentials securely per branch.',
+          lastPasswordChanged: '',
           createdAt: 1700000000000,
           updatedAt: 1700000000000
         },
@@ -650,16 +630,16 @@ const getLocalDB = <T>(key: string, defaultVal: T): T => {
           name: 'IME Remit (IME Pay)',
           code: 'IME-702',
           accessId: 'IME-RAT-884',
-          username: 'ratauli_ime',
-          password: 'ImePay@Secure26',
-          txnPin: '1190',
+          username: '',
+          password: '',
+          txnPin: '',
           portalUrl: 'https://imeremit.com.np',
           status: 'Active',
           contactPhone: '01-4430600',
           contactEmail: 'support@imeremit.com.np',
           branchId: 'all',
           notes: 'PIN required for counter payout authorization.',
-          lastPasswordChanged: '2026-08-15',
+          lastPasswordChanged: '',
           createdAt: 1700000000001,
           updatedAt: 1700000000001
         },
@@ -668,16 +648,16 @@ const getLocalDB = <T>(key: string, defaultVal: T): T => {
           name: 'City Express Money Transfer',
           code: 'CTX-109',
           accessId: 'CTX-ACC-552',
-          username: 'ratauli_cityexpress',
-          password: 'CityExp#2026Vault',
-          txnPin: '8832',
+          username: '',
+          password: '',
+          txnPin: '',
           portalUrl: 'https://online.ctxpress.com',
           status: 'Active',
           contactPhone: '01-4431900',
           contactEmail: 'info@ctxpress.com',
           branchId: 'all',
           notes: 'Agent code must be entered along with username on login screen.',
-          lastPasswordChanged: '2026-07-20',
+          lastPasswordChanged: '',
           createdAt: 1700000000002,
           updatedAt: 1700000000002
         },
@@ -686,16 +666,16 @@ const getLocalDB = <T>(key: string, defaultVal: T): T => {
           name: 'Western Union',
           code: 'WU-NP-04',
           accessId: 'WU-TERM-901',
-          username: 'ratauli_wu_agent',
-          password: 'WU#SecureGlobal26',
-          txnPin: '5612',
+          username: '',
+          password: '',
+          txnPin: '',
           portalUrl: 'https://wupos.westernunion.com',
           status: 'Active',
           contactPhone: '1660-01-44444',
           contactEmail: 'nepalcare@westernunion.com',
           branchId: 'all',
           notes: 'Supports inbound international remittances.',
-          lastPasswordChanged: '2026-09-01',
+          lastPasswordChanged: '',
           createdAt: 1700000000003,
           updatedAt: 1700000000003
         },
@@ -704,16 +684,16 @@ const getLocalDB = <T>(key: string, defaultVal: T): T => {
           name: 'Himal Remit (HBL)',
           code: 'HML-330',
           accessId: 'HML-BRANCH-12',
-          username: 'ratauli_himal',
-          password: 'Himal@Remit2026',
-          txnPin: '7721',
+          username: '',
+          password: '',
+          txnPin: '',
           portalUrl: 'https://himalremit.hbl.com.np',
           status: 'Active',
           contactPhone: '01-4227749',
           contactEmail: 'himalremit@hbl.com.np',
           branchId: 'all',
           notes: 'Gulf corridor incoming transfers direct account deposits.',
-          lastPasswordChanged: '2026-08-28',
+          lastPasswordChanged: '',
           createdAt: 1700000000004,
           updatedAt: 1700000000004
         },
@@ -722,16 +702,16 @@ const getLocalDB = <T>(key: string, defaultVal: T): T => {
           name: 'Esewa Money Transfer',
           code: 'EMT-881',
           accessId: 'EMT-ACC-410',
-          username: 'ratauli_esewa_remit',
-          password: 'EsewaRemit!2026',
-          txnPin: '9045',
+          username: '',
+          password: '',
+          txnPin: '',
           portalUrl: 'https://esewamoneytransfer.com',
           status: 'Active',
           contactPhone: '1660-01-02121',
           contactEmail: 'care@esewamoneytransfer.com',
           branchId: 'all',
           notes: 'Instant wallet transfer and cash pick-up service.',
-          lastPasswordChanged: '2026-09-10',
+          lastPasswordChanged: '',
           createdAt: 1700000000005,
           updatedAt: 1700000000005
         },
@@ -740,16 +720,16 @@ const getLocalDB = <T>(key: string, defaultVal: T): T => {
           name: 'Muktinath Remit',
           code: 'MNR-204',
           accessId: 'MNB-REMIT-055',
-          username: 'ratauli_muktinath',
-          password: 'Muktinath#Vault26',
-          txnPin: '3310',
+          username: '',
+          password: '',
+          txnPin: '',
           portalUrl: 'https://remit.muktinathbank.com.np',
           status: 'Active',
           contactPhone: '01-4437368',
           contactEmail: 'remit@muktinathbank.com.np',
           branchId: 'all',
           notes: 'National network payout partner.',
-          lastPasswordChanged: '2026-08-10',
+          lastPasswordChanged: '',
           createdAt: 1700000000006,
           updatedAt: 1700000000006
         },
@@ -758,16 +738,16 @@ const getLocalDB = <T>(key: string, defaultVal: T): T => {
           name: 'Surya Remit',
           code: 'SRY-99',
           accessId: 'SRY-ACC-302',
-          username: 'ratauli_surya',
-          password: 'SuryaRemit@2026',
-          txnPin: '2289',
+          username: '',
+          password: '',
+          txnPin: '',
           portalUrl: 'https://suryaremit.com.np',
           status: 'Active',
           contactPhone: '01-4169000',
           contactEmail: 'support@suryaremit.com.np',
           branchId: 'all',
           notes: 'Malaysia and UAE remittance corridor partner.',
-          lastPasswordChanged: '2026-07-15',
+          lastPasswordChanged: '',
           createdAt: 1700000000007,
           updatedAt: 1700000000007
         }
@@ -3913,20 +3893,43 @@ export const supabaseService = {
     const normalizedPerms = Array.isArray(user.permissions)
       ? user.permissions.filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
       : [];
+
+    // Hash password on server before persisting so plaintext passwords are never stored
+    let passwordToStore = user.password;
+    if (typeof passwordToStore === 'string' && passwordToStore.trim() && !passwordToStore.startsWith('scrypt$')) {
+      try {
+        const hashResp = await fetch('/api/auth/hash-password', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ password: passwordToStore })
+        });
+        const hashData = await hashResp.json().catch(() => ({}));
+        if (hashResp.ok && hashData.success && typeof hashData.hash === 'string') {
+          passwordToStore = hashData.hash;
+        }
+      } catch (hashErr) {
+        console.warn('Password hash endpoint notice:', hashErr);
+      }
+    }
+
     const normalizedUser: User = {
       ...user,
+      password: passwordToStore,
       permissions: normalizedPerms as User['permissions']
     };
+
+    // Never store plaintext or hashed passwords inside browser localStorage cache
+    const cacheSafeUser: User = { ...normalizedUser };
+    delete cacheSafeUser.password;
     const local = getLocalDB<User[]>('users', []);
-    const updated = [normalizedUser, ...local.filter(u => u.id !== normalizedUser.id)];
+    const updated = [cacheSafeUser, ...local.filter(u => u.id !== cacheSafeUser.id)];
     saveLocalDB('users', updated);
 
     try {
-      // Attempt 1: Full payload including password_updated_at & force_password_change
-      const { error } = await supabase.from('users').upsert({
+      const upsertPayload: Record<string, unknown> = {
         id: normalizedUser.id,
         username: normalizedUser.username,
-        password: normalizedUser.password,
         full_name: normalizedUser.fullName,
         role_id: normalizedUser.roleId,
         branch_id: normalizedUser.branchId,
@@ -3940,26 +3943,20 @@ export const supabaseService = {
         account_created: normalizedUser.accountCreated || null,
         password_updated_at: normalizedUser.passwordUpdatedAt || null,
         force_password_change: normalizedUser.forcePasswordChange || false
-      });
+      };
+      if (passwordToStore) {
+        upsertPayload.password = passwordToStore;
+      }
+
+      // Attempt 1: Full payload including password_updated_at & force_password_change
+      const { error } = await supabase.from('users').upsert(upsertPayload);
       if (!error) return;
 
       // Fallback 2: without optional new columns if table schema differs
-      const { error: fbErr } = await supabase.from('users').upsert({
-        id: normalizedUser.id,
-        username: normalizedUser.username,
-        password: normalizedUser.password,
-        full_name: normalizedUser.fullName,
-        role_id: normalizedUser.roleId,
-        branch_id: normalizedUser.branchId,
-        permissions: normalizedPerms,
-        status: normalizedUser.status || 'Active',
-        email: normalizedUser.email || null,
-        mobile: normalizedUser.mobile || null,
-        department: normalizedUser.department || null,
-        designation: normalizedUser.designation || null,
-        profile_photo: normalizedUser.profilePhoto || null,
-        account_created: normalizedUser.accountCreated || null
-      });
+      const fallbackPayload = { ...upsertPayload };
+      delete fallbackPayload.password_updated_at;
+      delete fallbackPayload.force_password_change;
+      const { error: fbErr } = await supabase.from('users').upsert(fallbackPayload);
       if (fbErr) throw fbErr;
     } catch (e) {
       console.warn("Failed to save user to Supabase (saved in local DB):", e);
@@ -7813,15 +7810,15 @@ export const supabaseService = {
         code: 'CTX-109',
         displayOrder: 1,
         hasPin: true,
-        txnPin: '8832',
+        txnPin: '',
         accessId: 'CTX-ACC-552',
-        username: 'ratauli_cityexpress',
-        password: 'CityExp#2026Vault',
+        username: '',
+        password: '',
         contactPhone: '01-4431900',
         contactEmail: 'info@ctxpress.com',
         branchId: 'all',
         status: 'Active',
-        lastPasswordChanged: '2026-07-20'
+        lastPasswordChanged: ''
       },
       {
         id: 'remit_esewa',
@@ -7829,15 +7826,15 @@ export const supabaseService = {
         code: 'EMT-881',
         displayOrder: 2,
         hasPin: true,
-        txnPin: '9045',
+        txnPin: '',
         accessId: 'EMT-ACC-410',
-        username: 'ratauli_esewa_remit',
-        password: 'EsewaRemit!2026',
+        username: '',
+        password: '',
         contactPhone: '1660-01-02121',
         contactEmail: 'care@esewamoneytransfer.com',
         branchId: 'all',
         status: 'Active',
-        lastPasswordChanged: '2026-09-10'
+        lastPasswordChanged: ''
       },
       {
         id: 'remit_himal',
@@ -7845,15 +7842,15 @@ export const supabaseService = {
         code: 'HML-330',
         displayOrder: 3,
         hasPin: true,
-        txnPin: '7721',
+        txnPin: '',
         accessId: 'HML-BRANCH-12',
-        username: 'ratauli_himal',
-        password: 'Himal@Remit2026',
+        username: '',
+        password: '',
         contactPhone: '01-4227749',
         contactEmail: 'himalremit@hbl.com.np',
         branchId: 'all',
         status: 'Active',
-        lastPasswordChanged: '2026-08-28'
+        lastPasswordChanged: ''
       },
       {
         id: 'remit_ime',
@@ -7861,15 +7858,15 @@ export const supabaseService = {
         code: 'IME-702',
         displayOrder: 4,
         hasPin: true,
-        txnPin: '1190',
+        txnPin: '',
         accessId: 'IME-RAT-884',
-        username: 'ratauli_ime',
-        password: 'ImePay@Secure26',
+        username: '',
+        password: '',
         contactPhone: '01-4430600',
         contactEmail: 'support@imeremit.com.np',
         branchId: 'all',
         status: 'Active',
-        lastPasswordChanged: '2026-08-15'
+        lastPasswordChanged: ''
       },
       {
         id: 'remit_muktinath',
@@ -7877,15 +7874,15 @@ export const supabaseService = {
         code: 'MNR-204',
         displayOrder: 5,
         hasPin: true,
-        txnPin: '3310',
+        txnPin: '',
         accessId: 'MNB-REMIT-055',
-        username: 'ratauli_muktinath',
-        password: 'Muktinath#Vault26',
+        username: '',
+        password: '',
         contactPhone: '01-4437368',
         contactEmail: 'remit@muktinathbank.com.np',
         branchId: 'all',
         status: 'Active',
-        lastPasswordChanged: '2026-08-10'
+        lastPasswordChanged: ''
       },
       {
         id: 'remit_prabhu',
@@ -7893,15 +7890,15 @@ export const supabaseService = {
         code: 'PRB-01',
         displayOrder: 6,
         hasPin: true,
-        txnPin: '4021',
+        txnPin: '',
         accessId: 'PRABHU-HO-101',
-        username: 'ratauli_prabhu',
-        password: 'Prabhu@User2026',
+        username: '',
+        password: '',
         contactPhone: '01-4788500',
         contactEmail: 'remit@prabhubank.com',
         branchId: 'all',
         status: 'Active',
-        lastPasswordChanged: '2026-08-01'
+        lastPasswordChanged: ''
       },
       {
         id: 'remit_surya',
@@ -7910,13 +7907,13 @@ export const supabaseService = {
         displayOrder: 7,
         hasPin: false,
         accessId: 'SRY-RAT-201',
-        username: 'ratauli_surya',
-        password: 'Surya#Remit2026',
+        username: '',
+        password: '',
         contactPhone: '01-4221122',
         contactEmail: 'support@suryaremit.com',
         branchId: 'all',
         status: 'Active',
-        lastPasswordChanged: '2026-07-15'
+        lastPasswordChanged: ''
       },
       {
         id: 'remit_western_union',
@@ -7924,15 +7921,15 @@ export const supabaseService = {
         code: 'WU-NP-04',
         displayOrder: 8,
         hasPin: true,
-        txnPin: '5612',
+        txnPin: '',
         accessId: 'WU-TERM-901',
-        username: 'ratauli_wu_agent',
-        password: 'WU#SecureGlobal26',
+        username: '',
+        password: '',
         contactPhone: '1660-01-44444',
         contactEmail: 'nepalcare@westernunion.com',
         branchId: 'all',
         status: 'Active',
-        lastPasswordChanged: '2026-09-01'
+        lastPasswordChanged: ''
       }
     ];
 

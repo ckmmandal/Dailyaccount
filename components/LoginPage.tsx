@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../AuthContext';
-import { supabaseService } from '../services/supabaseService';
 import { storageService } from '../services/storageService';
+import { setAuthToken } from '../services/authToken';
 import { 
   Lock, User as UserIcon, AlertCircle, Eye, EyeOff, ArrowRight, 
-  KeyRound, CheckCircle2
+  KeyRound, CheckCircle2, ShieldCheck
 } from 'lucide-react';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
 import { User } from '../types';
@@ -61,6 +61,14 @@ export const LoginPage: React.FC = () => {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isForgotPasswordOpen, setIsForgotPasswordOpen] = useState(false);
   const [successToast, setSuccessToast] = useState<string | null>(null);
+  const [needsBootstrap, setNeedsBootstrap] = useState(false);
+  const [bootstrapForm, setBootstrapForm] = useState({
+    fullName: 'System Administrator',
+    username: 'admin',
+    email: '',
+    password: '',
+    confirmPassword: ''
+  });
   const usernameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -71,108 +79,93 @@ export const LoginPage: React.FC = () => {
         if (d && d.logoUrl) setServerLogo(d.logoUrl);
       })
       .catch(() => {});
+
+    // Check if first-run admin bootstrap is required (only when database has 0 users)
+    fetch('/api/auth/bootstrap-status')
+      .then(r => r.json())
+      .then(d => {
+        if (d && d.needsBootstrap === true) {
+          setNeedsBootstrap(true);
+        }
+      })
+      .catch(() => {});
   }, []);
+
+  const handleBootstrapAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (bootstrapForm.password !== bootstrapForm.confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+    setIsLoggingIn(true);
+    try {
+      const response = await fetch('/api/auth/bootstrap-admin', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: bootstrapForm.fullName,
+          username: bootstrapForm.username,
+          email: bootstrapForm.email,
+          password: bootstrapForm.password
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success || !data.user) {
+        setError(data.message || 'Could not create initial administrator.');
+        return;
+      }
+      if (data.token) {
+        setAuthToken(data.token);
+      }
+      setNeedsBootstrap(false);
+      login(data.user as User);
+    } catch (err) {
+      console.error('Bootstrap admin error', err);
+      setError('Could not connect to server. Please try again.');
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoggingIn(true);
     setError('');
-    
+
     try {
-      const enteredUsername = (credentials.username || '').trim().toLowerCase();
+      const enteredUsername = (credentials.username || '').trim();
       const enteredPassword = credentials.password || '';
 
-      // Always fetch the latest uncached user row directly from Supabase first so newly updated permissions/branches take effect immediately
-      let foundUser: User | undefined;
-      const directUser = await supabaseService
-        .getFreshUserByIdOrUsername({ username: enteredUsername })
-        .catch(() => null);
-      if (directUser && directUser.password === enteredPassword) {
-        foundUser = directUser;
-      } else {
-        const users = await supabaseService.getUsers({ forceRefresh: true }).catch(() => []);
-        const userList = Array.isArray(users) ? users : [];
-        foundUser = userList.find(
-          u =>
-            u &&
-            u.username &&
-            u.username.toLowerCase() === enteredUsername &&
-            u.password === enteredPassword
-        );
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: enteredUsername,
+          password: enteredPassword
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success || !data.user) {
+        setError(data.message || 'Invalid username or password.');
+        return;
       }
-      
-      if (foundUser) {
-        if (foundUser.status === 'Inactive') {
-          setError('Your account has been deactivated. Please contact the administrator.');
-          return;
-        }
 
-        // Try to fetch linked employee to fill missing branchId/designation without overwriting Admin's User Edit settings
-        try {
-          const employees = await supabaseService.getEmployees().catch(() => []);
-          const empList = Array.isArray(employees) ? employees : [];
-          const linked = empList.find(e => {
-            if (!e) return false;
-            const empName = (e.fullName || '').toLowerCase().trim();
-            const uName = (foundUser.fullName || '').toLowerCase().trim();
-            const sameName = empName !== '' && empName === uName;
-
-            const empEmail = (e.email || '').toLowerCase().trim();
-            const uEmail = (foundUser.email || '').toLowerCase().trim();
-            const sameEmail = empEmail !== '' && uEmail !== '' && empEmail === uEmail;
-
-            const empCode = (e.employeeCode || '').toLowerCase().trim();
-            const uUsername = (foundUser.username || '').toLowerCase().trim();
-            const sameCode = empCode !== '' && empCode === uUsername;
-
-            return sameName || sameEmail || sameCode;
-          });
-
-          if (linked && linked.branchId && !foundUser.branchId) {
-            foundUser.branchId = linked.branchId;
-          }
-          if (linked && linked.designation && !foundUser.designation) {
-            foundUser.designation = linked.designation;
-          }
-        } catch (e) {
-          console.warn("Could not sync linked employee on login", e);
-        }
-
-        login(foundUser);
-        void storageService.saveLog(
-          foundUser.id || foundUser.username,
-          'USER_LOGIN',
-          `User @${foundUser.username} (${foundUser.fullName}) signed in`,
-          foundUser.branchId || 'main'
-        ).catch(() => {});
-      } else if (enteredUsername === 'admin' && enteredPassword === 'admin') {
-        const defaultAdmin: User = {
-          id: 'admin-temp',
-          fullName: 'System Administrator',
-          username: 'admin',
-          password: 'admin',
-          mobile: '9800000000',
-          roleId: '1',
-          branchId: 'main',
-          status: 'Active' as const,
-          accountCreated: Date.now(),
-          permissions: [
-            'view_transaction', 'add_transaction', 'edit_transaction', 'delete_transaction',
-            'view_reports', 'manage_users', 'manage_settings', 'view_cash_entry',
-            'view_daily_ledger', 'view_income_expense', 'view_ledger_names',
-            'view_consolidated_report', 'cross_branch_operation', 'manage_hr', 'manage_notices'
-          ]
-        };
-        login(defaultAdmin);
-        void storageService.saveLog(
-          defaultAdmin.id,
-          'USER_LOGIN',
-          `User @${defaultAdmin.username} (${defaultAdmin.fullName}) signed in`,
-          defaultAdmin.branchId || 'main'
-        ).catch(() => {});
-      } else {
-        setError('Invalid username or password.');
+      if (data.token) {
+        setAuthToken(data.token);
       }
+
+      const authenticatedUser = data.user as User;
+      login(authenticatedUser);
+      void storageService.saveLog(
+        authenticatedUser.id || authenticatedUser.username,
+        'USER_LOGIN',
+        `User @${authenticatedUser.username} (${authenticatedUser.fullName}) signed in`,
+        authenticatedUser.branchId || 'main'
+      ).catch(() => {});
     } catch (err) {
       console.error("Login error", err);
       setError('Could not connect to server. Please try again.');
@@ -268,12 +261,85 @@ export const LoginPage: React.FC = () => {
         <div className="w-full md:w-[56%] bg-[#0f1322]/20 backdrop-blur-sm p-7 sm:p-10 md:p-11 flex flex-col justify-center">
           <div className="mb-6">
             <h2 className="text-2xl sm:text-[30px] font-black text-white tracking-tight leading-tight drop-shadow-sm">
-              Sign in to your account
+              {needsBootstrap ? 'Initial Admin Setup' : 'Sign in to your account'}
             </h2>
             <p className="text-slate-100/85 text-xs sm:text-sm font-medium mt-1.5">
-              Enter your credentials to access the system.
+              {needsBootstrap
+                ? 'No accounts exist yet. Create your primary administrator account with a strong password.'
+                : 'Enter your credentials to access the system.'}
             </p>
           </div>
+
+          {needsBootstrap ? (
+            <form onSubmit={handleBootstrapAdmin} className="space-y-3.5">
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-white/95 block">Admin Full Name</label>
+                <input
+                  type="text"
+                  value={bootstrapForm.fullName}
+                  onChange={e => setBootstrapForm({ ...bootstrapForm, fullName: e.target.value })}
+                  className="login-glass-input w-full h-10 bg-white/10 border border-white/30 rounded-xl px-3.5 text-sm font-medium text-white outline-none focus:border-white/60"
+                  required
+                />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-white/95 block">Username</label>
+                  <input
+                    type="text"
+                    value={bootstrapForm.username}
+                    onChange={e => setBootstrapForm({ ...bootstrapForm, username: e.target.value })}
+                    className="login-glass-input w-full h-10 bg-white/10 border border-white/30 rounded-xl px-3.5 text-sm font-medium text-white outline-none focus:border-white/60"
+                    required
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-white/95 block">Admin Email</label>
+                  <input
+                    type="email"
+                    value={bootstrapForm.email}
+                    onChange={e => setBootstrapForm({ ...bootstrapForm, email: e.target.value })}
+                    placeholder="admin@cooperative.org"
+                    className="login-glass-input w-full h-10 bg-white/10 border border-white/30 rounded-xl px-3.5 text-sm font-medium text-white outline-none focus:border-white/60 placeholder:text-white/50"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-white/95 block">Strong Password (min 8 chars, upper, lower, number, symbol)</label>
+                <input
+                  type="password"
+                  value={bootstrapForm.password}
+                  onChange={e => setBootstrapForm({ ...bootstrapForm, password: e.target.value })}
+                  className="login-glass-input w-full h-10 bg-white/10 border border-white/30 rounded-xl px-3.5 text-sm font-medium text-white outline-none focus:border-white/60"
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-white/95 block">Confirm Password</label>
+                <input
+                  type="password"
+                  value={bootstrapForm.confirmPassword}
+                  onChange={e => setBootstrapForm({ ...bootstrapForm, confirmPassword: e.target.value })}
+                  className="login-glass-input w-full h-10 bg-white/10 border border-white/30 rounded-xl px-3.5 text-sm font-medium text-white outline-none focus:border-white/60"
+                  required
+                />
+              </div>
+              {error && (
+                <div className="flex items-center space-x-2.5 bg-rose-500/25 text-rose-100 p-3 rounded-xl border border-rose-400/40 text-xs font-bold">
+                  <AlertCircle size={16} className="shrink-0 text-rose-300" />
+                  <span>{error}</span>
+                </div>
+              )}
+              <button
+                type="submit"
+                disabled={isLoggingIn}
+                className="w-full bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white h-11 rounded-xl font-bold text-sm flex items-center justify-center space-x-2 shadow-lg transition-all disabled:opacity-50"
+              >
+                <ShieldCheck size={17} />
+                <span>{isLoggingIn ? 'Creating Admin...' : 'Create Administrator Account'}</span>
+              </button>
+            </form>
+          ) : (
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-1.5">
@@ -374,6 +440,7 @@ export const LoginPage: React.FC = () => {
               </button>
             </div>
           </form>
+          )}
         </div>
       </div>
 

@@ -24,6 +24,7 @@ import {
   deduplicateEmployees
 } from '../services/nameMatcher';
 import { normalizeBranchId, isBranchMatch, SUMIT_KUMAR_THAKUR_RECORD, OFFICIAL_MASTER_STAFF, normalizeEmployeePayrollFields, getLocalSnapshot, isValidMediaUrl } from '../services/supabaseService';
+import { getAuthHeaders } from '../services/authToken';
 import { EmployeeDocumentsHub } from './EmployeeDocumentsHub';
 
 const SafeAvatarImg: React.FC<{
@@ -7825,7 +7826,8 @@ ${customContent}
 
       const response = await fetch("/api/send-pay-slip-email", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        headers: getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           to: emp.email.trim(),
           subject: `${selectedDocType} - ${emp.fullName} | Ratauli Saving & Credit Co-operative Ltd`,
@@ -7833,8 +7835,7 @@ ${customContent}
           html: emailHtml,
           pdfBase64: pdfBase64,
           filename: safeFilename,
-          logoUrl: settings?.logoUrl,
-          smtpConfig: getStoredSmtpConfig()
+          logoUrl: settings?.logoUrl
         })
       });
 
@@ -8944,21 +8945,78 @@ const EmployeeEmailCenter = ({
             dataUrl
           });
 
-          // Insert Attachment Element into Message Editor Box
+          // Insert Attachment Element safely into Message Editor Box using DOM APIs (prevents filename XSS)
           if (editorRef.current) {
-            let attachBadgeHtml = '';
-            if (file.type.startsWith('image/')) {
-              attachBadgeHtml = `<div style="margin: 8px 0;"><img src="${dataUrl}" alt="${file.name}" style="max-width: 100%; max-height: 250px; border-radius: 6px; border: 1px solid #cbd5e1; display: block;" /><span style="font-size: 11px; color: #64748b; font-family: sans-serif;">📎 Attachment: ${file.name} (${sizeStr})</span></div><p><br></p>`;
+            const wrapper = document.createElement('div');
+            if (file.type.startsWith('image/') && typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')) {
+              wrapper.style.margin = '8px 0';
+              const img = document.createElement('img');
+              img.src = dataUrl;
+              img.alt = file.name;
+              img.style.maxWidth = '100%';
+              img.style.maxHeight = '250px';
+              img.style.borderRadius = '6px';
+              img.style.border = '1px solid #cbd5e1';
+              img.style.display = 'block';
+
+              const caption = document.createElement('span');
+              caption.style.fontSize = '11px';
+              caption.style.color = '#64748b';
+              caption.style.fontFamily = 'sans-serif';
+              caption.textContent = `📎 Attachment: ${file.name} (${sizeStr})`;
+
+              wrapper.appendChild(img);
+              wrapper.appendChild(caption);
             } else {
-              attachBadgeHtml = `<div contenteditable="false" style="display: inline-flex; align-items: center; gap: 8px; background-color: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 12px; margin: 6px 0; font-family: sans-serif; font-size: 13px; color: #0f172a; font-weight: 600; user-select: none;"><span style="font-size: 16px;">📄</span><span>${file.name}</span> <span style="font-size: 11px; color: #64748b; font-weight: normal;">(${sizeStr})</span></div><p><br></p>`;
+              wrapper.setAttribute('contenteditable', 'false');
+              wrapper.style.display = 'inline-flex';
+              wrapper.style.alignItems = 'center';
+              wrapper.style.gap = '8px';
+              wrapper.style.backgroundColor = '#f1f5f9';
+              wrapper.style.border = '1px solid #cbd5e1';
+              wrapper.style.borderRadius = '6px';
+              wrapper.style.padding = '6px 12px';
+              wrapper.style.margin = '6px 0';
+              wrapper.style.fontFamily = 'sans-serif';
+              wrapper.style.fontSize = '13px';
+              wrapper.style.color = '#0f172a';
+              wrapper.style.fontWeight = '600';
+              wrapper.style.userSelect = 'none';
+
+              const iconSpan = document.createElement('span');
+              iconSpan.style.fontSize = '16px';
+              iconSpan.textContent = '📄';
+
+              const nameSpan = document.createElement('span');
+              nameSpan.textContent = file.name;
+
+              const sizeSpan = document.createElement('span');
+              sizeSpan.style.fontSize = '11px';
+              sizeSpan.style.color = '#64748b';
+              sizeSpan.style.fontWeight = 'normal';
+              sizeSpan.textContent = `(${sizeStr})`;
+
+              wrapper.appendChild(iconSpan);
+              wrapper.appendChild(nameSpan);
+              wrapper.appendChild(sizeSpan);
             }
+
+            const spacer = document.createElement('p');
+            spacer.appendChild(document.createElement('br'));
 
             editorRef.current.focus();
             const selection = window.getSelection();
             if (selection && selection.rangeCount > 0 && editorRef.current.contains(selection.anchorNode)) {
-              document.execCommand('insertHTML', false, attachBadgeHtml);
+              const range = selection.getRangeAt(0);
+              range.deleteContents();
+              const frag = document.createDocumentFragment();
+              frag.appendChild(wrapper);
+              frag.appendChild(spacer);
+              range.insertNode(frag);
+              range.collapse(false);
             } else {
-              editorRef.current.innerHTML += attachBadgeHtml;
+              editorRef.current.appendChild(wrapper);
+              editorRef.current.appendChild(spacer);
             }
           }
 
@@ -9170,14 +9228,14 @@ const EmployeeEmailCenter = ({
 
         const response = await fetch('/api/send-pay-slip-email', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             to: recipientEmail,
             subject: subject.trim(),
             body: personalizedText,
             html: personalizedHtml,
             logoUrl: settings?.logoUrl,
-            smtpConfig: getStoredSmtpConfig(),
             attachments: attachedFiles.map(f => ({
               filename: f.name,
               dataUrl: f.dataUrl,

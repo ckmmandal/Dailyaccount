@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { applyCors, createSmtpTransporter, getLogoAttachment, parseJsonBody, type SmtpPayload } from "./_emailHelper.js";
+import { applyCors, createSmtpTransporter, getLogoAttachment, parseJsonBody, requireVercelAuth, type SmtpPayload } from "./_emailHelper.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (applyCors(req, res)) return;
@@ -7,6 +7,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
     return res.status(405).json({ success: false, message: "Method Not Allowed" });
   }
+
+  if (!requireVercelAuth(req, res)) return;
 
   try {
     const parsedBody = await parseJsonBody<{

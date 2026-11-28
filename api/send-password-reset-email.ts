@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { applyCors, createSmtpTransporter, DEFAULT_APP_URL, getLogoAttachment, parseJsonBody, type SmtpPayload } from "./_emailHelper.js";
+import { applyCors, createSmtpTransporter, DEFAULT_APP_URL, escapeHtml, getLogoAttachment, parseJsonBody, requireVercelAuth, safeHttpUrl, type SmtpPayload } from "./_emailHelper.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (applyCors(req, res)) return;
@@ -7,6 +7,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
     return res.status(405).json({ success: false, message: "Method Not Allowed" });
   }
+
+  if (!requireVercelAuth(req, res, { adminOnly: true })) return;
 
   try {
     const parsedBody = await parseJsonBody<{
@@ -32,9 +34,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const effectiveCompanyName = companyName || "Ratauli Saving and Credit Cooperative Ltd";
     const effectiveAddress = companyAddress || "Pipra Rural Municipality -6 (Mahottari)";
-    const effectiveLoginUrl = loginUrl || DEFAULT_APP_URL;
+    const effectiveLoginUrl = safeHttpUrl(loginUrl, DEFAULT_APP_URL);
     const effectiveUserName = userName || username || "User";
     const effectiveUsername = username || "user";
+
+    const safeCompany = escapeHtml(effectiveCompanyName);
+    const safeAddress = escapeHtml(effectiveAddress);
+    const safeLoginUrl = escapeHtml(effectiveLoginUrl);
+    const safeUserName = escapeHtml(effectiveUserName);
+    const safeUsername = escapeHtml(effectiveUsername);
+    const safePassword = escapeHtml(password);
 
     const { transporter, from } = createSmtpTransporter(smtpConfig, effectiveCompanyName);
     const logoAttachment = await getLogoAttachment(logoUrl);
@@ -67,36 +76,36 @@ ${effectiveAddress}`;
               </td>
               <td style="vertical-align: middle; text-align: left;">
                 <div style="font-size: 16px; font-weight: 900; letter-spacing: 0.5px; text-transform: uppercase; color: #ffffff; line-height: 1.25;">
-                  ${effectiveCompanyName}
+                  ${safeCompany}
                 </div>
               </td>
             </tr>
             <tr>
               <td colspan="2" style="text-align: center; padding-top: 14px;">
                 <div style="font-size: 13.5px; color: #ffffff; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.18); padding-top: 10px;">
-                  ${effectiveAddress}
+                  ${safeAddress}
                 </div>
               </td>
             </tr>
           </table>
         </div>
         <div style="padding: 32px 28px; color: #1e293b; line-height: 1.6; font-size: 14px;">
-          <p style="margin: 0 0 16px 0;">Dear <strong>${effectiveUserName}</strong>,</p>
+          <p style="margin: 0 0 16px 0;">Dear <strong>${safeUserName}</strong>,</p>
           <p style="margin: 0 0 20px 0; color: #334155;">Your password has been reset successfully.</p>
           <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #00695c; border-radius: 12px; padding: 18px 20px; margin: 0 0 24px 0;">
             <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;">
               <tr>
                 <td style="padding: 6px 0; color: #64748b; width: 110px; font-weight: 600;">Username:</td>
-                <td style="padding: 6px 0; font-weight: 700; color: #0f172a; font-family: monospace;">${effectiveUsername}</td>
+                <td style="padding: 6px 0; font-weight: 700; color: #0f172a; font-family: monospace;">${safeUsername}</td>
               </tr>
               <tr>
                 <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Password:</td>
-                <td style="padding: 6px 0; font-weight: 700; color: #b45309; font-family: monospace; font-size: 15px; letter-spacing: 0.5px;">${password}</td>
+                <td style="padding: 6px 0; font-weight: 700; color: #b45309; font-family: monospace; font-size: 15px; letter-spacing: 0.5px;">${safePassword}</td>
               </tr>
               <tr>
                 <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Login:</td>
                 <td style="padding: 6px 0;">
-                  <a href="${effectiveLoginUrl}" style="color: #0284c7; text-decoration: underline; font-weight: 600;" target="_blank">${effectiveLoginUrl}</a>
+                  <a href="${safeLoginUrl}" style="color: #0284c7; text-decoration: underline; font-weight: 600;" target="_blank" rel="noopener noreferrer">${safeLoginUrl}</a>
                 </td>
               </tr>
             </table>
@@ -105,12 +114,12 @@ ${effectiveAddress}`;
           <p style="margin: 0 0 24px 0; color: #64748b; font-size: 12.5px;">If you did not request this change, please contact the administrator.</p>
           <div style="border-top: 1px solid #f1f5f9; padding-top: 16px; color: #334155; font-size: 13px;">
             Regards,<br />
-            <strong>${effectiveCompanyName}</strong><br />
-            <span style="font-size: 12px; color: #64748b;">${effectiveAddress}</span>
+            <strong>${safeCompany}</strong><br />
+            <span style="font-size: 12px; color: #64748b;">${safeAddress}</span>
           </div>
         </div>
         <div style="background: #f8fafc; padding: 14px 24px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 11px; color: #94a3b8;">
-          © ${new Date().getFullYear()} ${effectiveCompanyName}. All rights reserved.
+          © ${new Date().getFullYear()} ${safeCompany}. All rights reserved.
         </div>
       </div>
     `;

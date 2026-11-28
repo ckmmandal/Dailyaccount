@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { applyCors, createSmtpTransporter, getLogoAttachment, parseJsonBody, type SmtpPayload } from "./_emailHelper.js";
+import { applyCors, createSmtpTransporter, escapeHtml, getLogoAttachment, parseJsonBody, requireVercelAuth, type SmtpPayload } from "./_emailHelper.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (applyCors(req, res)) return;
@@ -7,6 +7,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
     return res.status(405).json({ success: false, message: "Method Not Allowed" });
   }
+
+  if (!requireVercelAuth(req, res, { adminOnly: true })) return;
 
   try {
     const parsedBody = await parseJsonBody<{
@@ -30,6 +32,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const effectiveCompanyName = companyName || "Ratauli Saving and Credit Cooperative Ltd";
     const effectiveAddress = companyAddress || "Pipra Rural Municipality -6 (Mahottari)";
+    const safeCompany = escapeHtml(effectiveCompanyName);
+    const safeAddress = escapeHtml(effectiveAddress);
+    const safeUsername = escapeHtml(username || "User");
+    const safeOtp = escapeHtml(otpCode);
 
     const { transporter, from } = createSmtpTransporter(smtpConfig, effectiveCompanyName);
     const logoAttachment = await getLogoAttachment(logoUrl);
@@ -46,14 +52,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               </td>
               <td style="vertical-align: middle; text-align: left;">
                 <div style="font-size: 16px; font-weight: 900; letter-spacing: 0.5px; text-transform: uppercase; color: #ffffff; line-height: 1.25;">
-                  ${effectiveCompanyName}
+                  ${safeCompany}
                 </div>
               </td>
             </tr>
             <tr>
               <td colspan="2" style="text-align: center; padding-top: 14px;">
                 <div style="font-size: 13.5px; color: #ffffff; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.18); padding-top: 10px;">
-                  ${effectiveAddress}
+                  ${safeAddress}
                 </div>
               </td>
             </tr>
@@ -62,16 +68,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         <div style="padding: 32px 26px; text-align: center; color: #1e293b;">
           <h3 style="margin: 0 0 12px 0; font-size: 18px; font-weight: 700; color: #0f172a;">Password Reset Verification Code</h3>
           <p style="margin: 0 0 24px 0; font-size: 14px; color: #475569; line-height: 1.5;">
-            Hello <strong>${username || "User"}</strong>, you have requested to reset your account password. Use the 6-digit verification code below to proceed:
+            Hello <strong>${safeUsername}</strong>, you have requested to reset your account password. Use the 6-digit verification code below to proceed:
           </p>
           <div style="background: #f0fdf4; border: 2px dashed #86efac; border-radius: 12px; padding: 18px; margin: 0 auto 24px auto; max-width: 260px;">
-            <span style="font-family: monospace; font-size: 32px; font-weight: 900; letter-spacing: 8px; color: #047857; display: block;">${otpCode}</span>
+            <span style="font-family: monospace; font-size: 32px; font-weight: 900; letter-spacing: 8px; color: #047857; display: block;">${safeOtp}</span>
           </div>
           <p style="margin: 0 0 8px 0; font-size: 12px; color: #64748b;">This code is valid for 10 minutes. Do not share this code with anyone.</p>
           <p style="margin: 0; font-size: 12px; color: #94a3b8;">If you did not request this, please ignore this email or contact support immediately.</p>
         </div>
         <div style="background: #f8fafc; padding: 16px 24px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 11px; color: #94a3b8;">
-          © ${new Date().getFullYear()} ${effectiveCompanyName}. All rights reserved.
+          © ${new Date().getFullYear()} ${safeCompany}. All rights reserved.
         </div>
       </div>
     `;

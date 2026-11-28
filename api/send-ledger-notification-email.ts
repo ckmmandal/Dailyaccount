@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { applyCors, createSmtpTransporter, getLogoAttachment, parseJsonBody, type SmtpPayload } from "./_emailHelper.js";
+import { applyCors, createSmtpTransporter, escapeHtml, getLogoAttachment, parseJsonBody, requireVercelAuth, type SmtpPayload } from "./_emailHelper.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (applyCors(req, res)) return;
@@ -7,6 +7,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
     return res.status(405).json({ success: false, message: "Method Not Allowed" });
   }
+
+  if (!requireVercelAuth(req, res)) return;
 
   try {
     const parsedBody = await parseJsonBody<{
@@ -150,6 +152,17 @@ Best Regards,
 ${effectiveCompanyName}
 ${effectiveAddress}`;
 
+    const safeCompany = escapeHtml(effectiveCompanyName);
+    const safeAddress = escapeHtml(effectiveAddress);
+    const safeRecipient = escapeHtml(effectiveRecipientName);
+    const safeEmpCode = employeeCode ? escapeHtml(employeeCode) : "";
+    const safeDateBs = escapeHtml(dateBs || "-");
+    const safeOldParticular = oldParticular ? escapeHtml(oldParticular) : "";
+    const safeParticular = escapeHtml(particular || (actionType === "delete" ? "Cancelled Ledger Entry" : "General Ledger Entry"));
+    const safeBranch = escapeHtml(effectiveBranchName);
+    const safeTeller = escapeHtml(tellerName || "Front Desk Teller");
+    const safeVoucherId = voucherId ? escapeHtml(voucherId) : "";
+
     const emailHtml = `
       <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 560px; margin: 0 auto; background: #ffffff; border-radius: 14px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 3px 12px rgba(0,0,0,0.05);">
         <div style="background: #065f46; padding: 16px 20px 12px 20px; border-radius: 14px 14px 0 0; color: #ffffff;">
@@ -161,12 +174,12 @@ ${effectiveAddress}`;
                 </div>
               </td>
               <td style="vertical-align: middle; text-align: left;">
-                <div style="font-size: 15px; font-weight: 900; text-transform: uppercase; color: #ffffff; line-height: 1.25;">${effectiveCompanyName}</div>
+                <div style="font-size: 15px; font-weight: 900; text-transform: uppercase; color: #ffffff; line-height: 1.25;">${safeCompany}</div>
               </td>
             </tr>
             <tr>
               <td colspan="2" style="text-align: center; padding-top: 8px;">
-                <div style="font-size: 12px; color: #ffffff; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.18); padding-top: 6px;">${effectiveAddress}</div>
+                <div style="font-size: 12px; color: #ffffff; font-weight: 600; border-top: 1px solid rgba(255,255,255,0.18); padding-top: 6px;">${safeAddress}</div>
               </td>
             </tr>
           </table>
@@ -175,12 +188,12 @@ ${effectiveAddress}`;
           <span style="background: ${actionType === "delete" ? "#be123c" : actionType === "edit" ? "#0f766e" : "#065f46"}; color: #ffffff; padding: 3px 12px; border-radius: 16px; font-size: 10.5px; font-weight: 800; text-transform: uppercase; display: inline-block;">${pillLabel}</span>
         </div>
         <div style="padding: 16px 20px 14px 20px; color: #1e293b; line-height: 1.45;">
-          <p style="margin: 0 0 4px 0; font-size: 14.5px; color: #0f172a;">Dear <strong>${effectiveRecipientName}</strong>,</p>
+          <p style="margin: 0 0 4px 0; font-size: 14.5px; color: #0f172a;">Dear <strong>${safeRecipient}</strong>,</p>
           <p style="margin: 0 0 12px 0; font-size: 12.5px; color: #475569; line-height: 1.4;">${introText}</p>
           <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 14px; margin-bottom: 12px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
               <span style="background: ${typeBadgeBg}; color: ${typeBadgeColor}; border: 1px solid ${typeBadgeBorder}; padding: 2px 10px; border-radius: 5px; font-size: 11px; font-weight: 800; text-transform: uppercase;">${typeLabel}</span>
-              <span style="font-size: 11.5px; color: #64748b; font-weight: 600;">Date: <strong>${dateBs} BS</strong></span>
+              <span style="font-size: 11.5px; color: #64748b; font-weight: 600;">Date: <strong>${safeDateBs} BS</strong></span>
             </div>
             <div style="text-align: center; margin: 6px 0 8px 0; padding: 8px 6px; background: #ffffff; border-radius: 8px; border: 1px dashed #cbd5e1;">
               <div style="font-size: 10px; font-weight: 800; color: #64748b; text-transform: uppercase;">${amountHeading}</div>
@@ -190,28 +203,28 @@ ${effectiveAddress}`;
             <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
               <tr style="border-bottom: 1px solid #f1f5f9;">
                 <td style="padding: 4px 0; color: #64748b; width: 140px; font-weight: 600;">Account Holder:</td>
-                <td style="padding: 4px 0; font-weight: 700; color: #0f172a;">${effectiveRecipientName}${employeeCode ? ` (${employeeCode})` : ""}</td>
+                <td style="padding: 4px 0; font-weight: 700; color: #0f172a;">${safeRecipient}${safeEmpCode ? ` (${safeEmpCode})` : ""}</td>
               </tr>
-              ${actionType === "edit" && oldParticular ? `<tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 4px 0; color: #dc2626; font-weight: 600;">Previous Remarks:</td><td style="padding: 4px 0; color: #64748b; text-decoration: line-through;">${oldParticular}</td></tr>` : ""}
+              ${actionType === "edit" && safeOldParticular ? `<tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 4px 0; color: #dc2626; font-weight: 600;">Previous Remarks:</td><td style="padding: 4px 0; color: #64748b; text-decoration: line-through;">${safeOldParticular}</td></tr>` : ""}
               <tr style="border-bottom: 1px solid #f1f5f9;">
                 <td style="padding: 4px 0; color: #64748b; font-weight: 600;">${actionType === "edit" ? "Updated Particulars:" : "Particulars / Remarks:"}</td>
-                <td style="padding: 4px 0; font-weight: 600; color: #0f172a;">${particular || (actionType === "delete" ? "Cancelled Ledger Entry" : "General Ledger Entry")}</td>
+                <td style="padding: 4px 0; font-weight: 600; color: #0f172a;">${safeParticular}</td>
               </tr>
               ${actionType === "edit" && oldAmount !== undefined && oldAmount !== null ? `<tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 4px 0; color: #dc2626; font-weight: 600;">Previous Amount:</td><td style="padding: 4px 0; color: #64748b; text-decoration: line-through;">NPR ${Number(oldAmount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td></tr>` : ""}
               <tr style="border-bottom: 1px solid #f1f5f9;">
                 <td style="padding: 4px 0; color: #64748b; font-weight: 600;">Branch Office:</td>
-                <td style="padding: 4px 0; font-weight: 600; color: #0f172a;">${effectiveBranchName}</td>
+                <td style="padding: 4px 0; font-weight: 600; color: #0f172a;">${safeBranch}</td>
               </tr>
               <tr style="border-bottom: 1px solid #f1f5f9;">
                 <td style="padding: 4px 0; color: #64748b; font-weight: 600;">Teller / Operator:</td>
-                <td style="padding: 4px 0; font-weight: 600; color: #0f172a;">${tellerName || "Front Desk Teller"}</td>
+                <td style="padding: 4px 0; font-weight: 600; color: #0f172a;">${safeTeller}</td>
               </tr>
-              ${voucherId ? `<tr><td style="padding: 4px 0; color: #64748b; font-weight: 600;">Voucher / Ref ID:</td><td style="padding: 4px 0; font-family: monospace; font-size: 11.5px; color: #475569;">${voucherId}</td></tr>` : ""}
+              ${safeVoucherId ? `<tr><td style="padding: 4px 0; color: #64748b; font-weight: 600;">Voucher / Ref ID:</td><td style="padding: 4px 0; font-family: monospace; font-size: 11.5px; color: #475569;">${safeVoucherId}</td></tr>` : ""}
             </table>
           </div>
           <div style="background: ${balanceCardBg}; border: 1.5px solid ${balanceCardBorder}; border-radius: 12px; padding: 12px 14px; margin-bottom: 12px;">
             <div style="background: #ffffff; border-radius: 8px; padding: 8px 12px; border: 1px solid ${balanceCardBorder}; font-size: 12px; color: #1e293b; line-height: 1.45;">
-              <strong>Balance Clarification:</strong><br />${balanceStatusNote}
+              <strong>Balance Clarification:</strong><br />${escapeHtml(balanceStatusNote)}
             </div>
             <table style="width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; background: rgba(255,255,255,0.7); border-radius: 6px;">
               <tr style="border-bottom: 1px solid #e2e8f0;"><td style="padding: 6px 10px; color: #64748b;">Previous Balance:</td><td style="padding: 6px 10px; text-align: right; font-weight: 700; font-family: monospace;">Rs. ${Math.abs(numPrevBalance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td></tr>
@@ -219,10 +232,10 @@ ${effectiveAddress}`;
               <tr style="background: #ffffff; font-weight: bold;"><td style="padding: 7px 10px; color: #0f172a;">Closing Total Balance:</td><td style="padding: 7px 10px; text-align: right; font-weight: 900; font-family: monospace; color: ${balanceTextColor};">Rs. ${Math.abs(numUpdatedBalance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td></tr>
             </table>
           </div>
-          <p style="margin: 0; font-size: 12px; color: #334155;">Best Regards,<br /><strong>${effectiveCompanyName}</strong><br />${effectiveAddress}</p>
+          <p style="margin: 0; font-size: 12px; color: #334155;">Best Regards,<br /><strong>${safeCompany}</strong><br />${safeAddress}</p>
         </div>
         <div style="background: #f8fafc; padding: 10px 16px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 10.5px; color: #94a3b8;">
-          © ${new Date().getFullYear()} ${effectiveCompanyName}. All rights reserved.
+          © ${new Date().getFullYear()} ${safeCompany}. All rights reserved.
         </div>
       </div>
     `;

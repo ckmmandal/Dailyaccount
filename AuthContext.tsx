@@ -1,6 +1,7 @@
 import React, { useState, createContext, useContext, useEffect, useRef, useCallback } from 'react';
 import { User, Permission, Role, Branch, SystemSettings } from './types';
 import { supabaseService } from './services/supabaseService';
+import { clearAuthToken, getAuthHeaders } from './services/authToken';
 
 interface AuthContextType {
   user: User | null;
@@ -57,10 +58,27 @@ export const DEFAULT_SETTINGS: SystemSettings = {
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const sanitizeUserForClient = (u: User): User => {
+    const rest = { ...u };
+    delete rest.password;
+    return rest;
+  };
+
   const [user, setUser] = useState<User | null>(() => {
     try {
       const saved = localStorage.getItem('ZEN_AUTH_USER');
-      return saved ? JSON.parse(saved) : null;
+      if (!saved) return null;
+      const parsed = JSON.parse(saved) as User;
+      if (parsed && 'password' in parsed) {
+        const clean = sanitizeUserForClient(parsed);
+        try {
+          localStorage.setItem('ZEN_AUTH_USER', JSON.stringify(clean));
+        } catch {
+          // Ignore storage errors
+        }
+        return clean;
+      }
+      return parsed;
     } catch (e) {
       console.error("Failed to parse user from storage", e);
       return null;
@@ -76,14 +94,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.removeItem('ZEN_AUTH_USER');
         return;
       }
-      localStorage.setItem('ZEN_AUTH_USER', JSON.stringify(u));
+      localStorage.setItem('ZEN_AUTH_USER', JSON.stringify(sanitizeUserForClient(u)));
     } catch {
       if (u) {
         try {
+          const clean = sanitizeUserForClient(u);
           const compact: User = {
-            ...u,
+            ...clean,
             profilePhoto:
-              typeof u.profilePhoto === 'string' && u.profilePhoto.length > 8000 ? undefined : u.profilePhoto
+              typeof clean.profilePhoto === 'string' && clean.profilePhoto.length > 8000 ? undefined : clean.profilePhoto
           };
           localStorage.setItem('ZEN_AUTH_USER', JSON.stringify(compact));
         } catch {
@@ -275,17 +294,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
-    void fetchInitialData();
+    const verifyAndLoad = async () => {
+      if (userRef.current) {
+        try {
+          const resp = await fetch('/api/auth/me', {
+            credentials: 'same-origin',
+            headers: getAuthHeaders()
+          });
+          if (resp.status === 401) {
+            clearAuthToken();
+            userRef.current = null;
+            setUser(null);
+            safePersistAuthUser(null);
+          } else if (resp.ok) {
+            const payload = await resp.json().catch(() => null);
+            if (payload && payload.user) {
+              const serverUser = sanitizeUserForClient(payload.user as User);
+              userRef.current = serverUser;
+              setUser(serverUser);
+              safePersistAuthUser(serverUser);
+            }
+          }
+        } catch {
+          // Ignore transient offline errors
+        }
+      }
+      await fetchInitialData();
+    };
+    void verifyAndLoad();
   }, []);
 
   const login = (u: User) => {
-    // Normalizing user branchId on login
+    // Normalizing user branchId on login and stripping password from client state
     const rawBranch = (u as User & { branch_id?: string }).branch_id;
-    const finalUser: User = {
+    const finalUser: User = sanitizeUserForClient({
       ...u,
       branchId: u.branchId || rawBranch || 'main',
       permissions: Array.isArray(u.permissions) ? u.permissions : []
-    };
+    });
     userRef.current = finalUser;
     setUser(finalUser);
     safePersistAuthUser(finalUser);
@@ -304,6 +350,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         activeUser.branchId || 'main'
       ).catch(() => {});
     }
+    void fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: getAuthHeaders()
+    }).catch(() => {});
+    clearAuthToken();
     supabaseService.invalidateMemoryCache('users');
     supabaseService.invalidateMemoryCache('roles');
     userRef.current = null;
@@ -444,12 +496,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           .catch(() => null));
 
       if (fresh) {
-        const merged: User = {
+        const merged: User = sanitizeUserForClient({
           ...target,
           ...fresh,
           permissions: Array.isArray(fresh.permissions) ? fresh.permissions : [],
           profilePhoto: fresh.profilePhoto || target.profilePhoto
-        };
+        });
         // Avoid replacing if user logged out while request was in flight
         if (!userRef.current || userRef.current.username !== target.username) return;
         userRef.current = merged;

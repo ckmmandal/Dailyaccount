@@ -1,7 +1,121 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import crypto from "crypto";
 import nodemailer from "nodemailer";
 
 export const DEFAULT_APP_URL = process.env.VITE_APP_URL || "https://www.rataulicoop.com.np";
+
+const SESSION_COOKIE_NAME = "ratauli_session";
+
+export interface VercelSessionPayload {
+  sub: string;
+  username: string;
+  roleId: string;
+  isAdmin: boolean;
+  jti: string;
+  exp: number;
+}
+
+export function safeHttpUrl(rawUrl: unknown, fallback: string = DEFAULT_APP_URL): string {
+  if (typeof rawUrl !== "string") return fallback;
+  try {
+    const parsed = new URL(rawUrl.trim());
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+      return parsed.toString();
+    }
+  } catch {
+    // fallback
+  }
+  return fallback;
+}
+
+function parseCookieHeader(cookieHeader?: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!cookieHeader) return out;
+  for (const part of cookieHeader.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx === -1) continue;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    if (k) out[k] = decodeURIComponent(v);
+  }
+  return out;
+}
+
+export function requireVercelAuth(
+  req: VercelRequest,
+  res: VercelResponse,
+  options: { adminOnly?: boolean } = {}
+): VercelSessionPayload | null {
+  const secret = (process.env.SESSION_SECRET || "").trim();
+  if (secret.length < 16) {
+    res.status(503).json({ success: false, message: "Server session signing secret is not configured." });
+    return null;
+  }
+
+  const authHeader = typeof req.headers?.authorization === "string" ? req.headers.authorization : "";
+  let token = "";
+  let usedCookie = false;
+  if (authHeader.startsWith("Bearer ")) {
+    token = authHeader.slice(7).trim();
+  } else {
+    const cookies = parseCookieHeader(typeof req.headers?.cookie === "string" ? req.headers.cookie : "");
+    if (cookies[SESSION_COOKIE_NAME]) {
+      token = cookies[SESSION_COOKIE_NAME];
+      usedCookie = true;
+    }
+  }
+
+  if (usedCookie && req.method && !["GET", "HEAD", "OPTIONS"].includes(req.method.toUpperCase())) {
+    const expectedHost = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim().toLowerCase();
+    const origin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
+    if (expectedHost && origin) {
+      try {
+        if (new URL(origin).host.toLowerCase() !== expectedHost) {
+          res.status(403).json({ success: false, message: "Cross-origin state-changing requests are not permitted." });
+          return null;
+        }
+      } catch {
+        res.status(403).json({ success: false, message: "Invalid origin header." });
+        return null;
+      }
+    }
+  }
+
+  if (!token) {
+    res.status(401).json({ success: false, message: "Authentication required. Please sign in to send emails." });
+    return null;
+  }
+
+  const parts = token.split(".");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    res.status(401).json({ success: false, message: "Invalid session token." });
+    return null;
+  }
+
+  const expectedSig = crypto.createHmac("sha256", secret).update(parts[0]).digest("base64url");
+  const sigBuf = Buffer.from(parts[1], "utf8");
+  const expBuf = Buffer.from(expectedSig, "utf8");
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    res.status(401).json({ success: false, message: "Invalid or expired session token." });
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8")) as VercelSessionPayload;
+    if (!payload || typeof payload.sub !== "string" || typeof payload.exp !== "number" || payload.exp <= Date.now()) {
+      res.status(401).json({ success: false, message: "Session has expired. Please sign in again." });
+      return null;
+    }
+    if (options.adminOnly && !payload.isAdmin) {
+      res.status(403).json({ success: false, message: "Administrator privileges are required for this action." });
+      return null;
+    }
+    return payload;
+  } catch {
+    res.status(401).json({ success: false, message: "Malformed session token." });
+    return null;
+  }
+}
 
 // Default Cooperative Emblem PNG (Base64 fallback when disk logo isn't bundled)
 export const DEFAULT_COOP_LOGO_BASE64 =
@@ -59,14 +173,53 @@ export async function parseJsonBody<T = Record<string, unknown>>(req: VercelRequ
   return {} as T;
 }
 
+export function escapeHtml(input: unknown): string {
+  return String(input ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function isSafeRemoteImageUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "https:") return false;
+    const host = parsed.hostname.toLowerCase();
+    if (
+      host === "localhost" ||
+      host === "0.0.0.0" ||
+      host === "::1" ||
+      host.endsWith(".local") ||
+      host.endsWith(".internal") ||
+      /^127\./.test(host) ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^169\.254\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+      /^fc|^fd|^fe80:/i.test(host)
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function applyCors(req: VercelRequest, res: VercelResponse): boolean {
-  const origin = typeof req.headers?.origin === "string" ? req.headers.origin : "*";
-  res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.setHeader("Access-Control-Allow-Origin", origin || "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS,PATCH,DELETE,POST,PUT");
+  const allowedOrigin = DEFAULT_APP_URL;
+  const reqOrigin = typeof req.headers?.origin === "string" ? req.headers.origin : "";
+  if (reqOrigin && (reqOrigin === allowedOrigin || reqOrigin.startsWith("http://localhost:"))) {
+    res.setHeader("Access-Control-Allow-Origin", reqOrigin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Vary", "Origin");
+  }
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS,POST");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version"
+    "Authorization, X-CSRF-Token, X-Requested-With, Accept, Content-Type"
   );
 
   if (req.method === "OPTIONS") {
@@ -76,20 +229,24 @@ export function applyCors(req: VercelRequest, res: VercelResponse): boolean {
   return false;
 }
 
-export function resolveSmtpSettings(smtpConfig?: SmtpPayload | null, companyName?: string) {
+export function resolveSmtpSettings(_smtpConfig?: SmtpPayload | null, companyName?: string) {
   const effectiveCompany = companyName || "रतौली बचत तथा ऋण सहकारी संस्था लिमिटेड";
-  const host = smtpConfig?.host || process.env.SMTP_HOST || "smtp.gmail.com";
-  const port = Number(smtpConfig?.port || process.env.SMTP_PORT || 465);
-  const secure = smtpConfig?.secure !== undefined ? Boolean(smtpConfig.secure) : port === 465;
-  const user = smtpConfig?.user || process.env.SMTP_USER || "info.rataulisaccos@gmail.com";
-  const pass = smtpConfig?.pass || process.env.SMTP_PASS || "wkztblmirjnyltga";
-  const from = smtpConfig?.from || process.env.SMTP_FROM || `${effectiveCompany} <${user}>`;
+  const host = process.env.SMTP_HOST || "smtp.gmail.com";
+  const port = Number(process.env.SMTP_PORT || 465);
+  const secure = process.env.SMTP_SECURE !== undefined ? process.env.SMTP_SECURE === "true" : port === 465;
+  const user = (process.env.SMTP_USER || "").trim();
+  const rawPass = (process.env.SMTP_PASS || "").trim();
+  const pass = host.toLowerCase().includes("gmail.com") ? rawPass.replace(/\s+/g, "") : rawPass;
+  const from = (process.env.SMTP_FROM || "").trim() || (user ? `${effectiveCompany} <${user}>` : "");
 
   return { host, port, secure, user, pass, from };
 }
 
 export function createSmtpTransporter(smtpConfig?: SmtpPayload | null, companyName?: string) {
   const cfg = resolveSmtpSettings(smtpConfig, companyName);
+  if (!cfg.user || !cfg.pass) {
+    throw new Error("Server SMTP credentials (SMTP_USER / SMTP_PASS) are not configured.");
+  }
   const nm = nodemailer as unknown as {
     createTransport?: typeof nodemailer.createTransport;
     default?: { createTransport?: typeof nodemailer.createTransport };
@@ -110,9 +267,6 @@ export function createSmtpTransporter(smtpConfig?: SmtpPayload | null, companyNa
     connectionTimeout: 12000,
     greetingTimeout: 12000,
     socketTimeout: 18000,
-    tls: {
-      rejectUnauthorized: false,
-    },
   });
   return { transporter, ...cfg };
 }
@@ -122,44 +276,49 @@ export async function getLogoAttachment(logoUrl?: string) {
     if (logoUrl && typeof logoUrl === "string") {
       const trimmed = logoUrl.trim();
 
-      // Base64 Data URI
+      // Base64 Data URI (image only, max 5MB)
       if (trimmed.startsWith("data:image/")) {
         try {
           const commaIndex = trimmed.indexOf(",");
           const meta = commaIndex !== -1 ? trimmed.substring(0, commaIndex) : "";
           const cleanBase64 = commaIndex !== -1 ? trimmed.substring(commaIndex + 1).trim() : trimmed.trim();
-          let contentType = "image/png";
-          if (meta.includes("image/jpeg") || meta.includes("image/jpg")) contentType = "image/jpeg";
-          else if (meta.includes("image/svg")) contentType = "image/svg+xml";
-          else if (meta.includes("image/webp")) contentType = "image/webp";
+          const buf = Buffer.from(cleanBase64, "base64");
+          if (buf.length > 0 && buf.length <= 5 * 1024 * 1024) {
+            let contentType = "image/png";
+            if (meta.includes("image/jpeg") || meta.includes("image/jpg")) contentType = "image/jpeg";
+            else if (meta.includes("image/webp")) contentType = "image/webp";
+            else if (meta.includes("image/gif")) contentType = "image/gif";
 
-          return {
-            filename: "logo.png",
-            content: Buffer.from(cleanBase64, "base64"),
-            cid: "cooplogo",
-            contentType,
-          };
+            return {
+              filename: "logo.png",
+              content: buf,
+              cid: "cooplogo",
+              contentType,
+            };
+          }
         } catch (err) {
           console.warn("Failed to parse base64 logo for email:", err);
         }
       }
 
-      // Remote URL (bounded timeout so slow external fetch never stalls serverless execution)
-      if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+      // Remote HTTPS URL only with SSRF protection
+      if (isSafeRemoteImageUrl(trimmed)) {
         try {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 3500);
           try {
-            const fetchRes = await fetch(trimmed, { signal: controller.signal });
-            if (fetchRes.ok) {
+            const fetchRes = await fetch(trimmed, { signal: controller.signal, redirect: "error" });
+            const contentType = fetchRes.headers.get("content-type") || "";
+            if (fetchRes.ok && contentType.toLowerCase().startsWith("image/")) {
               const arrBuf = await fetchRes.arrayBuffer();
-              const contentType = fetchRes.headers.get("content-type") || "image/png";
-              return {
-                filename: "logo.png",
-                content: Buffer.from(arrBuf),
-                cid: "cooplogo",
-                contentType,
-              };
+              if (arrBuf.byteLength > 0 && arrBuf.byteLength <= 5 * 1024 * 1024) {
+                return {
+                  filename: "logo.png",
+                  content: Buffer.from(arrBuf),
+                  cid: "cooplogo",
+                  contentType,
+                };
+              }
             }
           } finally {
             clearTimeout(timer);

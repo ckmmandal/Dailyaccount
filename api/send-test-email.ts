@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { applyCors, createSmtpTransporter, parseJsonBody, type SmtpPayload } from "./_emailHelper.js";
+import { applyCors, createSmtpTransporter, escapeHtml, parseJsonBody, requireVercelAuth, type SmtpPayload } from "./_emailHelper.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (applyCors(req, res)) return;
@@ -7,6 +7,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
     return res.status(405).json({ success: false, message: "Method Not Allowed" });
   }
+
+  if (!requireVercelAuth(req, res, { adminOnly: true })) return;
 
   try {
     const parsedBody = await parseJsonBody<{
@@ -23,8 +25,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const effectiveCompanyName = companyName || "Ratauli Saving and Credit Cooperative Ltd";
     const effectiveAddress = companyAddress || "Pipra Rural Municipality -6 (Mahottari)";
+    const safeCompany = escapeHtml(effectiveCompanyName);
+    const safeAddress = escapeHtml(effectiveAddress);
+    const safeTo = escapeHtml(to.trim());
 
     const { transporter, user, from } = createSmtpTransporter(smtpConfig, effectiveCompanyName);
+    const safeUser = escapeHtml(user);
 
     const info = await transporter.sendMail({
       from,
@@ -41,14 +47,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           </p>
           <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; font-size: 12px; color: #475569; margin-bottom: 20px;">
             <div><strong>Status:</strong> Active &amp; Operational</div>
-            <div><strong>Sender Account:</strong> ${user}</div>
-            <div><strong>Recipient:</strong> ${to}</div>
-            <div><strong>Timestamp:</strong> ${new Date().toLocaleString("en-US", { timeZone: "Asia/Kathmandu" })} (NPT)</div>
+            <div><strong>Sender Account:</strong> ${safeUser}</div>
+            <div><strong>Recipient:</strong> ${safeTo}</div>
+            <div><strong>Timestamp:</strong> ${escapeHtml(new Date().toLocaleString("en-US", { timeZone: "Asia/Kathmandu" }))} (NPT)</div>
           </div>
           <div style="font-size: 11px; color: #64748b; line-height: 1.5; border-top: 1px solid #f1f5f9; padding-top: 14px;">
             Best Regards,<br />
-            <strong>${effectiveCompanyName}</strong><br />
-            ${effectiveAddress}
+            <strong>${safeCompany}</strong><br />
+            ${safeAddress}
           </div>
         </div>
       `,

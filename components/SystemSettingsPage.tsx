@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useAuth, DEFAULT_SETTINGS } from '../AuthContext';
 import { sendTestEmailApi, getStoredSmtpConfig } from '../services/pdfEmailService';
+import { getAuthHeaders } from '../services/authToken';
 import { useDayEndLock } from '../utils/dayEndLock';
 import { DayEndFieldset } from './DayEndFieldset';
 
@@ -178,7 +179,8 @@ const SystemSettingsPage: React.FC = () => {
         try {
           const resp = await fetch('/api/upload-logo', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ imageBase64: base64Data })
           });
           if (resp.ok) {

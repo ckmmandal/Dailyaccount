@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { KeyRound, Eye, EyeOff, CheckCircle2, AlertCircle, X, ShieldCheck } from 'lucide-react';
 import { User } from '../types';
 import { storageService } from '../services/storageService';
+import { getAuthHeaders } from '../services/authToken';
 import { validateStrongPassword } from '../utils/passwordPolicy';
 import { PasswordRequirementGuide } from './PasswordRequirementGuide';
 
@@ -28,6 +29,11 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ user, 
     setErrorMsg('');
     setSuccessMsg('');
 
+    if (!currentPassword) {
+      setErrorMsg('कृपया हालको पासवर्ड राख्नुहोस् (Please enter your current password).');
+      return;
+    }
+
     if (!newPassword || !confirmPassword) {
       setErrorMsg('कृपया नयाँ पासवर्ड र पुष्टि पासवर्ड दुवै राख्नुहोस् (Please enter new and confirm password).');
       return;
@@ -45,38 +51,42 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ user, 
 
     setLoading(true);
     try {
-      // Fetch latest users to verify current password if set
-      const users = await storageService.getUsers().catch(() => []);
-      const userList = Array.isArray(users) ? users : [];
-      const currentUserRecord = userList.find(u => u && (u.id === user.id || u.username.toLowerCase() === user.username.toLowerCase()));
-      
-      const actualCurrentPass = currentUserRecord?.password || user.password;
-      if (actualCurrentPass && currentPassword && actualCurrentPass !== currentPassword) {
-        setErrorMsg('हालको पासवर्ड गलत छ (Incorrect current password).');
+      const response = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({
+          currentPassword,
+          newPassword,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        setErrorMsg(data.message || 'पासवर्ड परिवर्तन गर्दा त्रुटि भयो।');
         setLoading(false);
         return;
       }
 
-      const updatedUser: User = {
-        ...(currentUserRecord || user),
-        password: newPassword,
-        passwordUpdatedAt: Date.now(),
-        forcePasswordChange: false
-      };
+      if (data.user) {
+        const sanitizedUser = { ...(data.user as User) };
+        delete sanitizedUser.password;
+        localStorage.setItem('ZEN_AUTH_USER', JSON.stringify(sanitizedUser));
+      }
 
-      await storageService.saveUser(updatedUser);
-      
-      // Update active session
-      localStorage.setItem('ZEN_AUTH_USER', JSON.stringify(updatedUser));
-      await storageService.saveLog(user.id, 'CHANGE_PASSWORD', `User @${user.username} updated security password (3-month policy renewed)`);
+      await storageService.saveLog(user.id, 'CHANGE_PASSWORD', `User @${user.username} updated security password (3-month policy renewed)`).catch(() => {});
 
       setSuccessMsg('पासवर्ड सफलतापूर्वक परिवर्तन भयो! (Password updated successfully!)');
       setTimeout(() => {
         onClose();
       }, 1200);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Password change error:', err);
-      setErrorMsg(err.message || 'पासवर्ड परिवर्तन गर्दा त्रुटि भयो।');
+      const message = err instanceof Error ? err.message : 'पासवर्ड परिवर्तन गर्दा त्रुटि भयो।';
+      setErrorMsg(message);
     } finally {
       setLoading(false);
     }
